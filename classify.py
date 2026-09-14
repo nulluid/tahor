@@ -66,6 +66,18 @@ BACKENDS = {
         "default_concurrency": 2,
         "auth_header": lambda: f"Bearer {_openrouter_key()}",
     },
+    "openrouter-free": {
+        # Validated against the same 30-message sample as the other
+        # backends: 90% action agreement with the local-model baseline,
+        # no systematic bias, 30/30 reliable -- a genuine free-tier
+        # fallback for when Gemini's daily cap or OpenRouter credit
+        # aren't the right fit. Same URL/auth as "openrouter", different
+        # model, so it rotates in as a drop-in CLASSIFY_BACKEND swap.
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "default_model": "nvidia/nemotron-3-super-120b-a12b:free",
+        "default_concurrency": 2,
+        "auth_header": lambda: f"Bearer {_openrouter_key()}",
+    },
 }
 SCHEMA_FIELDS = ["category", "retention", "expense_type", "needs_attention", "folder_domain"]
 
