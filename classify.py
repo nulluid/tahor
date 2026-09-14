@@ -47,7 +47,7 @@ BACKENDS = {
     "gemini": {
         "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
         "default_model": "gemini-3.6-flash",
-        "default_concurrency": 4,  # stay comfortably under free-tier rate limits
+        "default_concurrency": 2,  # this box is 1 vCPU; concurrency 4 reliably hung mid-batch, 2 is proven stable
         "auth_header": lambda: f"Bearer {_gemini_key()}",
     },
 }
