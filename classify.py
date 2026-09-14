@@ -138,7 +138,7 @@ def main():
         sys.exit(1)
     input_path, output_path, prompt_path = sys.argv[1:4]
 
-    backend_name = os.environ.get("CLASSIFY_BACKEND", "local")
+    backend_name = os.environ.get("CLASSIFY_BACKEND", "openrouter-free")
     if backend_name not in BACKENDS:
         raise SystemExit(f"Unknown CLASSIFY_BACKEND={backend_name!r}. Choose from: {', '.join(BACKENDS)}")
     backend = BACKENDS[backend_name]
