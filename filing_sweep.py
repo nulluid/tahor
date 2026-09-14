@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""
+File already-classified mail out of the inbox once it's had a fair chance
+to be seen: read and older than FILING_READ_MIN_AGE_DAYS, or still unread
+past FILING_UNREAD_MIN_AGE_DAYS. Filing this on arrival would mean it's
+never seen at all, so both gates default to a grace period rather than zero.
+
+Usage:
+  python3 filing_sweep.py [--dry-run]
+
+Vendor routing comes from vendor_buckets.json (see vendor_buckets.example.json):
+registrable-domain label -> [bucket, display name]. An unmapped sender files
+under "<root>/_Unsorted/<label>" instead of blocking, and is printed so the
+table can grow.
+"""
+import email.utils
+import imaplib
+import re
+import sys
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+
+import config
+
+CATEGORY_KEYWORDS = ["category-receipt", "category-statement", "category-government-tax"]
+
+
+def connect():
+    conn = imaplib.IMAP4_SSL(config.IMAP_HOST, config.IMAP_PORT)
+    conn.login(config.email_address(), config.app_password())
+    return conn
+
+
+def vendor_for(from_header, buckets):
+    _, addr = email.utils.parseaddr(from_header or "")
+    domain = re.sub(r"^www\.", "", addr.split("@")[-1].lower() if "@" in addr else "")
+    parts = domain.split(".") if domain else []
+    # The registrable label is the second-to-last segment, not the leftmost
+    # one, or every subdomain (notification.example.com) becomes its own vendor.
+    label = (parts[-2] if len(parts) >= 2 else (parts[0] if parts else "")).lower()
+    if label in buckets:
+        return buckets[label]
+    return ("_Unsorted", label.capitalize() if label else "Unknown")
+
+
+def ensure_folder(conn, path, created):
+    if path in created:
+        return
+    # LIST rather than SELECT to probe existence — a failed SELECT drops the
+    # session out of the selected state, breaking whatever comes after it.
+    typ, data = conn.list('""', f'"{path}"')
+    if typ != "OK" or not data or not data[0]:
+        conn.create(f'"{path}"')
+    created.add(path)
+
+
+def main():
+    dry_run = "--dry-run" in sys.argv
+    buckets = config.vendor_buckets()
+    root = config.filing_root()
+    read_min_age = config.filing_min_age_days("read", 7)
+    unread_min_age = config.filing_min_age_days("unread", 30)
+
+    conn = connect()
+    typ, _ = conn.select('"INBOX"')
+    if typ != "OK":
+        sys.exit("Could not select INBOX.")
+
+    read_cutoff = (datetime.now(timezone.utc) - timedelta(days=read_min_age)).strftime("%d-%b-%Y")
+    unread_cutoff = (datetime.now(timezone.utc) - timedelta(days=unread_min_age)).strftime("%d-%b-%Y")
+
+    candidates = set()
+    for kw in CATEGORY_KEYWORDS:
+        for criteria in (("SEEN", "BEFORE", read_cutoff), ("UNSEEN", "BEFORE", unread_cutoff)):
+            typ, data = conn.uid("SEARCH", None, *criteria, "KEYWORD", kw)
+            if typ == "OK" and data and data[0]:
+                candidates.update(data[0].split())
+
+    if not candidates:
+        print("Nothing to file.")
+        conn.logout()
+        return
+
+    by_dest = defaultdict(list)
+    unsorted_labels = set()
+    for uid in candidates:
+        typ, msg_data = conn.uid("FETCH", uid, "(BODY.PEEK[HEADER.FIELDS (FROM)])")
+        if typ != "OK" or not msg_data or not msg_data[0]:
+            continue
+        header_blob = msg_data[0][1].decode(errors="replace")
+        from_header = header_blob.split(":", 1)[-1].strip() if ":" in header_blob else header_blob
+        bucket, vendor = vendor_for(from_header, buckets)
+        if bucket == "_Unsorted":
+            unsorted_labels.add(vendor)
+        by_dest[f"{root}/{bucket}/{vendor}"].append(uid)
+
+    created, total_moved = set(), 0
+    for dest, uids in sorted(by_dest.items()):
+        verb = "would move" if dry_run else "moving"
+        print(f"{dest}: {verb} {len(uids)} message(s)")
+        if dry_run:
+            continue
+        ensure_folder(conn, dest, created)
+        for uid in uids:
+            typ, _ = conn.uid("COPY", uid, f'"{dest}"')
+            if typ == "OK":
+                conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
+                total_moved += 1
+            else:
+                print(f"  FAILED to copy uid {uid.decode()} to {dest}")
+    if not dry_run:
+        conn.expunge()
+    conn.logout()
+
+    if unsorted_labels:
+        print(f"\n{len(unsorted_labels)} unmapped sender(s), add to vendor_buckets.json: {sorted(unsorted_labels)}")
+    total = sum(len(v) for v in by_dest.values())
+    if dry_run:
+        print(f"\nDRY RUN. {total} messages would be filed across {len(by_dest)} folder(s).")
+    else:
+        print(f"\nDone. {total_moved} messages filed.")
+
+
+if __name__ == "__main__":
+    main()

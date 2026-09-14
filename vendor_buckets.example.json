@@ -1,0 +1,5 @@
+{
+  "amazon": ["Shopping/Marketplace", "Amazon"],
+  "acmebank": ["Finance/Banking", "Acme Bank"],
+  "acmeutility": ["Utilities", "Acme Utility Co"]
+}
