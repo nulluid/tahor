@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""
+Turn one batch's classification output into the two files the rest of the
+pipeline needs: a trash list and a keyword_tool.py ops file. Also applies a
+"keep one message per sender" rule so a sender that's 100% trash this batch
+still leaves one dated record behind, tagged retention-forever.
+
+Usage: python3 process_batch.py <prefix> <mailbox_imap_path>
+Requires in cwd: <prefix>_in.json, <prefix>_out.json, <prefix>_env.json
+(the last one from bulk_lookup.py, used to resolve each id's Message-ID)
+"""
+import json
+import re
+import sys
+from collections import defaultdict
+from datetime import datetime
+
+_QUOTE_MAP = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"', "–": "-", "—": "-"})
+
+
+def norm(s):
+    return re.sub(r"\s+", " ", (s or "").translate(_QUOTE_MAP)).strip()
+
+
+def parse_jmap(dt):
+    return datetime.fromisoformat(dt.replace("Z", "+00:00"))
+
+
+def parse_internaldate(s):
+    return datetime.strptime(s.strip(), "%d-%b-%Y %H:%M:%S %z")
+
+
+def main():
+    prefix, mailbox = sys.argv[1], sys.argv[2]
+    inrecs = {r["id"]: r for r in json.load(open(f"{prefix}_in.json"))}
+    outrecs = json.load(open(f"{prefix}_out.json"))
+    envs = json.load(open(f"{prefix}_env.json"))
+
+    by_sender = defaultdict(list)
+    for r in outrecs:
+        if r["id"] in inrecs:
+            by_sender[inrecs[r["id"]]["from"]].append(r)
+
+    trash_final, holdback = [], []
+    for items in by_sender.values():
+        trashables = [r for r in items if r["action"] == "trash"]
+        others = [r for r in items if r["action"] != "trash"]
+        if trashables and not others:
+            trashables.sort(key=lambda r: inrecs[r["id"]]["date"])
+            holdback.append(trashables[0])
+            trash_final.extend(trashables[1:])
+        else:
+            trash_final.extend(trashables)
+
+    keep_mixed = [r for r in outrecs if r["id"] in inrecs and r["action"] in ("keep", "mixed")]
+    needs_attn = sum(1 for r in keep_mixed if r.get("needs_attention") is True)
+
+    idx, subj_idx = defaultdict(list), defaultdict(list)
+    for e in envs:
+        idx[(norm(e["subject"]), e["from_email"].lower())].append(e)
+        subj_idx[norm(e["subject"])].append(e)
+
+    msgids, unmatched = {}, []
+    for r in keep_mixed + holdback:
+        rec = inrecs[r["id"]]
+        cands = idx.get((norm(rec["subject"]), rec["from"].lower()), [])
+        if not cands:
+            # from_email parse can fail on odd headers; fall back to subject-only.
+            cands = subj_idx.get(norm(rec["subject"]), [])
+        if len(cands) == 1:
+            msgids[r["id"]] = cands[0]["message_id"]
+        elif len(cands) > 1:
+            target = parse_jmap(rec["date"])
+            best = min(cands, key=lambda e: abs((parse_internaldate(e["internaldate"]) - target).total_seconds()))
+            msgids[r["id"]] = best["message_id"]
+        else:
+            unmatched.append(r["id"])
+
+    ops = []
+    for r in keep_mixed:
+        if r["id"] in unmatched:
+            continue
+        add = [f"category-{r.get('category', 'marketing')}", f"retention-{r.get('retention', 'pending-review')}"]
+        if r.get("expense_type") and r["expense_type"] != "n/a":
+            add.append(f"expense-{r['expense_type']}")
+        if r.get("needs_attention") is True:
+            add.append("needs-attention")
+        ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]], "add": add})
+    for r in holdback:
+        if r["id"] not in unmatched:
+            ops.append({
+                "mailbox": mailbox,
+                "message_id": msgids[r["id"]],
+                "add": ["retention-forever", f"category-{r.get('category', 'marketing')}"],
+            })
+
+    json.dump([r["id"] for r in trash_final], open(f"{prefix}_trash_ids.json", "w"))
+    json.dump(ops, open(f"{prefix}_ops.json", "w"), indent=1)
+
+    print(f"total={len(outrecs)} trash_final={len(trash_final)} holdback={len(holdback)} "
+          f"keep_mixed={len(keep_mixed)} needs_attn={needs_attn} unmatched={len(unmatched)}")
+    for rid in unmatched:
+        print("  UNMATCHED:", rid, inrecs[rid]["subject"], inrecs[rid]["from"], inrecs[rid]["date"])
+
+
+if __name__ == "__main__":
+    main()
