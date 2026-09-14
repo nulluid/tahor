@@ -29,6 +29,13 @@ def connect():
 
 
 def find_uid(conn, message_id):
+    # Some real-world messages have malformed headers where Message-ID gets
+    # concatenated with a fragment of the next header line during parsing,
+    # embedding a literal \r\n -- imaplib's own client-side validation
+    # rejects control characters in commands outright (ValueError, not
+    # IMAP4.error), so strip them rather than let one bad header abort
+    # the whole batch.
+    message_id = "".join(c for c in message_id if ord(c) >= 32)
     # IMAP quoted-string syntax requires escaping backslash and embedded
     # double quotes (RFC 3501) — some real-world Message-ID headers have them.
     escaped = message_id.replace("\\", "\\\\").replace('"', '\\"')
@@ -85,7 +92,7 @@ def main():
                     else:
                         print(f"  STORE FAILED: {op['message_id']} in {mailbox}")
                         failed += 1
-                except imaplib.IMAP4.error as e:
+                except (imaplib.IMAP4.error, ValueError) as e:
                     # One malformed header shouldn't abort the rest of the batch.
                     print(f"  ERROR: {op['message_id']} in {mailbox}: {e}")
                     failed += 1
