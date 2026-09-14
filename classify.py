@@ -35,6 +35,13 @@ def _gemini_key():
     return key
 
 
+def _openrouter_key():
+    key = os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        raise SystemExit("Set OPENROUTER_API_KEY in your environment for CLASSIFY_BACKEND=openrouter.")
+    return key
+
+
 # Gemini exposes an OpenAI-compatible endpoint, so the same request/response
 # shape works for both backends — only the URL, model, and auth differ.
 BACKENDS = {
@@ -49,6 +56,15 @@ BACKENDS = {
         "default_model": "gemini-3.5-flash-lite",
         "default_concurrency": 2,  # this box is 1 vCPU; concurrency 4 reliably hung mid-batch, 2 is proven stable
         "auth_header": lambda: f"Bearer {_gemini_key()}",
+    },
+    "openrouter": {
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        # Same model/calibration as the "local" backend, just hosted -- no
+        # prompt revalidation needed. Paid but genuinely cheap (~$0.05-0.20
+        # per 1000 emails at this snippet size).
+        "default_model": "qwen/qwen3-30b-a3b-instruct-2507",
+        "default_concurrency": 2,
+        "auth_header": lambda: f"Bearer {_openrouter_key()}",
     },
 }
 SCHEMA_FIELDS = ["category", "retention", "expense_type", "needs_attention", "folder_domain"]
