@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """
-Classify a batch of emails through a local LLM (LM Studio's OpenAI-compatible
-API by default) instead of spending tokens on a hosted model.
+Classify a batch of emails through an LLM. Two backends:
+
+  CLASSIFY_BACKEND=local   (default) LM Studio's OpenAI-compatible API at
+                            http://localhost:1234 — free, private, requires
+                            the machine running LM Studio to be on.
+  CLASSIFY_BACKEND=gemini  Google's Gemini API (needs GEMINI_API_KEY) — works
+                            anywhere, including a headless cron box with no
+                            local LLM. Uses Gemini's own free tier.
 
 Usage:
   python3 classify.py <input.json> <output.json> <system_prompt.txt> [--concurrency N] [--model NAME]
@@ -14,16 +20,41 @@ whatever the model returns — the system prompt owns that schema, not this
 script. See prompt.example.txt for the schema this project was built around.
 """
 import json
+import os
 import sys
+import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-LM_URL = "http://localhost:1234/v1/chat/completions"
-DEFAULT_MODEL = "qwen3-30b-a3b-instruct-2507"
+
+def _gemini_key():
+    key = os.environ.get("GEMINI_API_KEY")
+    if not key:
+        raise SystemExit("Set GEMINI_API_KEY in your environment for CLASSIFY_BACKEND=gemini.")
+    return key
+
+
+# Gemini exposes an OpenAI-compatible endpoint, so the same request/response
+# shape works for both backends — only the URL, model, and auth differ.
+BACKENDS = {
+    "local": {
+        "url": "http://localhost:1234/v1/chat/completions",
+        "default_model": "qwen3-30b-a3b-instruct-2507",
+        "default_concurrency": 6,
+        "auth_header": None,
+    },
+    "gemini": {
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "default_model": "gemini-3.6-flash",
+        "default_concurrency": 4,  # stay comfortably under free-tier rate limits
+        "auth_header": lambda: f"Bearer {_gemini_key()}",
+    },
+}
 SCHEMA_FIELDS = ["category", "retention", "expense_type", "needs_attention", "folder_domain"]
 
 
-def classify_one(model, system_prompt, record, retries=2):
+def classify_one(url, headers, model, system_prompt, record, retries=3):
     hints = [f"{k[5:]}={v}" if not isinstance(v, bool) else k[5:]
              for k, v in record.items() if k.startswith("hint_") and v]
     hint_line = f"Hints (context only, not decisive): {', '.join(hints)}\n" if hints else ""
@@ -42,13 +73,13 @@ def classify_one(model, system_prompt, record, retries=2):
             {"role": "user", "content": user_content},
         ],
         "temperature": 0.1,
-        "max_tokens": 200,
+        "max_tokens": 1024,
     }
     data = json.dumps(payload).encode("utf-8")
     last_err = None
-    for _ in range(retries + 1):
+    for attempt in range(retries + 1):
         try:
-            req = urllib.request.Request(LM_URL, data=data, headers={"Content-Type": "application/json"})
+            req = urllib.request.Request(url, data=data, headers=headers)
             with urllib.request.urlopen(req, timeout=60) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
             content = body["choices"][0]["message"]["content"].strip()
@@ -61,6 +92,12 @@ def classify_one(model, system_prompt, record, retries=2):
             result = {"id": record["id"], "action": parsed.get("action", "unsure"), "reason": parsed.get("reason", "")}
             result.update({field: parsed.get(field, "") for field in SCHEMA_FIELDS})
             return result
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code == 429 and attempt < retries:  # rate limited — back off and retry
+                time.sleep(2 ** attempt * 2)
+                continue
+            continue
         except Exception as e:
             last_err = e
             continue
@@ -72,21 +109,34 @@ def main():
         print(__doc__)
         sys.exit(1)
     input_path, output_path, prompt_path = sys.argv[1:4]
-    concurrency, model = 6, DEFAULT_MODEL
+
+    backend_name = os.environ.get("CLASSIFY_BACKEND", "local")
+    if backend_name not in BACKENDS:
+        raise SystemExit(f"Unknown CLASSIFY_BACKEND={backend_name!r}. Choose from: {', '.join(BACKENDS)}")
+    backend = BACKENDS[backend_name]
+
+    concurrency, model = backend["default_concurrency"], backend["default_model"]
     for i, arg in enumerate(sys.argv):
         if arg == "--concurrency" and i + 1 < len(sys.argv):
             concurrency = int(sys.argv[i + 1])
         if arg == "--model" and i + 1 < len(sys.argv):
             model = sys.argv[i + 1]
 
+    headers = {"Content-Type": "application/json"}
+    if backend["auth_header"]:
+        headers["Authorization"] = backend["auth_header"]()
+
     with open(input_path) as f:
         records = json.load(f)
     with open(prompt_path) as f:
         system_prompt = f.read()
 
+    print(f"Backend: {backend_name} ({model})", file=sys.stderr)
+
     results = [None] * len(records)
     with ThreadPoolExecutor(max_workers=concurrency) as ex:
-        futures = {ex.submit(classify_one, model, system_prompt, rec): i for i, rec in enumerate(records)}
+        futures = {ex.submit(classify_one, backend["url"], headers, model, system_prompt, rec): i
+                   for i, rec in enumerate(records)}
         done = 0
         for fut in as_completed(futures):
             results[futures[fut]] = fut.result()
