@@ -5,3 +5,6 @@ vendor_buckets.json
 pf_backlog/
 __pycache__/
 *.pyc
+decisions.db
+.flask_secret_key
+sieve.txt
