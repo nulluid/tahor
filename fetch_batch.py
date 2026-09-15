@@ -58,7 +58,7 @@ def strip_html(html):
     return re.sub(r"\s+", " ", text).strip()
 
 
-def extract_snippet(raw_bytes):
+def extract_body_text(raw_bytes):
     try:
         msg = email.message_from_bytes(raw_bytes)
     except Exception:
@@ -97,11 +97,14 @@ def extract_snippet(raw_bytes):
         else:
             plain = text
 
-    # Some senders mislabel an HTML body as text/plain -- strip tags either way.
-    snippet = plain if plain else html
-    if snippet and re.search(r"<(html|div|table|body)[\s>]", snippet, re.IGNORECASE):
-        snippet = strip_html(snippet)
-    return re.sub(r"\s+", " ", snippet or "").strip()[:SNIPPET_MAX_CHARS]
+    body = plain if plain else html
+    if body and re.search(r"<(html|div|table|body)[\s>]", body, re.IGNORECASE):
+        body = strip_html(body)
+    return re.sub(r"\s+", " ", body or "").strip()
+
+
+def extract_snippet(raw_bytes):
+    return extract_body_text(raw_bytes)[:SNIPPET_MAX_CHARS]
 
 
 def main():

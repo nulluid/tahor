@@ -10,6 +10,7 @@ ops.json: a JSON array of
   {
     "mailbox": "Finance/Statements",
     "message_id": "<abc123@example.com>",
+    "uid": "1234",  (optional -- if present, skips the Message-ID SEARCH lookup)
     "add": ["receipt", "retention-forever"],
     "remove": ["unclassified"]
   }
@@ -78,7 +79,7 @@ def main():
 
             for op in mailbox_ops:
                 try:
-                    uid = find_uid(conn, op["message_id"])
+                    uid = op["uid"] if op.get("uid") else find_uid(conn, op["message_id"])
                     if uid is None:
                         print(f"  NOT FOUND: {op['message_id']} in {mailbox}")
                         missing += 1

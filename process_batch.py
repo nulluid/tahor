@@ -5,6 +5,8 @@ pipeline needs: a trash list and a keyword_tool.py ops file. Also applies a
 "keep one message per sender" rule so a sender that's 100% trash this batch
 still leaves one dated record behind, tagged retention-forever.
 
+Also enforces standing sender rules from the unsubscribe page and records unsubscribe candidates.
+
 Usage: python3 process_batch.py <prefix> <mailbox_imap_path>
 Requires in cwd: <prefix>_in.json, <prefix>_out.json, <prefix>_env.json
 (the last one from bulk_lookup.py, used to resolve each id's Message-ID)
@@ -14,6 +16,14 @@ import re
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tahor_db
+
+
+def sender_domain_of(email_addr):
+    return (email_addr or "").rsplit("@", 1)[-1].lower() if "@" in (email_addr or "") else None
 
 _QUOTE_MAP = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"', "–": "-", "—": "-"})
 
@@ -42,6 +52,30 @@ def main():
     outrecs = json.load(open(f"{prefix}_out.json"))
     envs = json.load(open(f"{prefix}_env.json"))
 
+    for r in outrecs:
+        rec = inrecs.get(r["id"])
+        if not rec:
+            continue
+        domain = sender_domain_of(rec["from"])
+        rule = tahor_db.get_sender_rule(domain)
+        if rule == "block_all" or (rule == "block_marketing" and r.get("category") == "marketing"):
+            r["action"] = "trash"
+            r["reason"] = f"sender rule: {rule}"
+
+    for e in envs:
+        if not (e.get("unsubscribe_url") or e.get("unsubscribe_mailto")):
+            continue
+        domain = sender_domain_of(e["from_email"])
+        if domain and tahor_db.get_sender_rule(domain) is None:
+            tahor_db.upsert_unsubscribe_candidate(
+                sender_domain=domain,
+                sender_email=e["from_email"],
+                display_name=e.get("display_name") or "",
+                unsubscribe_url=e.get("unsubscribe_url"),
+                unsubscribe_mailto=e.get("unsubscribe_mailto"),
+                one_click=e.get("one_click", False),
+            )
+
     by_sender = defaultdict(list)
     for r in outrecs:
         if r["id"] in inrecs:
@@ -60,6 +94,8 @@ def main():
 
     keep_mixed = [r for r in outrecs if r["id"] in inrecs and r["action"] in ("keep", "mixed")]
     needs_attn = sum(1 for r in keep_mixed if r.get("needs_attention") is True)
+
+    msgid_to_uid = {e["message_id"]: e["uid"] for e in envs}
 
     idx, subj_idx = defaultdict(list), defaultdict(list)
     for e in envs:
@@ -91,7 +127,7 @@ def main():
             add.append(f"expense-{r['expense_type']}")
         if r.get("needs_attention") is True:
             add.append("needs-attention")
-        ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]], "add": add})
+        ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]], "uid": msgid_to_uid.get(msgids[r["id"]]), "add": add})
     for r in holdback:
         if r["id"] not in unmatched:
             ops.append({

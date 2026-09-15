@@ -23,6 +23,7 @@ Run under systemd (Restart=always) for durability across reboots/crashes.
 """
 import json
 import os
+import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
@@ -70,6 +71,19 @@ def log(msg):
         f.write(line + "\n")
 
 
+def parse_list_unsubscribe(header_value):
+    """List-Unsubscribe holds one or more comma-separated <...> targets,
+    typically an https URL and/or a mailto: address. Returns (url, mailto),
+    either possibly None. Multiple of the same kind (rare) keep the first."""
+    url, mailto = None, None
+    for target in re.findall(r"<([^>]+)>", header_value or ""):
+        if target.lower().startswith("mailto:") and mailto is None:
+            mailto = target[len("mailto:"):]
+        elif target.lower().startswith("http") and url is None:
+            url = target
+    return url, mailto
+
+
 def fetch(mailbox, prefix):
     conn = fetch_batch.connect()
     try:
@@ -85,6 +99,7 @@ def fetch(mailbox, prefix):
     if typ != "OK":
         raise RuntimeError("SEARCH failed")
     uids = data[0].split()
+    uids = uids[::-1]  # newest first: highest UID = most recent
 
     in_records, env_records = [], []
     chunk = 50
@@ -94,7 +109,9 @@ def fetch(mailbox, prefix):
         batch = uids[i : i + chunk]
         idset = b",".join(batch).decode()
         typ, fdata = conn.fetch(
-            idset, "(UID INTERNALDATE FLAGS BODY.PEEK[HEADER.FIELDS (MESSAGE-ID SUBJECT FROM DATE)] BODY.PEEK[])"
+            idset,
+            "(UID INTERNALDATE FLAGS BODY.PEEK[HEADER.FIELDS "
+            "(MESSAGE-ID SUBJECT FROM DATE LIST-UNSUBSCRIBE LIST-UNSUBSCRIBE-POST)] BODY.PEEK[])",
         )
         if typ != "OK":
             continue
@@ -104,7 +121,6 @@ def fetch(mailbox, prefix):
                 break
             meta_line, header_bytes = items[j]
             _, body_bytes = items[j + 1] if j + 1 < len(items) else (None, b"")
-            import re
             uid_match = re.search(rb"UID (\d+)", meta_line)
             date_match = re.search(rb'INTERNALDATE "([^"]+)"', meta_line)
             flags_match = re.search(rb"FLAGS \(([^)]*)\)", meta_line)
@@ -123,7 +139,9 @@ def fetch(mailbox, prefix):
             from email.utils import parseaddr, parsedate_to_datetime
             subject = fetch_batch.decode_str(header_msg.get("Subject", ""))
             from_raw = fetch_batch.decode_str(header_msg.get("From", ""))
-            _, from_email = parseaddr(from_raw)
+            display_name, from_email = parseaddr(from_raw)
+            unsub_url, unsub_mailto = parse_list_unsubscribe(header_msg.get("List-Unsubscribe", ""))
+            one_click = "list-unsubscribe=one-click" in header_msg.get("List-Unsubscribe-Post", "").lower()
             raw_date = header_msg.get("Date", "")
             # process_batch.py's parse_jmap() expects ISO format (JMAP's
             # native convention) -- convert from the raw RFC 2822 header.
@@ -138,7 +156,17 @@ def fetch(mailbox, prefix):
                 {"id": message_id, "subject": subject, "from": from_email, "date": date, "snippet": snippet}
             )
             env_records.append(
-                {"uid": uid, "internaldate": internaldate, "subject": subject, "from_email": from_email, "message_id": message_id}
+                {
+                    "uid": uid,
+                    "internaldate": internaldate,
+                    "subject": subject,
+                    "from_email": from_email,
+                    "display_name": display_name,
+                    "message_id": message_id,
+                    "unsubscribe_url": unsub_url,
+                    "unsubscribe_mailto": unsub_mailto,
+                    "one_click": one_click,
+                }
             )
     conn.logout()
 
