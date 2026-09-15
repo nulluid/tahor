@@ -13,7 +13,7 @@ import json
 import re
 import sys
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 
 _QUOTE_MAP = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"', "–": "-", "—": "-"})
 
@@ -23,7 +23,13 @@ def norm(s):
 
 
 def parse_jmap(dt):
-    return datetime.fromisoformat(dt.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+    # A Date: header missing a timezone parses naive; parse_internaldate()
+    # is always aware (IMAP INTERNALDATE always carries an offset) -- treat
+    # a timezone-less header as UTC so the two are always comparable.
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def parse_internaldate(s):
