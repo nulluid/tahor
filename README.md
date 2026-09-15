@@ -19,8 +19,13 @@ Flask and requests.
   `filing_sweep.py` moves receipts and statements into per-vendor folders
   once they've had a fair chance to be seen.
 - **Decision app (optional):** `decision-app/app.py`, a small Flask site
-  for resolving ambiguous cases -- new vendor mappings, free-text rules --
-  from a browser instead of a live session.
+  for resolving ambiguous cases -- new vendor mappings, free-text rules,
+  unsubscribe candidates, drafted replies -- from a browser instead of a
+  live session.
+- **Reply drafting (optional):** `draft_replies.py` watches for mail from
+  senders you've configured as reply triggers (settings page) and drafts
+  a reply for each -- saved into your Drafts folder as a real in-thread
+  reply, never sent automatically.
 
 ## Requirements
 
@@ -67,6 +72,7 @@ Then:
    */30 * * * * cd /path/to/tahor && python3 fetch_batch.py INBOX current_batch && python3 classify.py current_batch_in.json current_batch_out.json prompt.txt && python3 process_batch.py current_batch INBOX && python3 keyword_tool.py current_batch_ops.json
    0 4 * * * cd /path/to/tahor && python3 retention_sweep.py
    0 5 * * * cd /path/to/tahor && python3 filing_sweep.py
+   */30 * * * * cd /path/to/tahor && python3 draft_replies.py
    ```
 
 ## The decision app
@@ -91,6 +97,27 @@ It binds to `127.0.0.1` only. Don't expose it to the internet without
 putting TLS in front of it yourself -- nginx with certbot, Caddy, or a
 tunnel. An unauthenticated decision queue on the open internet is a bad
 idea regardless of the OAuth check.
+
+### Unsubscribing and blocking senders
+
+Any sender whose mail carries a `List-Unsubscribe` header shows up on the
+`/unsubscribe` page. Four choices per sender: unsubscribe only, unsubscribe
+and block that sender's marketing mail going forward (transactional mail --
+receipts, shipping notices -- still comes through), block everything from
+that sender outright, or leave the subscription alone. A one-click
+(RFC 8058) unsubscribe fires as a real HTTP request; anything else is a
+best-effort attempt (a plain link click or an unsubscribe email) with no
+guarantee it's honored, which is exactly why blocking exists alongside it.
+
+### Reply drafting
+
+Add a trigger on the settings page -- a specific address or a whole
+domain -- and matching mail gets a drafted reply from whichever model
+you've picked for rule drafting. The draft lands in your Drafts folder as
+a real in-thread reply (`In-Reply-To`/`References` set, so it threads
+correctly) and is never sent on its own; it also shows up on `/drafts` for
+a second look. Each run that produces at least one draft sends you a
+one-line summary email so a new draft is never silently missed.
 
 ## Deploying on Oracle Cloud's Always Free tier
 
