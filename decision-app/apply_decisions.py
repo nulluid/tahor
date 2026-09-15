@@ -16,36 +16,30 @@ Read resolved rows out of decisions.db and act on them.
 Run this after the decision app has been used; cron can call it on the
 same schedule as the other sweeps.
 
-Requires: GEMINI_API_KEY in the environment for the rule-drafting step
-(separate from whatever CLASSIFY_BACKEND you picked for classify.py --
-this always uses Gemini's OpenAI-compatible endpoint unless you change
-RULE_DRAFTING_MODEL and the request URL below to match another provider),
-and DATA_DIR to be a git checkout with a configured push remote (SSH
-deploy key or credential helper) if you want the commit/push step to work.
+Requires: whichever of GEMINI_API_KEY / OPENROUTER_API_KEY the current
+rule_model setting needs (set from the decision app's settings page --
+see mailbox_settings.RULE_MODELS), and DATA_DIR to be a git checkout with
+a configured push remote (SSH deploy key or credential helper) if you
+want the commit/push step to work.
 """
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 import urllib.request
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "decisions.db"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import mailbox_settings
+import tahor_db
 
-# DATA_DIR holds vendor_buckets.json and prompt.txt -- the same gitignored
-# config files classify.py/config.py read from the repo root. Defaults to
-# this repo (one directory up from decision-app/), but can point at a
-# separate private git repo if you want that data to have its own tracked
-# history independent of this codebase.
+DB_PATH = tahor_db.DB_PATH
+
 DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).resolve().parent.parent))
 VENDOR_BUCKETS_PATH = DATA_DIR / "vendor_buckets.json"
 PROMPT_PATH = DATA_DIR / "prompt.txt"
 
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-RULE_DRAFTING_MODEL = os.environ.get("RULE_DRAFTING_MODEL", "gemini-3.6-flash")
-
-GEMINI_SYSTEM_PROMPT = """You maintain two files for a personal email-sweep pipeline:
+RULE_DRAFTING_SYSTEM_PROMPT = """You maintain two files for a personal email-sweep pipeline:
 
 1. vendor_buckets.json -- a flat map of sender-domain-label -> [bucket, display name].
    Pure data, no code. Safe to change freely.
@@ -74,25 +68,26 @@ enough.
 """
 
 
-def gemini_call(user_content):
-    key = os.environ.get("GEMINI_API_KEY")
+def rule_model_call(user_content):
+    backend = mailbox_settings.RULE_MODELS[mailbox_settings.get_rule_model()]
+    key = os.environ.get(backend["auth_env"])
     if not key:
-        raise SystemExit("Set GEMINI_API_KEY in the environment.")
+        raise SystemExit(f"Set {backend['auth_env']} in the environment for rule_model {backend['model']!r}.")
     payload = {
-        "model": RULE_DRAFTING_MODEL,
+        "model": backend["model"],
         "messages": [
-            {"role": "system", "content": GEMINI_SYSTEM_PROMPT},
+            {"role": "system", "content": RULE_DRAFTING_SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
         ],
         "temperature": 0.1,
         "max_tokens": 4096,
     }
     req = urllib.request.Request(
-        GEMINI_URL,
+        backend["url"],
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    with urllib.request.urlopen(req, timeout=90) as resp:
         body = json.loads(resp.read().decode("utf-8"))
     content = body["choices"][0]["message"]["content"].strip()
     if content.startswith("```"):
@@ -148,7 +143,7 @@ def apply_free_text_rule(row, resolution):
         f"Current prompt.txt:\n{current_prompt}\n\n"
         f"Instruction: {text}"
     )
-    result = gemini_call(user_content)
+    result = rule_model_call(user_content)
 
     if result.get("needs_code_change"):
         flag_path = DATA_DIR / "decision-app" / "needs_code_change.md"
@@ -169,8 +164,7 @@ def apply_free_text_rule(row, resolution):
 
 
 def main():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = tahor_db.get_db()
     rows = conn.execute(
         "SELECT * FROM decisions WHERE status = 'resolved' AND resolution IS NOT NULL "
         "AND (context IS NULL OR context NOT LIKE '%\"applied\": true%')"

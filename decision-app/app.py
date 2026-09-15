@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """
 Tahor decision queue: a tiny web app so pending classification decisions
-(new vendor mappings, ambiguous keep/trash calls, free-text rule requests)
-can be resolved from a browser instead of a live session.
+(new vendor mappings, ambiguous keep/trash calls, free-text rule requests,
+unsubscribe candidates, drafted replies) can be resolved from a browser
+instead of a live session.
 
-Data flow:
-  the sweep scripts write rows into decisions.db when they hit something
-  they can't decide alone -> this app lets you resolve them -> apply_decisions.py
-  (a separate script, run by cron) reads resolved rows and either applies
-  them directly (vendor mappings: pure data) or hands free-text rules to an
-  LLM to draft the change.
+Data flow: the sweep scripts write rows into decisions.db when they hit
+something they can't decide alone -> this app lets you resolve them ->
+apply_decisions.py (a separate script, run by cron) reads resolved rows and
+either applies them directly (vendor mappings: pure data) or hands free-text
+rules to a model to draft the change.
 
 No auth yet -- bind to 127.0.0.1 only until Google OAuth is wired in.
 """
 import json
 import os
 import secrets
+import smtplib
 import sqlite3
 import sys
 from datetime import datetime, timezone
+from email.mime.text import MIMEText
 from functools import wraps
 from pathlib import Path
 from urllib.parse import urlencode
@@ -27,16 +29,11 @@ import requests
 from flask import Flask, g, redirect, request, session
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import config
 import mailbox_settings
+import tahor_db
 
-DB_PATH = Path(__file__).parent / "decisions.db"
-
-# DATA_DIR holds vendor_buckets.json, prompt.txt, and sieve.txt -- the same
-# gitignored config files classify.py/config.py read from the repo root.
-# Defaults to this repo (one directory up from decision-app/), but can
-# point anywhere, including a separate private git repo, if you want your
-# vendor/prompt/sieve data to have its own tracked history independent of
-# this codebase.
+DB_PATH = tahor_db.DB_PATH
 DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).resolve().parent.parent))
 SIEVE_PATH = DATA_DIR / "sieve.txt"
 
@@ -46,9 +43,8 @@ BASE_URL = os.environ.get("BASE_URL", "http://localhost:8420")
 
 ALLOWED_EMAIL = os.environ.get("ALLOWED_EMAIL")
 if not ALLOWED_EMAIL:
-    raise SystemExit("Set ALLOWED_EMAIL in your environment -- the one Google account allowed to sign in.")
+    raise SystemExit("Set ALLOWED_EMAIL to the one address allowed to sign in.")
 ALLOWED_EMAIL = ALLOWED_EMAIL.lower()
-
 REDIRECT_URI = f"{BASE_URL}/auth/google/callback"
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -150,23 +146,7 @@ def close_db(exception=None):
 
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS decisions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind TEXT NOT NULL,             -- 'vendor_mapping' | 'free_text_rule' | 'needs_attention_review'
-            summary TEXT NOT NULL,          -- human-readable one-liner shown on the page
-            context TEXT,                   -- JSON: sample sender/subject/counts/etc.
-            status TEXT NOT NULL DEFAULT 'pending',
-            resolution TEXT,                -- JSON: what you chose
-            created_at TEXT NOT NULL,
-            resolved_at TEXT
-        )
-        """
-    )
-    conn.commit()
-    conn.close()
+    tahor_db.init_db()
 
 
 TAHOR_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230B2624'/%3E%3Cpath fill-rule='evenodd' fill='%230EA5A0' d='M50,14 C50,14 22,56 22,68 A28,28 0 1 0 78,68 C78,56 50,14 50,14 Z M33,53 L50,65 L67,53 L67,59 L50,71 L33,59 Z'/%3E%3C/svg%3E"
@@ -176,9 +156,22 @@ TAHOR_HEADER = """
   <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill-rule="evenodd" fill="currentColor" d="M50,8 C50,8 18,54 18,68 A32,32 0 1 0 82,68 C82,54 50,8 50,8 Z M30,52 L50,66 L70,52 L70,59 L50,73 L30,59 Z"/></svg>
   <span class="wordmark">Tahor</span>
   <span class="hebrew" lang="he">טָהוֹר</span>
-  <a class="nav-link" href="{nav_href}">{nav_label}</a>
+  <nav class="nav-links">{nav_links}</nav>
 </header>
 """
+
+
+def tahor_header(current):
+    """current: the page key that should be omitted from its own nav (a page
+    doesn't link to itself). Keys: 'decisions', 'unsubscribe', 'drafts', 'settings'."""
+    links = [
+        ("decisions", "/", "Pending decisions"),
+        ("unsubscribe", "/unsubscribe", "Unsubscribe"),
+        ("drafts", "/drafts", "Drafts"),
+        ("settings", "/settings", "Settings"),
+    ]
+    nav_links = "".join(f'<a class="nav-link" href="{href}">{label}</a>' for key, href, label in links if key != current)
+    return TAHOR_HEADER.format(nav_links=nav_links)
 
 # Shared <style> block for every page in this app -- kept as one constant so
 # the settings page matches the decision-queue page's look exactly instead of
@@ -290,7 +283,8 @@ STYLE_BLOCK = """
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
-  .nav-link { margin-left: auto; color: var(--muted); font-size: 0.85rem; text-decoration: none; border-bottom: 1px solid transparent; }
+  .nav-links { margin-left: auto; display: flex; gap: 18px; flex-wrap: wrap; }
+  .nav-link { color: var(--muted); font-size: 0.85rem; text-decoration: none; border-bottom: 1px solid transparent; white-space: nowrap; }
   .nav-link:hover { color: var(--accent); border-bottom-color: var(--accent); }
   .mode-options { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }
   .mode-option { display: block; cursor: pointer; }
@@ -329,64 +323,18 @@ PAGE_TEMPLATE = """<!doctype html>
 <section>
 <h2>Add a free-text rule</h2>
 <form method="post" action="/add-rule">
-  <textarea name="rule_text" rows="3" placeholder="e.g. mail from this vendor should be trashed and unsubscribed, but keep any purchase receipts"></textarea>
-  <button type="submit" class="primary">Submit rule for the model to draft</button>
+  <textarea name="rule_text" rows="3" placeholder="e.g. Kate Spade marketing should be trashed and unsubscribed, but keep any purchase receipts"></textarea>
+  <button type="submit" class="primary">Submit rule for Gemini to draft</button>
 </form>
 </section>
 <section>
 <h2>Current recommended Sieve filter</h2>
-<p class="hint">Paste this into your mail provider's Sieve editor (in Fastmail: Settings &rarr; Filters &amp; Rules &rarr; Edit custom Sieve code).</p>
+<p class="hint">Paste this into Fastmail: Settings &rarr; Filters &amp; Rules &rarr; Edit custom Sieve code (third box).</p>
 <pre>{sieve_content}</pre>
 </section>
 </main>
 </body>
 </html>
-"""
-
-SIEVE_BANNER = """
-<div class="card sieve">
-  <div class="summary">Sieve filter update recommended</div>
-  <div class="context">{context}</div>
-  <p>Paste the updated filter (below) into your mail provider's Sieve editor, then confirm:</p>
-  <form method="post" action="/dismiss-sieve/{id}">
-    <button type="submit" class="primary">I've applied this</button>
-  </form>
-</div>
-"""
-
-CARD_VENDOR_MAPPING = """
-<div class="card">
-  <div class="summary">{summary}</div>
-  <div class="context">{context}</div>
-  <form method="post" action="/resolve/{id}">
-    <div class="fields">
-      <select name="bucket">
-        <option value="">-- choose or type below --</option>
-        {bucket_options}
-      </select>
-      <input type="text" name="bucket_custom" placeholder="or new bucket, e.g. Shopping/Retail">
-      <input type="text" name="vendor_name" placeholder="Display name, e.g. Acme Corp">
-    </div>
-    <div class="actions">
-      <button type="submit" name="action" value="map" class="primary">File here</button>
-      <button type="submit" name="action" value="skip">Leave unsorted</button>
-    </div>
-  </form>
-</div>
-"""
-
-CARD_GENERIC = """
-<div class="card">
-  <div class="summary">{summary}</div>
-  <div class="context">{context}</div>
-  <form method="post" action="/resolve/{id}">
-    <div class="actions">
-      <button type="submit" name="action" value="keep" class="primary">Keep</button>
-      <button type="submit" name="action" value="trash" class="trash">Trash</button>
-      <button type="submit" name="action" value="skip">Skip for now</button>
-    </div>
-  </form>
-</div>
 """
 
 SETTINGS_PAGE_TEMPLATE = """<!doctype html>
@@ -412,20 +360,175 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
   </div>
   <button type="submit" class="primary">Save</button>
 </form>
+<section>
+<h2>Rule drafting model</h2>
+<p class="hint">Used when you submit a free-text rule below on the main page. This runs rarely, so it's worth spending on quality over cost.</p>
+<form method="post" action="/settings">
+  <div class="mode-options">
+    {rule_model_cards}
+  </div>
+  <button type="submit" class="primary">Save</button>
+</form>
+</section>
+<section>
+<h2>Reply drafting</h2>
+<p class="hint">A message from any of these senders gets a drafted reply saved to Drafts for you to review and send yourself &mdash; nothing is ever sent automatically.</p>
+{reply_triggers_list}
+<form method="post" action="/add-reply-trigger">
+  <div class="fields">
+    <select name="trigger_type">
+      <option value="sender_email">Specific address</option>
+      <option value="sender_domain">Whole domain</option>
+    </select>
+    <input type="text" name="value" placeholder="e.g. boss@work.com or clientco.com">
+  </div>
+  <button type="submit" class="primary">Add trigger</button>
+</form>
+</section>
 </main>
 </body>
 </html>
 """
 
+REPLY_TRIGGER_ROW = """
+<div class="card">
+  <div class="summary">{value}</div>
+  <div class="context">{type_label}</div>
+  <form method="post" action="/remove-reply-trigger">
+    <input type="hidden" name="trigger_type" value="{type}">
+    <input type="hidden" name="value" value="{value}">
+    <button type="submit" class="trash">Remove</button>
+  </form>
+</div>
+"""
+
 MODE_OPTION = """
 <label class="card mode-option{active_class}">
   <div class="mode-option-head">
-    <input type="radio" name="classify_mode" value="{value}"{checked}>
+    <input type="radio" name="{field}" value="{value}"{checked}>
     <span class="summary">{label}</span>
     {active_badge}
   </div>
   <p class="context">{description}</p>
 </label>
+"""
+
+SIEVE_BANNER = """
+<div class="card sieve">
+  <div class="summary">Sieve filter update recommended</div>
+  <div class="context">{context}</div>
+  <p>Paste the updated filter (below) into Fastmail's Sieve editor, then confirm:</p>
+  <form method="post" action="/dismiss-sieve/{id}">
+    <button type="submit" class="primary">I've applied this</button>
+  </form>
+</div>
+"""
+
+CARD_VENDOR_MAPPING = """
+<div class="card">
+  <div class="summary">{summary}</div>
+  <div class="context">{context}</div>
+  <form method="post" action="/resolve/{id}">
+    <div class="fields">
+      <select name="bucket">
+        <option value="">-- choose or type below --</option>
+        {bucket_options}
+      </select>
+      <input type="text" name="bucket_custom" placeholder="or new bucket, e.g. Shopping/Retail">
+      <input type="text" name="vendor_name" placeholder="Display name, e.g. Kate Spade">
+    </div>
+    <div class="actions">
+      <button type="submit" name="action" value="map" class="primary">File here</button>
+      <button type="submit" name="action" value="skip">Leave unsorted</button>
+    </div>
+  </form>
+</div>
+"""
+
+CARD_GENERIC = """
+<div class="card">
+  <div class="summary">{summary}</div>
+  <div class="context">{context}</div>
+  <form method="post" action="/resolve/{id}">
+    <div class="actions">
+      <button type="submit" name="action" value="keep" class="primary">Keep</button>
+      <button type="submit" name="action" value="trash" class="trash">Trash</button>
+      <button type="submit" name="action" value="skip">Skip for now</button>
+    </div>
+  </form>
+</div>
+"""
+
+UNSUBSCRIBE_PAGE_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tahor — unsubscribe</title>
+<link rel="icon" type="image/svg+xml" href="{icon}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Source+Sans+3:wght@400;600&family=DM+Mono&display=swap">
+{style}
+</head>
+<body>
+<main>
+{header}
+<h1>Unsubscribe <span class="count">{count}</span></h1>
+<p class="hint">Every sender seen with a List-Unsubscribe header, most recent first. Unsubscribing isn't always honored, so blocking is offered alongside it.</p>
+{cards}
+</main>
+</body>
+</html>
+"""
+
+UNSUBSCRIBE_CARD = """
+<div class="card">
+  <div class="summary">{display_name}</div>
+  <div class="context">{sender_email} &middot; {message_count} message(s) &middot; {mechanism}</div>
+  <form method="post" action="/unsubscribe/{id}">
+    <div class="actions">
+      <button type="submit" name="action" value="unsubscribe" class="primary">Unsubscribe</button>
+      <button type="submit" name="action" value="unsubscribe_block_marketing">Unsubscribe + block marketing</button>
+      <button type="submit" name="action" value="block_all" class="trash">Block entirely</button>
+      <button type="submit" name="action" value="dismiss">Keep subscription</button>
+    </div>
+  </form>
+</div>
+"""
+
+DRAFTS_PAGE_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tahor — drafts</title>
+<link rel="icon" type="image/svg+xml" href="{icon}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=DM+Mono&display=swap">
+{style}
+</head>
+<body>
+<main>
+{header}
+<h1>Reply drafts <span class="count">{count}</span></h1>
+<p class="hint">Drafted from your reply triggers. Each one is also sitting in your Drafts folder, ready to edit and send &mdash; nothing here sends anything.</p>
+{cards}
+</main>
+</body>
+</html>
+"""
+
+DRAFT_CARD = """
+<div class="card">
+  <div class="summary">Re: {subject}</div>
+  <div class="context">To {recipient_email} &middot; drafted {created_at}</div>
+  <pre>{draft_body}</pre>
+  <form method="post" action="/dismiss-draft/{id}">
+    <button type="submit">Mark reviewed</button>
+  </form>
+</div>
 """
 
 
@@ -474,7 +577,7 @@ def index():
     return PAGE_TEMPLATE.format(
         icon=TAHOR_ICON,
         style=STYLE_BLOCK,
-        header=TAHOR_HEADER.format(nav_href="/settings", nav_label="Settings"),
+        header=tahor_header("decisions"),
         count=len(pending),
         sieve_banner=sieve_banner,
         cards=body,
@@ -531,14 +634,20 @@ def _settings_status_line(current_mode):
 @login_required
 def settings_page():
     if request.method == "POST":
-        mode = request.form.get("classify_mode", "")
-        if mode in mailbox_settings.MODES:
-            mailbox_settings.set_classify_mode(mode)
+        if "classify_mode" in request.form:
+            mode = request.form.get("classify_mode", "")
+            if mode in mailbox_settings.MODES:
+                mailbox_settings.set_classify_mode(mode)
+        elif "rule_model" in request.form:
+            key = request.form.get("rule_model", "")
+            if key in mailbox_settings.RULE_MODELS:
+                mailbox_settings.set_rule_model(key)
         return redirect("/settings")
 
     current_mode = mailbox_settings.get_classify_mode()
     mode_cards = "".join(
         MODE_OPTION.format(
+            field="classify_mode",
             value=m,
             label=MODE_LABELS[m],
             description=MODE_DESCRIPTIONS[m],
@@ -549,13 +658,59 @@ def settings_page():
         for m in mailbox_settings.MODES
     )
 
+    current_rule_model = mailbox_settings.get_rule_model()
+    rule_model_cards = "".join(
+        MODE_OPTION.format(
+            field="rule_model",
+            value=key,
+            label=backend["label"],
+            description=f"Model: {backend['model']}",
+            active_class=" active" if key == current_rule_model else "",
+            checked=" checked" if key == current_rule_model else "",
+            active_badge='<span class="count">current</span>' if key == current_rule_model else "",
+        )
+        for key, backend in mailbox_settings.RULE_MODELS.items()
+    )
+
+    triggers = mailbox_settings.get_reply_triggers()
+    if triggers:
+        reply_triggers_list = "".join(
+            REPLY_TRIGGER_ROW.format(
+                value=t["value"],
+                type=t["type"],
+                type_label="Whole domain" if t["type"] == "sender_domain" else "Specific address",
+            )
+            for t in triggers
+        )
+    else:
+        reply_triggers_list = '<p class="empty">No reply triggers configured yet.</p>'
+
     return SETTINGS_PAGE_TEMPLATE.format(
         icon=TAHOR_ICON,
         style=STYLE_BLOCK,
-        header=TAHOR_HEADER.format(nav_href="/", nav_label="Pending decisions"),
+        header=tahor_header("settings"),
         status_line=_settings_status_line(current_mode),
         mode_cards=mode_cards,
+        rule_model_cards=rule_model_cards,
+        reply_triggers_list=reply_triggers_list,
     )
+
+
+@app.route("/add-reply-trigger", methods=["POST"])
+@login_required
+def add_reply_trigger():
+    trigger_type = request.form.get("trigger_type", "")
+    value = request.form.get("value", "")
+    if trigger_type in mailbox_settings.TRIGGER_TYPES and value.strip():
+        mailbox_settings.add_reply_trigger(trigger_type, value)
+    return redirect("/settings")
+
+
+@app.route("/remove-reply-trigger", methods=["POST"])
+@login_required
+def remove_reply_trigger():
+    mailbox_settings.remove_reply_trigger(request.form.get("trigger_type", ""), request.form.get("value", ""))
+    return redirect("/settings")
 
 
 @app.route("/dismiss-sieve/<int:decision_id>", methods=["POST"])
@@ -599,7 +754,7 @@ def add_rule():
             "VALUES ('free_text_rule', ?, ?, 'resolved', ?, ?, ?)",
             (
                 f"Rule: {rule_text[:80]}",
-                "Submitted directly via the rule box.",
+                "Submitted directly by Jason via the rule box.",
                 json.dumps({"action": "free_text_rule", "text": rule_text}),
                 datetime.now(timezone.utc).isoformat(),
                 datetime.now(timezone.utc).isoformat(),
@@ -607,6 +762,105 @@ def add_rule():
         )
         db.commit()
     return redirect("/")
+
+
+def execute_unsubscribe(candidate):
+    url = candidate["unsubscribe_url"]
+    mailto = candidate["unsubscribe_mailto"]
+    if candidate["one_click"] and url:
+        resp = requests.post(url, data={"List-Unsubscribe": "One-Click"}, timeout=15)
+        return f"one-click POST to {url}: {resp.status_code}"
+    if mailto:
+        if not (os.environ.get("FASTMAIL_EMAIL") and os.environ.get("FASTMAIL_APP_PASSWORD")):
+            return "no SMTP credentials configured, mailto unsubscribe skipped"
+        msg = MIMEText("")
+        msg["From"] = config.email_address()
+        msg["To"] = mailto
+        msg["Subject"] = "unsubscribe"
+        with smtplib.SMTP_SSL(config.SMTP_HOST, config.SMTP_PORT) as smtp:
+            smtp.login(config.email_address(), config.app_password())
+            smtp.send_message(msg)
+        return f"sent unsubscribe email to {mailto}"
+    if url:
+        resp = requests.get(url, timeout=15)
+        return f"GET {url}: {resp.status_code}"
+    return "no unsubscribe mechanism available"
+
+
+@app.route("/unsubscribe")
+@login_required
+def unsubscribe_page():
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM unsubscribe_candidates WHERE status = 'pending' ORDER BY last_seen_at DESC"
+    ).fetchall()
+    cards = []
+    for row in rows:
+        mechanism = "one-click unsubscribe" if row["one_click"] else ("unsubscribe link" if row["unsubscribe_url"] else ("email unsubscribe" if row["unsubscribe_mailto"] else "no unsubscribe mechanism found"))
+        cards.append(
+            UNSUBSCRIBE_CARD.format(
+                id=row["id"],
+                display_name=row["display_name"] or row["sender_domain"],
+                sender_email=row["sender_email"] or row["sender_domain"],
+                message_count=row["message_count"],
+                mechanism=mechanism,
+            )
+        )
+    body = "".join(cards) if cards else '<p class="empty">No unsubscribe candidates pending.</p>'
+    return UNSUBSCRIBE_PAGE_TEMPLATE.format(
+        icon=TAHOR_ICON, style=STYLE_BLOCK, header=tahor_header("unsubscribe"), count=len(rows), cards=body
+    )
+
+
+@app.route("/unsubscribe/<int:candidate_id>", methods=["POST"])
+@login_required
+def unsubscribe_action(candidate_id):
+    db = get_db()
+    row = db.execute("SELECT * FROM unsubscribe_candidates WHERE id = ?", (candidate_id,)).fetchone()
+    action = request.form.get("action")
+    if row and action in ("unsubscribe", "unsubscribe_block_marketing"):
+        execute_unsubscribe(row)
+    if row and action in ("unsubscribe_block_marketing", "block_all"):
+        rule = "block_all" if action == "block_all" else "block_marketing"
+        tahor_db.set_sender_rule(row["sender_domain"], rule)
+    db.execute("UPDATE unsubscribe_candidates SET status = 'resolved' WHERE id = ?", (candidate_id,))
+    db.commit()
+    return redirect("/unsubscribe")
+
+
+@app.route("/drafts")
+@login_required
+def drafts_page():
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM reply_drafts WHERE status = 'pending' ORDER BY created_at DESC"
+    ).fetchall()
+    cards = [
+        DRAFT_CARD.format(
+            id=row["id"],
+            subject=row["subject"],
+            recipient_email=row["recipient_email"],
+            created_at=row["created_at"][:16].replace("T", " "),
+            draft_body=row["draft_body"],
+        )
+        for row in rows
+    ]
+    body = "".join(cards) if cards else '<p class="empty">No drafts waiting for review.</p>'
+    return DRAFTS_PAGE_TEMPLATE.format(
+        icon=TAHOR_ICON, style=STYLE_BLOCK, header=tahor_header("drafts"), count=len(rows), cards=body
+    )
+
+
+@app.route("/dismiss-draft/<int:draft_id>", methods=["POST"])
+@login_required
+def dismiss_draft(draft_id):
+    db = get_db()
+    db.execute(
+        "UPDATE reply_drafts SET status = 'reviewed', resolved_at = ? WHERE id = ?",
+        (datetime.now(timezone.utc).isoformat(), draft_id),
+    )
+    db.commit()
+    return redirect("/drafts")
 
 
 if __name__ == "__main__":
