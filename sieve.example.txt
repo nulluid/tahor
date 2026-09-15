@@ -1,0 +1,18 @@
+require ["fileinto", "envelope", "header"];
+
+if anyof (
+        address :domain :is "from" "unwanted-vendor.example.com"
+    ) {
+    discard;
+    stop;
+}
+
+if allof (
+    anyof (
+            address :domain :is "from" "marketing-only.example.com"
+    ),
+    header :exists "List-Unsubscribe"
+) {
+    discard;
+    stop;
+}

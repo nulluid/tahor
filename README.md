@@ -8,6 +8,12 @@ resolve them asynchronously instead of blocking the pipeline. Everything
 here is standard-library-only Python except the web app, which needs
 Flask and requests.
 
+<p align="center">
+  <img src="docs/screenshots/decision-queue.jpg" width="48%" alt="The pending-decisions page, with a Sieve update banner and two example cards.">
+  <img src="docs/screenshots/unsubscribe.jpg" width="48%" alt="The unsubscribe page, listing three example senders with per-row unsubscribe and block actions.">
+</p>
+<p align="center"><sub>The decision app's pending-decisions and unsubscribe pages, shown with example data.</sub></p>
+
 ## Architecture
 
 - **Always running (pick one):** `backlog_worker.py`, an unattended loop
@@ -36,6 +42,33 @@ Flask and requests.
   Ollama) or a hosted API key (Gemini, OpenRouter, or anything else that
   speaks the same protocol).
 
+## Running this for $0/month
+
+Every choice below is a default, not a requirement -- swap in whatever
+compute and models you already have. But if you're starting from nothing,
+this whole pipeline runs for free:
+
+- **Compute:** Oracle Cloud's Always Free tier includes an Ampere A1
+  instance (4 OCPUs, 24 GB RAM, permanently free, no trial period) --
+  comfortably enough for this workload. `backlog_worker.py` idles at a few
+  MB of memory between batches.
+- **Classification:** OpenRouter's free-tier models (`CLASSIFY_BACKEND=
+  openrouter-free` in `classify.py`) cost nothing, capped at roughly
+  1,000 requests/day account-wide. For a typical inbox that's plenty once
+  the initial backlog is cleared -- new mail trickles in far slower than
+  1,000 messages/day for most people.
+- **Rule drafting:** Gemini's free tier (`gemini-flash` in the settings
+  page) costs nothing and this runs rarely anyway -- a few times a month
+  at most.
+
+The only place real money enters is optional and deliberate: switching
+`CLASSIFY_BACKEND` to `openrouter` (paid) or picking a paid model for rule
+drafting or reply drafting, when you want to clear a large backlog faster
+than the free tier's daily cap allows. At current OpenRouter pricing
+that's on the order of $0.0003 per email -- clearing 50,000 backlogged
+messages costs roughly $15, once, not an ongoing cost. See
+`classify.py`'s docstring for the full backend list and tradeoffs.
+
 ## Quick start
 
 ```
@@ -47,9 +80,9 @@ cd tahor
 Then:
 
 1. Edit `.env` with your IMAP host, address, and app password.
-2. Edit `vendor_buckets.json` and `prompt.txt` for your own mail --
-   they start from generic examples and are gitignored so real values
-   never get committed.
+2. Edit `vendor_buckets.json` and `prompt.txt` for your own mail (see
+   "Your own data" below for what each file is and how to track them in
+   your own private repo).
 3. Pick a `CLASSIFY_BACKEND` (see `classify.py`'s docstring for the
    tradeoffs between local/gemini/openrouter/openrouter-free).
 4. Run a batch by hand before automating anything, so you can see what
@@ -118,6 +151,47 @@ a real in-thread reply (`In-Reply-To`/`References` set, so it threads
 correctly) and is never sent on its own; it also shows up on `/drafts` for
 a second look. Each run that produces at least one draft sends you a
 one-line summary email so a new draft is never silently missed.
+
+## Your own data
+
+Four files hold everything specific to your mailbox, and all four are
+gitignored -- nothing you put in them can end up in this repo's history,
+even by accident:
+
+- **`.env`** -- your IMAP host, address, app password, API keys, and every
+  other secret. Copied from `.env.example` by `install.sh`.
+- **`vendor_buckets.json`** -- a flat map of sender label to
+  `[folder, display name]`, read by `filing_sweep.py` and updated by the
+  decision app's vendor-mapping flow. Starts from `vendor_buckets.example.json`.
+- **`prompt.txt`** -- the system prompt the classifier reads. Starts from
+  `prompt.example.txt`, which is a complete, working prompt on its own --
+  edit it to match how you actually want your mail judged, don't just add
+  to it forever.
+- **`sieve.txt`** -- the Sieve filter `generate_sieve.py` writes and
+  `propose_sieve_update.py` proposes (via the decision app's dismissable
+  banner) whenever your sender-block list changes. Starts from
+  `sieve.example.txt`. Sieve can't be pushed to Fastmail via API, so this
+  is always something you paste in yourself.
+
+The three data files (not `.env`) all live under one `DATA_DIR`, which
+defaults to this repo's own root. If you want your real vendor mappings,
+prompt, and Sieve rules to have their own version history -- reasonable,
+since they'll accumulate small edits over months -- point `DATA_DIR` at a
+**separate, private git repository** instead:
+
+```
+git init ~/tahor-data
+cp vendor_buckets.example.json prompt.example.txt sieve.example.txt ~/tahor-data/
+cd ~/tahor-data && git mv vendor_buckets.example.json vendor_buckets.json && \
+  git mv prompt.example.txt prompt.txt && git mv sieve.example.txt sieve.txt && \
+  git add -A && git commit -m "start data repo"
+```
+
+Then set `DATA_DIR=/home/you/tahor-data` (or wherever) in `.env` and in
+the decision app's environment. Nothing about the code changes -- it's
+one environment variable, read by `apply_decisions.py` and
+`propose_sieve_update.py`. This is exactly the pattern used to build and
+run the live instance this project came out of.
 
 ## Deploying on Oracle Cloud's Always Free tier
 
