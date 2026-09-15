@@ -7,20 +7,15 @@ pushed via API).
 
 Usage: python3 propose_sieve_update.py <new_sieve_file> "<one-line reason>"
 """
-import json
-import sqlite3
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 import os
 
-DB_PATH = Path(__file__).parent / "decisions.db"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import tahor_db
 
-# DATA_DIR holds sieve.txt -- the same gitignored file classify.py/config.py
-# read from the repo root. Defaults to this repo (one directory up from
-# decision-app/), but can point at a separate private git repo if you want
-# that data to have its own tracked history independent of this codebase.
 DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).resolve().parent.parent))
 SIEVE_PATH = DATA_DIR / "sieve.txt"
 
@@ -45,7 +40,7 @@ def main():
     git("commit", "-m", f"propose sieve update: {reason}")
     git("push", "origin", "main")
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = tahor_db.get_db()
     conn.execute(
         "INSERT INTO decisions (kind, summary, context, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
         ("sieve_update", "Sieve filter update recommended", reason, datetime.now(timezone.utc).isoformat()),
