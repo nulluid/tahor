@@ -13,26 +13,48 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-# NOT Path(__file__).parent -- this module is deployed as separate file
-# copies in more than one directory (the worker runs from ~/mailbox-sweep,
-# the web app from ~/mailbox-decisions), and app.py/backlog_worker.py must
-# agree on exactly one settings.json or a toggle in the UI silently does
-# nothing to the worker. One fixed, account-wide location instead, still
-# overridable for tests/other setups.
+# Fixed path, not Path(__file__).parent -- worker and web app run from different directories.
 SETTINGS_PATH = Path(os.environ.get("TAHOR_SETTINGS_PATH", Path.home() / ".config" / "tahor" / "settings.json"))
 SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 MODES = ("free", "paid", "auto")
 
+# Rule drafting is rare and judgment-heavy, so it's worth a stronger model than routine classification uses.
+RULE_MODELS = {
+    "gemini-flash": {
+        "label": "Gemini 3.6 Flash — fast, effectively free",
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "model": "gemini-3.6-flash",
+        "auth_env": "GEMINI_API_KEY",
+    },
+    "gemini-pro": {
+        "label": "Gemini 3 Pro — more capable, still cheap",
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "model": "gemini-3-pro",
+        "auth_env": "GEMINI_API_KEY",
+    },
+    "claude-opus": {
+        "label": "Claude Opus 5 (via OpenRouter) — best judgment, highest cost",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "model": "anthropic/claude-opus-5",
+        "auth_env": "OPENROUTER_API_KEY",
+    },
+    "gpt5": {
+        "label": "GPT-5.1 (via OpenRouter) — strong alternative",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "model": "openai/gpt-5.1",
+        "auth_env": "OPENROUTER_API_KEY",
+    },
+}
+DEFAULT_RULE_MODEL = "claude-opus"
+
 DEFAULT_SETTINGS = {
     "classify_mode": "free",
-    # Rolling log of recent free-tier batch results, oldest first:
-    # [{"messages": N, "seconds": S}, ...] -- see record_free_batch/recent_free_rate.
-    "free_rate_log": [],
-    # Cached full-mailbox backlog count + when it was taken, so auto mode
-    # doesn't need a full IMAP scan every batch -- see get_cached_backlog.
+    "rule_model": DEFAULT_RULE_MODEL,
+    "free_rate_log": [],  # rolling [{"messages": N, "seconds": S}, ...], see record_free_batch
     "backlog_estimate": None,
     "backlog_estimate_at": None,
+    "reply_triggers": [],  # [{"type": "sender_email"|"sender_domain", "value": str}, ...]
 }
 
 FREE_RATE_LOG_MAX = 5
@@ -80,6 +102,8 @@ def load_settings():
     merged.update(data)
     if merged.get("classify_mode") not in MODES:
         merged["classify_mode"] = "free"
+    if merged.get("rule_model") not in RULE_MODELS:
+        merged["rule_model"] = DEFAULT_RULE_MODEL
     return merged
 
 
@@ -99,6 +123,57 @@ def set_classify_mode(mode):
     settings = load_settings()
     settings["classify_mode"] = mode
     save_settings(settings)
+
+
+def get_rule_model():
+    return load_settings().get("rule_model", DEFAULT_RULE_MODEL)
+
+
+def set_rule_model(key):
+    if key not in RULE_MODELS:
+        raise ValueError(f"Unknown rule_model {key!r}, choose from {tuple(RULE_MODELS)}")
+    settings = load_settings()
+    settings["rule_model"] = key
+    save_settings(settings)
+
+
+TRIGGER_TYPES = ("sender_email", "sender_domain")
+
+
+def get_reply_triggers():
+    return load_settings().get("reply_triggers", [])
+
+
+def add_reply_trigger(trigger_type, value):
+    if trigger_type not in TRIGGER_TYPES:
+        raise ValueError(f"Unknown trigger type {trigger_type!r}, choose from {TRIGGER_TYPES}")
+    value = value.strip().lower()
+    if not value:
+        return
+    settings = load_settings()
+    triggers = settings.get("reply_triggers", [])
+    if not any(t["type"] == trigger_type and t["value"] == value for t in triggers):
+        triggers.append({"type": trigger_type, "value": value})
+        settings["reply_triggers"] = triggers
+        save_settings(settings)
+
+
+def remove_reply_trigger(trigger_type, value):
+    settings = load_settings()
+    triggers = settings.get("reply_triggers", [])
+    settings["reply_triggers"] = [t for t in triggers if not (t["type"] == trigger_type and t["value"] == value)]
+    save_settings(settings)
+
+
+def matches_reply_trigger(sender_email):
+    sender_email = (sender_email or "").lower()
+    domain = sender_email.rsplit("@", 1)[-1] if "@" in sender_email else ""
+    for t in get_reply_triggers():
+        if t["type"] == "sender_email" and t["value"] == sender_email:
+            return True
+        if t["type"] == "sender_domain" and t["value"] == domain:
+            return True
+    return False
 
 
 def record_free_batch(messages, seconds):

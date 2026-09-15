@@ -3,6 +3,8 @@ import os
 
 IMAP_HOST = os.environ.get("FASTMAIL_HOST", "imap.fastmail.com")
 IMAP_PORT = 993
+SMTP_HOST = os.environ.get("FASTMAIL_SMTP_HOST", "smtp.fastmail.com")
+SMTP_PORT = 465
 
 
 def email_address():
