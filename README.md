@@ -1,47 +1,126 @@
-# mailbox-sweep
+# Tahor
 
-Inbox triage that doesn't need a human: classify each message, tag it with
-a retention window, delete what's aged out and already been read, and file
-receipts and statements away once they've had a fair chance to be seen.
+Tahor (Hebrew טָהוֹר, "clean, pure") is a headless mailbox-triage pipeline.
+An LLM classifies each message, tags it with real IMAP keywords, and
+separate sweeps delete or file mail based on that tag. For the cases the
+classifier can't call confidently, an optional small web app lets a human
+resolve them asynchronously instead of blocking the pipeline. Everything
+here is standard-library-only Python except the web app, which needs
+Flask and requests.
 
-Standard library only — no dependencies to install for the scripts
-themselves. Classification calls out to an OpenAI-compatible chat endpoint,
-so it works equally well against a local model (LM Studio, Ollama) or a
-hosted one.
+## Architecture
 
-## Pieces
+- **Always running (pick one):** `backlog_worker.py`, an unattended loop
+  under systemd that fetches, classifies, tags, and repeats -- or run
+  `fetch_batch.py` / `classify.py` / `process_batch.py` / `keyword_tool.py`
+  by hand or from cron, one stage at a time.
+- **Sweeps (scheduled, separate from classification):** `retention_sweep.py`
+  deletes mail whose retention window has passed and that's been read;
+  `filing_sweep.py` moves receipts and statements into per-vendor folders
+  once they've had a fair chance to be seen.
+- **Decision app (optional):** `decision-app/app.py`, a small Flask site
+  for resolving ambiguous cases -- new vendor mappings, free-text rules --
+  from a browser instead of a live session.
 
-- **classify.py** — runs each message through the model against the schema
-  in `prompt.txt`: keep/trash/mixed, category, retention tier,
-  business/personal, needs-attention.
-- **keyword_tool.py** — writes the classifier's decision onto the message
-  as real IMAP keywords, addressed by Message-ID so the same ops file is
-  safe to rerun.
-- **bulk_lookup.py** / **process_batch.py** — batch machinery: pull headers
-  for a date range in one IMAP round trip, correlate classifier output back
-  to Message-IDs, and hold back one message per sender so a fully-trashed
-  sender still leaves a dated record behind.
-- **retention_sweep.py** — deletes anything past its retention window, but
-  only once it's actually been read.
-- **filing_sweep.py** — moves receipts/statements/tax mail into per-vendor
-  folders, once they've had a week (if read) or a month (if still unread)
-  to be seen.
+## Requirements
 
-## Setup
+- Python 3.9+.
+- An IMAP account with app-password support. This was built against
+  Fastmail; any IMAP host works.
+- An OpenAI-compatible chat endpoint: a local model server (LM Studio,
+  Ollama) or a hosted API key (Gemini, OpenRouter, or anything else that
+  speaks the same protocol).
 
-1. `cp .env.example .env` and fill in your IMAP address and app password.
-2. `cp vendor_buckets.example.json vendor_buckets.json` and
-   `cp prompt.example.txt prompt.txt` — both are meant to be edited for
-   your own mail and are gitignored so real values never get committed.
-3. Point `classify.py` at a running OpenAI-compatible chat endpoint.
-4. Per batch: `classify.py` → `process_batch.py` → `keyword_tool.py`. On a
-   schedule: `retention_sweep.py` and `filing_sweep.py`.
+## Quick start
 
-## Design
+```
+git clone <this repo>
+cd tahor
+./install.sh
+```
 
-Retention (how long to keep something) and filing (where it lives) are
-separate decisions. A message can be tagged for standard retention and
-still sit in the inbox indefinitely — filing out of the inbox is reserved
-for the categories that have no read-now value at all. Nothing unread is
-ever deleted, regardless of age, and filing itself waits out a grace period
-rather than moving something before there's been a real chance to see it.
+Then:
+
+1. Edit `.env` with your IMAP host, address, and app password.
+2. Edit `vendor_buckets.json` and `prompt.txt` for your own mail --
+   they start from generic examples and are gitignored so real values
+   never get committed.
+3. Pick a `CLASSIFY_BACKEND` (see `classify.py`'s docstring for the
+   tradeoffs between local/gemini/openrouter/openrouter-free).
+4. Run a batch by hand before automating anything, so you can see what
+   it actually does to a real mailbox:
+   ```
+   python3 fetch_batch.py INBOX current_batch
+   python3 classify.py current_batch_in.json current_batch_out.json prompt.txt
+   python3 process_batch.py current_batch INBOX
+   python3 keyword_tool.py current_batch_ops.json
+   ```
+5. Once that looks right, set up ongoing operation. Either the always-on
+   worker:
+   ```
+   sudo cp tahor-backlog-worker.service.example /etc/systemd/system/tahor-backlog-worker.service
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now tahor-backlog-worker
+   ```
+   or cron, running each stage on its own schedule:
+   ```
+   */30 * * * * cd /path/to/tahor && python3 fetch_batch.py INBOX current_batch && python3 classify.py current_batch_in.json current_batch_out.json prompt.txt && python3 process_batch.py current_batch INBOX && python3 keyword_tool.py current_batch_ops.json
+   0 4 * * * cd /path/to/tahor && python3 retention_sweep.py
+   0 5 * * * cd /path/to/tahor && python3 filing_sweep.py
+   ```
+
+## The decision app
+
+Some cases aren't clear-cut: a sender you haven't mapped to a folder yet,
+or a rule you want to state in your own words rather than as JSON. The
+decision app queues those up on a page instead of blocking the pipeline,
+and `apply_decisions.py` picks up what you resolved on the next run.
+
+It has no built-in auth beyond Google OAuth restricted to one address, so
+set that up first:
+
+1. In the Google Cloud Console, create an OAuth client ID (Web
+   application). Set the authorized redirect URI to
+   `<BASE_URL>/auth/google/callback` -- for a local-only setup that's
+   `http://localhost:8420/auth/google/callback`.
+2. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `BASE_URL`, and
+   `ALLOWED_EMAIL` (the one address allowed to sign in) in `.env`.
+3. Run it: `python3 decision-app/app.py`.
+
+It binds to `127.0.0.1` only. Don't expose it to the internet without
+putting TLS in front of it yourself -- nginx with certbot, Caddy, or a
+tunnel. An unauthenticated decision queue on the open internet is a bad
+idea regardless of the OAuth check.
+
+## Deploying on Oracle Cloud's Always Free tier
+
+An Always Free Ampere A1 instance runs this comfortably -- it's a small,
+low-traffic workload. The A1 shape is ARM, so if you add any dependency
+beyond Flask and requests, check it ships an ARM wheel or is pure Python;
+both of Tahor's own dependencies already do.
+
+Nothing here is actually Oracle-specific. A Raspberry Pi, a $5 VPS, or a
+Fly.io machine works the same way -- Oracle is just where this happened to
+get built.
+
+## Why these design choices
+
+Retention and filing are separate decisions. A message can be tagged for
+standard retention and still sit in the inbox indefinitely -- filing out
+of the inbox is reserved for categories with no read-now value at all
+(receipts, statements, tax mail). Keeping them separate means a filing
+mistake never risks a deletion, and a retention tier never determines
+where something ends up living.
+
+Retention has four tiers: transient (days -- OTPs, duplicate alerts),
+standard (years -- the default for ordinary keeps), forever (used
+sparingly -- legal documents, durable-goods receipts), and
+pending-review (genuinely ambiguous, left alone rather than guessed at).
+
+Nothing unread is ever deleted, regardless of age or tier. Filing itself
+waits out a grace period too, rather than moving something out of the
+inbox before there's been a real chance to see it.
+
+## License
+
+MIT — see LICENSE.
