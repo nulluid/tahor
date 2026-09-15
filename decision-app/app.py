@@ -7,20 +7,19 @@ instead of a live session.
 
 Data flow: the sweep scripts write rows into decisions.db when they hit
 something they can't decide alone -> this app lets you resolve them ->
-apply_decisions.py (a separate script, run by cron) reads resolved rows and
-either applies them directly (vendor mappings: pure data) or hands free-text
-rules to a model to draft the change.
+apply_decisions.py (a separate script, run by cron, or called inline from
+/add-rule for immediate feedback) reads resolved rows and either applies
+them directly (vendor mappings, sender rules: pure data/enforcement) or
+hands free-text rules to a model to draft the change.
 
 No auth yet -- bind to 127.0.0.1 only until Google OAuth is wired in.
 """
 import json
 import os
 import secrets
-import smtplib
 import sqlite3
 import sys
 from datetime import datetime, timezone
-from email.mime.text import MIMEText
 from functools import wraps
 from pathlib import Path
 from urllib.parse import urlencode
@@ -29,6 +28,7 @@ import requests
 from flask import Flask, g, redirect, request, session
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import apply_decisions
 import config
 import mailbox_settings
 import tahor_db
@@ -154,24 +154,35 @@ TAHOR_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewB
 TAHOR_HEADER = """
 <header>
   <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill-rule="evenodd" fill="currentColor" d="M50,8 C50,8 18,54 18,68 A32,32 0 1 0 82,68 C82,54 50,8 50,8 Z M30,52 L50,66 L70,52 L70,59 L50,73 L30,59 Z"/></svg>
-  <span class="wordmark">Tahor</span>
-  <span class="hebrew" lang="he">טָהוֹר</span>
+  <div class="wordmark-block">
+    <div class="wordmark-row">
+      <span class="wordmark">Tahor</span>
+      <span class="hebrew" lang="he">טָהוֹר</span>
+    </div>
+    <div class="gloss">clean, pure</div>
+  </div>
   <nav class="nav-links">{nav_links}</nav>
 </header>
 """
 
 
 def tahor_header(current):
-    """current: the page key that should be omitted from its own nav (a page
-    doesn't link to itself). Keys: 'decisions', 'unsubscribe', 'drafts', 'settings'."""
+    """current: the page you're on, rendered as plain (non-clickable) text so
+    the nav's item order and position never shift between pages. Keys:
+    'decisions', 'unsubscribe', 'drafts', 'settings'."""
     links = [
         ("decisions", "/", "Pending decisions"),
         ("unsubscribe", "/unsubscribe", "Unsubscribe"),
         ("drafts", "/drafts", "Drafts"),
         ("settings", "/settings", "Settings"),
     ]
-    nav_links = "".join(f'<a class="nav-link" href="{href}">{label}</a>' for key, href, label in links if key != current)
-    return TAHOR_HEADER.format(nav_links=nav_links)
+    parts = []
+    for key, href, label in links:
+        if key == current:
+            parts.append(f'<span class="nav-link nav-current">{label}</span>')
+        else:
+            parts.append(f'<a class="nav-link" href="{href}">{label}</a>')
+    return TAHOR_HEADER.format(nav_links="".join(parts))
 
 # Shared <style> block for every page in this app -- kept as one constant so
 # the settings page matches the decision-queue page's look exactly instead of
@@ -222,8 +233,11 @@ STYLE_BLOCK = """
   main { max-width: 640px; margin: 0 auto; }
   header { display: flex; align-items: center; gap: 12px; margin-bottom: 40px; }
   header svg { width: 30px; height: 30px; color: var(--accent); flex: none; }
+  .wordmark-block { display: flex; flex-direction: column; gap: 2px; }
+  .wordmark-row { display: flex; align-items: baseline; }
   .wordmark { font-family: var(--display); font-size: 1.7rem; font-weight: 500; line-height: 1; letter-spacing: -0.01em; }
   .hebrew { color: var(--muted); font-size: 1.05rem; margin-left: 10px; font-family: var(--text); }
+  .gloss { color: var(--faint); font-size: 0.78rem; letter-spacing: 0.02em; }
   h1, h2 { font-family: var(--display); font-weight: 500; letter-spacing: -0.01em; margin: 0 0 16px; }
   h1 { font-size: 1.5rem; display: flex; align-items: baseline; gap: 10px; }
   h2 { font-size: 1.25rem; }
@@ -232,6 +246,8 @@ STYLE_BLOCK = """
   .card { background: var(--raised); border: 1px solid var(--rule); border-radius: 10px; padding: 18px 20px; margin-bottom: 14px; }
   .card.sieve { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--raised)); }
   .card.sieve .summary { color: var(--accent); }
+  .card.warn { border-color: var(--trash); background: color-mix(in srgb, var(--trash) 9%, var(--raised)); }
+  .card.warn .summary { color: var(--trash); }
   .card p { margin: 0 0 12px; }
   .summary { font-weight: 600; font-size: 1.05rem; margin-bottom: 6px; }
   .context { color: var(--muted); font-family: var(--mono); font-size: 0.82rem; line-height: 1.55; margin-bottom: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -252,9 +268,9 @@ STYLE_BLOCK = """
   ::placeholder { color: var(--faint); }
   select:focus, input:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   button {
-    background: transparent;
+    background: var(--well);
     color: var(--ink);
-    border: 1px solid var(--rule);
+    border: 1px solid var(--muted);
     border-radius: 6px;
     padding: 8px 16px;
     font: inherit;
@@ -262,11 +278,11 @@ STYLE_BLOCK = """
     font-weight: 600;
     cursor: pointer;
   }
-  button:hover { border-color: var(--muted); }
+  button:hover { border-color: var(--accent); }
   button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   button.primary:hover { filter: brightness(1.08); }
-  button.trash { color: var(--trash); }
-  button.trash:hover { border-color: var(--trash); }
+  button.trash { color: var(--trash); border-color: var(--trash); }
+  button.trash:hover { filter: brightness(1.15); }
   .empty { color: var(--muted); font-style: italic; margin: 0; }
   .hint { color: var(--muted); font-size: 0.92rem; margin: 0 0 12px; }
   pre {
@@ -286,6 +302,7 @@ STYLE_BLOCK = """
   .nav-links { margin-left: auto; display: flex; gap: 18px; flex-wrap: wrap; }
   .nav-link { color: var(--muted); font-size: 0.85rem; text-decoration: none; border-bottom: 1px solid transparent; white-space: nowrap; }
   .nav-link:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  .nav-current { color: var(--ink); font-weight: 600; cursor: default; }
   .mode-options { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }
   .mode-option { display: block; cursor: pointer; }
   .mode-option-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
@@ -318,6 +335,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <main>
 {header}
 <h1>Pending decisions <span class="count">{count}</span></h1>
+{flash}
 {sieve_banner}
 {cards}
 <section>
@@ -358,7 +376,6 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
   <div class="mode-options">
     {mode_cards}
   </div>
-  <button type="submit" class="primary">Save</button>
 </form>
 <section>
 <h2>Rule drafting model</h2>
@@ -367,7 +384,6 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
   <div class="mode-options">
     {rule_model_cards}
   </div>
-  <button type="submit" class="primary">Save</button>
 </form>
 </section>
 <section>
@@ -383,6 +399,12 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
     <input type="text" name="value" placeholder="e.g. boss@work.com or clientco.com">
   </div>
   <button type="submit" class="primary">Add trigger</button>
+</form>
+<p class="hint">Model used to draft these replies. This runs once per matching email, so quality of the writing matters more than for rule drafting &mdash; pick a model known for natural English prose.</p>
+<form method="post" action="/settings">
+  <div class="mode-options">
+    {reply_model_cards}
+  </div>
 </form>
 </section>
 </main>
@@ -405,12 +427,18 @@ REPLY_TRIGGER_ROW = """
 MODE_OPTION = """
 <label class="card mode-option{active_class}">
   <div class="mode-option-head">
-    <input type="radio" name="{field}" value="{value}"{checked}>
+    <input type="radio" name="{field}" value="{value}"{checked} onchange="this.form.submit()">
     <span class="summary">{label}</span>
     {active_badge}
   </div>
   <p class="context">{description}</p>
 </label>
+"""
+
+FLASH_BANNER = """
+<div class="card sieve">
+  <div class="summary">{message}</div>
+</div>
 """
 
 SIEVE_BANNER = """
@@ -475,11 +503,20 @@ UNSUBSCRIBE_PAGE_TEMPLATE = """<!doctype html>
 <main>
 {header}
 <h1>Unsubscribe <span class="count">{count}</span></h1>
-<p class="hint">Every sender seen with a List-Unsubscribe header, most recent first. Unsubscribing isn't always honored, so blocking is offered alongside it.</p>
+<p class="hint">Every sender seen with a List-Unsubscribe header, most recent first. Whichever action you pick removes it from this list. Unsubscribing isn't always honored, so blocking is offered alongside it -- "block entirely" unsubscribes too, then blocks going forward regardless.</p>
+{non_compliant_banner}
 {cards}
 </main>
 </body>
 </html>
+"""
+
+NON_COMPLIANT_SECTION = """
+<section>
+<h2>Didn't honor your unsubscribe</h2>
+<p class="hint">You unsubscribed from these, but they sent marketing mail again anyway. Worth blocking.</p>
+{cards}
+</section>
 """
 
 UNSUBSCRIBE_CARD = """
@@ -490,8 +527,22 @@ UNSUBSCRIBE_CARD = """
     <div class="actions">
       <button type="submit" name="action" value="unsubscribe" class="primary">Unsubscribe</button>
       <button type="submit" name="action" value="unsubscribe_block_marketing">Unsubscribe + block marketing</button>
-      <button type="submit" name="action" value="block_all" class="trash">Block entirely</button>
+      <button type="submit" name="action" value="block_all" class="trash">Unsubscribe + block entirely</button>
       <button type="submit" name="action" value="dismiss">Keep subscription</button>
+    </div>
+  </form>
+</div>
+"""
+
+NON_COMPLIANT_CARD = """
+<div class="card warn">
+  <div class="summary">{display_name}</div>
+  <div class="context">{sender_email} &middot; {message_count} message(s) &middot; sent again after you unsubscribed</div>
+  <form method="post" action="/unsubscribe/{id}">
+    <div class="actions">
+      <button type="submit" name="action" value="unsubscribe_block_marketing" class="primary">Block marketing (keep receipts, etc.)</button>
+      <button type="submit" name="action" value="block_all" class="trash">Block entirely</button>
+      <button type="submit" name="action" value="dismiss">Leave unsubscribed, don't block</button>
     </div>
   </form>
 </div>
@@ -574,11 +625,15 @@ def index():
     )
     sieve_content = SIEVE_PATH.read_text() if SIEVE_PATH.exists() else "(not yet synced)"
 
+    flash_message = session.pop("flash", None)
+    flash = FLASH_BANNER.format(message=flash_message) if flash_message else ""
+
     return PAGE_TEMPLATE.format(
         icon=TAHOR_ICON,
         style=STYLE_BLOCK,
         header=tahor_header("decisions"),
         count=len(pending),
+        flash=flash,
         sieve_banner=sieve_banner,
         cards=body,
         sieve_content=sieve_content,
@@ -642,6 +697,10 @@ def settings_page():
             key = request.form.get("rule_model", "")
             if key in mailbox_settings.RULE_MODELS:
                 mailbox_settings.set_rule_model(key)
+        elif "reply_model" in request.form:
+            key = request.form.get("reply_model", "")
+            if key in mailbox_settings.REPLY_MODELS:
+                mailbox_settings.set_reply_model(key)
         return redirect("/settings")
 
     current_mode = mailbox_settings.get_classify_mode()
@@ -672,6 +731,20 @@ def settings_page():
         for key, backend in mailbox_settings.RULE_MODELS.items()
     )
 
+    current_reply_model = mailbox_settings.get_reply_model()
+    reply_model_cards = "".join(
+        MODE_OPTION.format(
+            field="reply_model",
+            value=key,
+            label=backend["label"],
+            description=f"Model: {backend['model']}",
+            active_class=" active" if key == current_reply_model else "",
+            checked=" checked" if key == current_reply_model else "",
+            active_badge='<span class="count">current</span>' if key == current_reply_model else "",
+        )
+        for key, backend in mailbox_settings.REPLY_MODELS.items()
+    )
+
     triggers = mailbox_settings.get_reply_triggers()
     if triggers:
         reply_triggers_list = "".join(
@@ -692,6 +765,7 @@ def settings_page():
         status_line=_settings_status_line(current_mode),
         mode_cards=mode_cards,
         rule_model_cards=rule_model_cards,
+        reply_model_cards=reply_model_cards,
         reply_triggers_list=reply_triggers_list,
     )
 
@@ -749,66 +823,73 @@ def add_rule():
     db = get_db()
     rule_text = request.form.get("rule_text", "").strip()
     if rule_text:
-        db.execute(
+        resolution = {"action": "free_text_rule", "text": rule_text}
+        cur = db.execute(
             "INSERT INTO decisions (kind, summary, context, status, resolution, created_at, resolved_at) "
             "VALUES ('free_text_rule', ?, ?, 'resolved', ?, ?, ?)",
             (
                 f"Rule: {rule_text[:80]}",
                 "Submitted directly by Jason via the rule box.",
-                json.dumps({"action": "free_text_rule", "text": rule_text}),
+                json.dumps(resolution),
                 datetime.now(timezone.utc).isoformat(),
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
         db.commit()
+        row_id = cur.lastrowid
+
+        try:
+            outcome = apply_decisions.apply_free_text_rule({"id": row_id}, resolution)
+            db.execute(
+                "UPDATE decisions SET context = ? WHERE id = ?",
+                (json.dumps({"note": "Submitted directly by Jason via the rule box.", "applied": True, "outcome": outcome}), row_id),
+            )
+            db.commit()
+            session["flash"] = f"Rule applied: {outcome}"
+        except Exception as e:
+            session["flash"] = (
+                f"Rule saved, but couldn't apply it right now ({e}). "
+                "It'll be retried on the next scheduled run."
+            )
     return redirect("/")
 
 
-def execute_unsubscribe(candidate):
-    url = candidate["unsubscribe_url"]
-    mailto = candidate["unsubscribe_mailto"]
-    if candidate["one_click"] and url:
-        resp = requests.post(url, data={"List-Unsubscribe": "One-Click"}, timeout=15)
-        return f"one-click POST to {url}: {resp.status_code}"
-    if mailto:
-        if not (os.environ.get("FASTMAIL_EMAIL") and os.environ.get("FASTMAIL_APP_PASSWORD")):
-            return "no SMTP credentials configured, mailto unsubscribe skipped"
-        msg = MIMEText("")
-        msg["From"] = config.email_address()
-        msg["To"] = mailto
-        msg["Subject"] = "unsubscribe"
-        with smtplib.SMTP_SSL(config.SMTP_HOST, config.SMTP_PORT) as smtp:
-            smtp.login(config.email_address(), config.app_password())
-            smtp.send_message(msg)
-        return f"sent unsubscribe email to {mailto}"
-    if url:
-        resp = requests.get(url, timeout=15)
-        return f"GET {url}: {resp.status_code}"
-    return "no unsubscribe mechanism available"
+def _unsubscribe_card(row, non_compliant=False):
+    mechanism = "one-click unsubscribe" if row["one_click"] else ("unsubscribe link" if row["unsubscribe_url"] else ("email unsubscribe" if row["unsubscribe_mailto"] else "no unsubscribe mechanism found"))
+    template = NON_COMPLIANT_CARD if non_compliant else UNSUBSCRIBE_CARD
+    return template.format(
+        id=row["id"],
+        display_name=row["display_name"] or row["sender_domain"],
+        sender_email=row["sender_email"] or row["sender_domain"],
+        message_count=row["message_count"],
+        mechanism=mechanism,
+    )
 
 
 @app.route("/unsubscribe")
 @login_required
 def unsubscribe_page():
     db = get_db()
-    rows = db.execute(
-        "SELECT * FROM unsubscribe_candidates WHERE status = 'pending' ORDER BY last_seen_at DESC"
+    non_compliant_rows = db.execute(
+        "SELECT * FROM unsubscribe_candidates WHERE status = 'pending' AND non_compliant = 1 ORDER BY last_seen_at DESC"
     ).fetchall()
-    cards = []
-    for row in rows:
-        mechanism = "one-click unsubscribe" if row["one_click"] else ("unsubscribe link" if row["unsubscribe_url"] else ("email unsubscribe" if row["unsubscribe_mailto"] else "no unsubscribe mechanism found"))
-        cards.append(
-            UNSUBSCRIBE_CARD.format(
-                id=row["id"],
-                display_name=row["display_name"] or row["sender_domain"],
-                sender_email=row["sender_email"] or row["sender_domain"],
-                message_count=row["message_count"],
-                mechanism=mechanism,
-            )
+    pending_rows = db.execute(
+        "SELECT * FROM unsubscribe_candidates WHERE status = 'pending' AND non_compliant = 0 ORDER BY last_seen_at DESC"
+    ).fetchall()
+
+    non_compliant_banner = ""
+    if non_compliant_rows:
+        non_compliant_banner = NON_COMPLIANT_SECTION.format(
+            cards="".join(_unsubscribe_card(r, non_compliant=True) for r in non_compliant_rows)
         )
-    body = "".join(cards) if cards else '<p class="empty">No unsubscribe candidates pending.</p>'
+    body = "".join(_unsubscribe_card(r) for r in pending_rows) if pending_rows else '<p class="empty">No unsubscribe candidates pending.</p>'
     return UNSUBSCRIBE_PAGE_TEMPLATE.format(
-        icon=TAHOR_ICON, style=STYLE_BLOCK, header=tahor_header("unsubscribe"), count=len(rows), cards=body
+        icon=TAHOR_ICON,
+        style=STYLE_BLOCK,
+        header=tahor_header("unsubscribe"),
+        count=len(non_compliant_rows) + len(pending_rows),
+        non_compliant_banner=non_compliant_banner,
+        cards=body,
     )
 
 
@@ -818,12 +899,25 @@ def unsubscribe_action(candidate_id):
     db = get_db()
     row = db.execute("SELECT * FROM unsubscribe_candidates WHERE id = ?", (candidate_id,)).fetchone()
     action = request.form.get("action")
-    if row and action in ("unsubscribe", "unsubscribe_block_marketing"):
-        execute_unsubscribe(row)
+    new_status = "resolved"
+    if row and action in ("unsubscribe", "unsubscribe_block_marketing", "block_all"):
+        try:
+            outcome = tahor_db.execute_unsubscribe(
+                row,
+                os.environ.get("FASTMAIL_EMAIL"),
+                os.environ.get("FASTMAIL_APP_PASSWORD"),
+                config.SMTP_HOST,
+                config.SMTP_PORT,
+            )
+        except Exception as e:
+            outcome = f"failed: {e}"  # best-effort: a dead unsubscribe link or SMTP failure shouldn't block the rest of the action
+        app.logger.info("unsubscribe %s (%s): %s", row["sender_domain"], action, outcome)
+        if action == "unsubscribe":
+            new_status = "unsubscribed"  # watched: if this sender mails again, it resurfaces flagged non-compliant
     if row and action in ("unsubscribe_block_marketing", "block_all"):
         rule = "block_all" if action == "block_all" else "block_marketing"
         tahor_db.set_sender_rule(row["sender_domain"], rule)
-    db.execute("UPDATE unsubscribe_candidates SET status = 'resolved' WHERE id = ?", (candidate_id,))
+    db.execute("UPDATE unsubscribe_candidates SET status = ?, non_compliant = 0 WHERE id = ?", (new_status, candidate_id))
     db.commit()
     return redirect("/unsubscribe")
 

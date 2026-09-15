@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Shared decisions.db access for both app.py and the classification pipeline."""
 import json
+import smtplib
 import sqlite3
+import urllib.request
 from datetime import datetime, timezone
+from email.mime.text import MIMEText
 from pathlib import Path
 import os
 
@@ -45,11 +48,15 @@ def init_db():
             one_click INTEGER NOT NULL DEFAULT 0,
             message_count INTEGER NOT NULL DEFAULT 1,
             status TEXT NOT NULL DEFAULT 'pending',
+            non_compliant INTEGER NOT NULL DEFAULT 0,
             first_seen_at TEXT NOT NULL,
             last_seen_at TEXT NOT NULL
         )
         """
     )
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(unsubscribe_candidates)")}
+    if "non_compliant" not in existing_cols:
+        conn.execute("ALTER TABLE unsubscribe_candidates ADD COLUMN non_compliant INTEGER NOT NULL DEFAULT 0")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS sender_rules (
@@ -64,6 +71,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS reply_drafts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             original_message_id TEXT NOT NULL,
+            thread_root TEXT NOT NULL,
             recipient_email TEXT NOT NULL,
             subject TEXT NOT NULL,
             draft_body TEXT NOT NULL,
@@ -74,6 +82,9 @@ def init_db():
         )
         """
     )
+    reply_cols = {row[1] for row in conn.execute("PRAGMA table_info(reply_drafts)")}
+    if "thread_root" not in reply_cols:
+        conn.execute("ALTER TABLE reply_drafts ADD COLUMN thread_root TEXT NOT NULL DEFAULT ''")
     conn.commit()
     conn.close()
 
@@ -84,14 +95,22 @@ def upsert_unsubscribe_candidate(sender_domain, sender_email, display_name, unsu
     now = datetime.now(timezone.utc).isoformat()
     conn = get_db()
     existing = conn.execute(
-        "SELECT id, message_count FROM unsubscribe_candidates WHERE sender_domain = ?", (sender_domain,)
+        "SELECT id, message_count, status FROM unsubscribe_candidates WHERE sender_domain = ?", (sender_domain,)
     ).fetchone()
     if existing:
+        # A sender that mails again after status='unsubscribed' (set only by the
+        # plain "Unsubscribe" action, see app.py) didn't honor it -- resurface as
+        # pending and flag non_compliant so the unsubscribe page can call it out.
+        resend_after_unsubscribe = existing["status"] == "unsubscribed"
+        new_status = "pending" if resend_after_unsubscribe else existing["status"]
         conn.execute(
             "UPDATE unsubscribe_candidates SET message_count = ?, last_seen_at = ?, "
             "unsubscribe_url = COALESCE(?, unsubscribe_url), unsubscribe_mailto = COALESCE(?, unsubscribe_mailto), "
-            "one_click = MAX(one_click, ?) WHERE id = ?",
-            (existing["message_count"] + 1, now, unsubscribe_url, unsubscribe_mailto, int(one_click), existing["id"]),
+            "one_click = MAX(one_click, ?), status = ?, non_compliant = non_compliant OR ? WHERE id = ?",
+            (
+                existing["message_count"] + 1, now, unsubscribe_url, unsubscribe_mailto, int(one_click),
+                new_status, int(resend_after_unsubscribe), existing["id"],
+            ),
         )
     else:
         conn.execute(
@@ -133,12 +152,50 @@ def clear_sender_rule(sender_domain):
     conn.close()
 
 
-def create_reply_draft(original_message_id, recipient_email, subject, draft_body, trigger_reason):
+def create_reply_draft(original_message_id, thread_root, recipient_email, subject, draft_body, trigger_reason):
     conn = get_db()
     conn.execute(
-        "INSERT INTO reply_drafts (original_message_id, recipient_email, subject, draft_body, trigger_reason, "
-        "status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
-        (original_message_id, recipient_email, subject, draft_body, trigger_reason, datetime.now(timezone.utc).isoformat()),
+        "INSERT INTO reply_drafts (original_message_id, thread_root, recipient_email, subject, draft_body, "
+        "trigger_reason, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
+        (original_message_id, thread_root, recipient_email, subject, draft_body, trigger_reason, datetime.now(timezone.utc).isoformat()),
     )
     conn.commit()
     conn.close()
+
+
+def has_reply_draft_for_thread(thread_root):
+    conn = get_db()
+    row = conn.execute("SELECT 1 FROM reply_drafts WHERE thread_root = ? LIMIT 1", (thread_root,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def get_unsubscribe_candidate(sender_domain):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM unsubscribe_candidates WHERE sender_domain = ?", (sender_domain,)).fetchone()
+    conn.close()
+    return row
+
+
+def execute_unsubscribe(candidate, from_addr, app_password, smtp_host="smtp.fastmail.com", smtp_port=465):
+    url = candidate["unsubscribe_url"]
+    mailto = candidate["unsubscribe_mailto"]
+    if candidate["one_click"] and url:
+        req = urllib.request.Request(url, data=b"List-Unsubscribe=One-Click", method="POST")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return f"one-click POST to {url}: {resp.status}"
+    if mailto:
+        if not (from_addr and app_password):
+            return "no SMTP credentials configured, mailto unsubscribe skipped"
+        msg = MIMEText("")
+        msg["From"] = from_addr
+        msg["To"] = mailto
+        msg["Subject"] = "unsubscribe"
+        with smtplib.SMTP_SSL(smtp_host, smtp_port) as smtp:
+            smtp.login(from_addr, app_password)
+            smtp.send_message(msg)
+        return f"sent unsubscribe email to {mailto}"
+    if url:
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            return f"GET {url}: {resp.status}"
+    return "no unsubscribe mechanism available"

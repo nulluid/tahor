@@ -7,11 +7,14 @@ Read resolved rows out of decisions.db and act on them.
     into the wrong folder, easily fixed.
 
   free_text_rule -> ambiguous: hand the current vendor_buckets.json,
-    prompt.txt, and the free text to an LLM and ask it to propose a change.
-    If it says the change is data/prompt-only, apply and push the same as
-    above. If it says the change touches actual script logic, flag it
-    instead of touching the scripts -- changing code is a deliberate,
-    reviewed step, not something this script does on its own.
+    prompt.txt, and the free text to a model and ask it what kind of
+    change this is. A sender-targeted instruction ("block X",
+    "unsubscribe me from Y") becomes a real sender_rule, enforced
+    immediately by process_batch.py -- no file edit needed. A
+    classification-judgment instruction becomes a vendor_buckets.json/
+    prompt.txt edit, applied and pushed the same as above. If it says the
+    change touches actual script logic, flag it instead -- changing code
+    is a deliberate, reviewed step, not something this script does alone.
 
 Run this after the decision app has been used; cron can call it on the
 same schedule as the other sweeps.
@@ -39,32 +42,44 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).resolve().parent.paren
 VENDOR_BUCKETS_PATH = DATA_DIR / "vendor_buckets.json"
 PROMPT_PATH = DATA_DIR / "prompt.txt"
 
-RULE_DRAFTING_SYSTEM_PROMPT = """You maintain two files for a personal email-sweep pipeline:
+RULE_DRAFTING_SYSTEM_PROMPT = """You maintain a personal email-sweep pipeline. A free-text instruction from
+the mailbox's owner can call for one of three kinds of change:
 
-1. vendor_buckets.json -- a flat map of sender-domain-label -> [bucket, display name].
-   Pure data, no code. Safe to change freely.
-2. prompt.txt -- the system prompt a classifier model reads to decide
-   keep/trash/retention-tier for each email. Also just text, but changes
-   here affect judgment broadly, so be conservative and additive: prefer
-   adding one clear rule over rewriting existing rules.
+1. sender_rule -- "block/discard/trash all mail (or all marketing mail)
+   from X, and/or unsubscribe me from X". This is the right answer for any
+   instruction about a specific sender or company, whether or not it also
+   mentions unsubscribing. Two granularities: "block_all" (every message
+   from that sender is trashed) or "block_marketing" (only messages the
+   classifier already tags as marketing are trashed -- receipts, shipping
+   notices, and other transactional mail from the same sender still come
+   through normally). Guess the sender's real email domain from the
+   company/brand name in the instruction (e.g. "Kate Spade" ->
+   katespade.com) -- use your own knowledge of the company, don't guess a
+   generic pattern. If the instruction says or implies "unsubscribe" in
+   addition to blocking, set attempt_unsubscribe to true.
+2. vendor_buckets.json / prompt.txt edit -- for instructions about how a
+   category of mail should be classified or filed in general (not
+   targeting one specific sender), or about adding/renaming a filing
+   bucket. vendor_buckets.json is a flat map of sender-domain-label ->
+   [bucket, display name], pure data. prompt.txt is the classifier's
+   system prompt -- be conservative and additive here, prefer one clear
+   added rule over rewriting existing ones.
+3. needs_code_change -- the instruction genuinely can't be satisfied by
+   either of the above (it wants new script behavior, not a data/prompt
+   change or a sender rule).
 
-You will be given the current contents of both files and a free-text
-instruction from the mailbox's owner. Decide what changes accomplish the
-instruction using ONLY these two files -- never propose changing any
-Python script's logic. If the instruction genuinely cannot be satisfied
-by editing these two data/text files alone, say so.
-
+You will be given the current contents of both files and the instruction.
 Respond with ONLY a JSON object, no markdown fences:
 {
-  "needs_code_change": false,
+  "kind": "sender_rule" | "file_edit" | "needs_code_change",
   "explanation": "one sentence",
+  "sender_rule": null or {"domain": "example.com", "rule": "block_all" | "block_marketing", "attempt_unsubscribe": true | false},
   "vendor_buckets_json": null or the FULL new file contents as a JSON string,
   "prompt_txt": null or the FULL new file contents as a string
 }
-Only include a new value for a file you're actually changing; leave the
-other null. If needs_code_change is true, leave both null and explain
-what script behavior would need to change and why these two files aren't
-enough.
+Fill in only the field(s) that match "kind"; leave the rest null. For
+needs_code_change, leave sender_rule/vendor_buckets_json/prompt_txt all
+null and explain what script behavior would need to change.
 """
 
 
@@ -131,6 +146,29 @@ def apply_vendor_mapping(row, resolution):
     return f"mapped {sender_label} -> {bucket}/{vendor_name}"
 
 
+def apply_sender_rule(sender_rule):
+    domain = sender_rule.get("domain", "").strip().lower()
+    rule = sender_rule.get("rule")
+    if not domain or rule not in tahor_db.SENDER_RULES:
+        return f"skipped (bad sender_rule: {sender_rule!r})"
+
+    tahor_db.set_sender_rule(domain, rule)
+    outcome = f"blocked ({rule}) for {domain}"
+
+    if sender_rule.get("attempt_unsubscribe"):
+        candidate = tahor_db.get_unsubscribe_candidate(domain)
+        if candidate:
+            unsub_outcome = tahor_db.execute_unsubscribe(
+                candidate,
+                os.environ.get("FASTMAIL_EMAIL"),
+                os.environ.get("FASTMAIL_APP_PASSWORD"),
+            )
+            outcome += f"; unsubscribe attempted -- {unsub_outcome}"
+        else:
+            outcome += "; no tracked unsubscribe link for this sender yet, so unsubscribe wasn't attempted (the block still applies going forward)"
+    return outcome
+
+
 def apply_free_text_rule(row, resolution):
     text = resolution.get("text", "").strip()
     if not text:
@@ -144,8 +182,12 @@ def apply_free_text_rule(row, resolution):
         f"Instruction: {text}"
     )
     result = rule_model_call(user_content)
+    kind = result.get("kind")
 
-    if result.get("needs_code_change"):
+    if kind == "sender_rule" and result.get("sender_rule"):
+        return apply_sender_rule(result["sender_rule"])
+
+    if kind == "needs_code_change" or result.get("needs_code_change"):
         flag_path = DATA_DIR / "decision-app" / "needs_code_change.md"
         existing = flag_path.read_text() if flag_path.exists() else "# Rules needing a code change\n\n"
         flag_path.write_text(
@@ -160,7 +202,7 @@ def apply_free_text_rule(row, resolution):
     if result.get("prompt_txt"):
         PROMPT_PATH.write_text(result["prompt_txt"])
         changed.append("prompt.txt")
-    return f"applied via LLM: {', '.join(changed) or 'no file changes'} — {result.get('explanation')}"
+    return f"applied: {', '.join(changed) or 'no file changes'} — {result.get('explanation')}"
 
 
 def main():
@@ -184,10 +226,15 @@ def main():
         else:
             outcome = "skipped (unknown kind)"
         results.append((row["id"], outcome))
-        conn.execute(
-            "UPDATE decisions SET context = json_set(COALESCE(context, '{}'), '$.applied', true, '$.outcome', ?) WHERE id = ?",
-            (outcome, row["id"]),
-        )
+        try:
+            context = json.loads(row["context"]) if row["context"] else {}
+            if not isinstance(context, dict):
+                context = {"note": row["context"]}
+        except (json.JSONDecodeError, TypeError):
+            context = {"note": row["context"]}
+        context["applied"] = True
+        context["outcome"] = outcome
+        conn.execute("UPDATE decisions SET context = ? WHERE id = ?", (json.dumps(context), row["id"]))
         conn.commit()
 
     if commit_and_push_data("apply resolved decisions"):
