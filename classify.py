@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Classify a batch of emails through an LLM. Four backends (CLASSIFY_BACKEND):
+Classify a batch of emails through an LLM. Five backends (CLASSIFY_BACKEND):
 
   local             (default) LM Studio/Ollama's OpenAI-compatible API at
                     http://localhost:1234 — free, private, requires the
@@ -12,14 +12,21 @@ Classify a batch of emails through an LLM. Four backends (CLASSIFY_BACKEND):
                     the "local" backend, hosted. Paid but cheap.
   openrouter-free   OpenRouter's free tier (needs OPENROUTER_API_KEY, no
                     spend) — a hosted fallback for when you want zero local
-                    setup and don't want to burn Gemini's daily cap.
+                    setup and don't want to burn Gemini's daily cap. Capped
+                    at OpenRouter's own account-wide daily quota.
+  openrouter-paid   The same model as openrouter-free, no daily cap, real
+                    (small) cost per request — for clearing a large backlog
+                    fast instead of waiting out a daily quota. See
+                    backlog_worker.py's mailbox_settings.py for a worked
+                    example of blending this with openrouter-free based on
+                    backlog size.
 
 A machine you leave on and a free hosted API both cost nothing — the
 tradeoff is privacy and control (local) versus not needing a machine
-online 24/7 (gemini/openrouter/openrouter-free). A genuinely headless,
-always-on server should set CLASSIFY_BACKEND explicitly; "local" is the
-default here because it's the friendlier zero-config choice for someone
-just trying this out on their own machine.
+online 24/7 (gemini/openrouter/openrouter-free/openrouter-paid). A
+genuinely headless, always-on server should set CLASSIFY_BACKEND
+explicitly; "local" is the default here because it's the friendlier
+zero-config choice for someone just trying this out on their own machine.
 
 Usage:
   python3 classify.py <input.json> <output.json> <system_prompt.txt> [--concurrency N] [--model NAME]
@@ -88,6 +95,23 @@ BACKENDS = {
         "url": "https://openrouter.ai/api/v1/chat/completions",
         "default_model": "nvidia/nemotron-3-super-120b-a12b:free",
         "default_concurrency": 2,
+        "auth_header": lambda: f"Bearer {_openrouter_key()}",
+    },
+    "openrouter-paid": {
+        # Same model/weights as "openrouter-free", no daily cap -- $0.08/M
+        # input, $0.45/M output tokens. For clearing a large backlog fast:
+        # no reason to hold concurrency down for this model specifically,
+        # only the account's actual rate limit and this box's own capacity
+        # should bound it. Concurrency is deliberately high; watch for 429s
+        # and dial back if OpenRouter's real limit turns out lower. (This
+        # value was measured, not guessed: on a 2-vCPU/1GB box, concurrency
+        # 20 sustained ~2.06s/message with zero errors, and doubling it to
+        # 40 gave zero additional throughput -- the ceiling here is
+        # OpenRouter's own rate limit or shared inference capacity, not the
+        # box. Test your own setup before assuming 20 is right for you.)
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "default_model": "nvidia/nemotron-3-super-120b-a12b",
+        "default_concurrency": 20,
         "auth_header": lambda: f"Bearer {_openrouter_key()}",
     },
 }

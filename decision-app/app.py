@@ -17,6 +17,7 @@ import json
 import os
 import secrets
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
@@ -24,6 +25,9 @@ from urllib.parse import urlencode
 
 import requests
 from flask import Flask, g, redirect, request, session
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import mailbox_settings
 
 DB_PATH = Path(__file__).parent / "decisions.db"
 
@@ -165,18 +169,23 @@ def init_db():
     conn.close()
 
 
-PAGE_TEMPLATE = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tahor — pending decisions</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230B2624'/%3E%3Cpath fill-rule='evenodd' fill='%230EA5A0' d='M50,14 C50,14 22,56 22,68 A28,28 0 1 0 78,68 C78,56 50,14 50,14 Z M33,53 L50,65 L67,53 L67,59 L50,71 L33,59 Z'/%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Source+Sans+3:wght@400;600&family=DM+Mono&display=swap">
+TAHOR_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230B2624'/%3E%3Cpath fill-rule='evenodd' fill='%230EA5A0' d='M50,14 C50,14 22,56 22,68 A28,28 0 1 0 78,68 C78,56 50,14 50,14 Z M33,53 L50,65 L67,53 L67,59 L50,71 L33,59 Z'/%3E%3C/svg%3E"
+
+TAHOR_HEADER = """
+<header>
+  <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill-rule="evenodd" fill="currentColor" d="M50,8 C50,8 18,54 18,68 A32,32 0 1 0 82,68 C82,54 50,8 50,8 Z M30,52 L50,66 L70,52 L70,59 L50,73 L30,59 Z"/></svg>
+  <span class="wordmark">Tahor</span>
+  <span class="hebrew" lang="he">טָהוֹר</span>
+  <a class="nav-link" href="{nav_href}">{nav_label}</a>
+</header>
+"""
+
+# Shared <style> block for every page in this app -- kept as one constant so
+# the settings page matches the decision-queue page's look exactly instead of
+# drifting from a copy-pasted stylesheet.
+STYLE_BLOCK = """
 <style>
-  :root {{
+  :root {
     color-scheme: dark;
     --ground: #0B1F1D;
     --raised: #10302C;
@@ -191,9 +200,9 @@ PAGE_TEMPLATE = """<!doctype html>
     --display: "Fraunces", Georgia, serif;
     --text: "Source Sans 3", "Helvetica Neue", Arial, sans-serif;
     --mono: "DM Mono", ui-monospace, Menlo, monospace;
-  }}
-  @media (prefers-color-scheme: light) {{
-    :root {{
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
       color-scheme: light;
       --ground: #F1F6F5;
       --raised: #E4EEEC;
@@ -205,10 +214,10 @@ PAGE_TEMPLATE = """<!doctype html>
       --muted: #4B6E6A;
       --faint: #7C9A96;
       --trash: #A8463E;
-    }}
-  }}
-  * {{ box-sizing: border-box; }}
-  body {{
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
     margin: 0;
     padding: 36px 20px 72px;
     background: var(--ground);
@@ -216,27 +225,27 @@ PAGE_TEMPLATE = """<!doctype html>
     font-family: var(--text);
     font-size: 16px;
     line-height: 1.5;
-  }}
-  main {{ max-width: 640px; margin: 0 auto; }}
-  header {{ display: flex; align-items: center; gap: 12px; margin-bottom: 40px; }}
-  header svg {{ width: 30px; height: 30px; color: var(--accent); flex: none; }}
-  .wordmark {{ font-family: var(--display); font-size: 1.7rem; font-weight: 500; line-height: 1; letter-spacing: -0.01em; }}
-  .hebrew {{ color: var(--muted); font-size: 1.05rem; margin-left: 10px; font-family: var(--text); }}
-  h1, h2 {{ font-family: var(--display); font-weight: 500; letter-spacing: -0.01em; margin: 0 0 16px; }}
-  h1 {{ font-size: 1.5rem; display: flex; align-items: baseline; gap: 10px; }}
-  h2 {{ font-size: 1.25rem; }}
-  .count {{ font-family: var(--text); font-size: 0.85rem; font-weight: 600; color: var(--accent); background: var(--raised); border: 1px solid var(--rule); border-radius: 999px; padding: 1px 10px; }}
-  section {{ margin-top: 44px; padding-top: 28px; border-top: 1px solid var(--rule); }}
-  .card {{ background: var(--raised); border: 1px solid var(--rule); border-radius: 10px; padding: 18px 20px; margin-bottom: 14px; }}
-  .card.sieve {{ border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--raised)); }}
-  .card.sieve .summary {{ color: var(--accent); }}
-  .card p {{ margin: 0 0 12px; }}
-  .summary {{ font-weight: 600; font-size: 1.05rem; margin-bottom: 6px; }}
-  .context {{ color: var(--muted); font-family: var(--mono); font-size: 0.82rem; line-height: 1.55; margin-bottom: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }}
-  .fields {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }}
-  .fields select {{ grid-column: 1 / -1; }}
-  .actions {{ display: flex; flex-wrap: wrap; gap: 8px; }}
-  select, input[type=text], textarea {{
+  }
+  main { max-width: 640px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 40px; }
+  header svg { width: 30px; height: 30px; color: var(--accent); flex: none; }
+  .wordmark { font-family: var(--display); font-size: 1.7rem; font-weight: 500; line-height: 1; letter-spacing: -0.01em; }
+  .hebrew { color: var(--muted); font-size: 1.05rem; margin-left: 10px; font-family: var(--text); }
+  h1, h2 { font-family: var(--display); font-weight: 500; letter-spacing: -0.01em; margin: 0 0 16px; }
+  h1 { font-size: 1.5rem; display: flex; align-items: baseline; gap: 10px; }
+  h2 { font-size: 1.25rem; }
+  .count { font-family: var(--text); font-size: 0.85rem; font-weight: 600; color: var(--accent); background: var(--raised); border: 1px solid var(--rule); border-radius: 999px; padding: 1px 10px; }
+  section { margin-top: 44px; padding-top: 28px; border-top: 1px solid var(--rule); }
+  .card { background: var(--raised); border: 1px solid var(--rule); border-radius: 10px; padding: 18px 20px; margin-bottom: 14px; }
+  .card.sieve { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--raised)); }
+  .card.sieve .summary { color: var(--accent); }
+  .card p { margin: 0 0 12px; }
+  .summary { font-weight: 600; font-size: 1.05rem; margin-bottom: 6px; }
+  .context { color: var(--muted); font-family: var(--mono); font-size: 0.82rem; line-height: 1.55; margin-bottom: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+  .fields select { grid-column: 1 / -1; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  select, input[type=text], textarea {
     width: 100%;
     background: var(--well);
     color: var(--ink);
@@ -245,11 +254,11 @@ PAGE_TEMPLATE = """<!doctype html>
     padding: 8px 10px;
     font: inherit;
     font-size: 0.95rem;
-  }}
-  textarea {{ resize: vertical; margin-bottom: 12px; }}
-  ::placeholder {{ color: var(--faint); }}
-  select:focus, input:focus, textarea:focus, button:focus-visible {{ outline: 2px solid var(--accent); outline-offset: 2px; }}
-  button {{
+  }
+  textarea { resize: vertical; margin-bottom: 12px; }
+  ::placeholder { color: var(--faint); }
+  select:focus, input:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button {
     background: transparent;
     color: var(--ink);
     border: 1px solid var(--rule);
@@ -259,15 +268,15 @@ PAGE_TEMPLATE = """<!doctype html>
     font-size: 0.95rem;
     font-weight: 600;
     cursor: pointer;
-  }}
-  button:hover {{ border-color: var(--muted); }}
-  button.primary {{ background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }}
-  button.primary:hover {{ filter: brightness(1.08); }}
-  button.trash {{ color: var(--trash); }}
-  button.trash:hover {{ border-color: var(--trash); }}
-  .empty {{ color: var(--muted); font-style: italic; margin: 0; }}
-  .hint {{ color: var(--muted); font-size: 0.92rem; margin: 0 0 12px; }}
-  pre {{
+  }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button.primary:hover { filter: brightness(1.08); }
+  button.trash { color: var(--trash); }
+  button.trash:hover { border-color: var(--trash); }
+  .empty { color: var(--muted); font-style: italic; margin: 0; }
+  .hint { color: var(--muted); font-size: 0.92rem; margin: 0 0 12px; }
+  pre {
     background: var(--well);
     border: 1px solid var(--rule);
     border-radius: 8px;
@@ -280,22 +289,40 @@ PAGE_TEMPLATE = """<!doctype html>
     overflow-x: auto;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-  }}
-  @media (max-width: 480px) {{
-    body {{ padding-top: 24px; }}
-    header {{ margin-bottom: 28px; }}
-    .fields {{ grid-template-columns: 1fr; }}
-    .actions button {{ flex: 1 1 auto; }}
-  }}
+  }
+  .nav-link { margin-left: auto; color: var(--muted); font-size: 0.85rem; text-decoration: none; border-bottom: 1px solid transparent; }
+  .nav-link:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  .mode-options { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }
+  .mode-option { display: block; cursor: pointer; }
+  .mode-option-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .mode-option-head input[type=radio] { accent-color: var(--accent); width: 16px; height: 16px; flex: none; }
+  .mode-option.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--raised)); }
+  .mode-option.active .summary { color: var(--accent); }
+  .mode-option .context { margin-bottom: 0; }
+  @media (max-width: 480px) {
+    body { padding-top: 24px; }
+    header { margin-bottom: 28px; }
+    .fields { grid-template-columns: 1fr; }
+    .actions button { flex: 1 1 auto; }
+  }
 </style>
+"""
+
+PAGE_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tahor — pending decisions</title>
+<link rel="icon" type="image/svg+xml" href="{icon}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Source+Sans+3:wght@400;600&family=DM+Mono&display=swap">
+{style}
 </head>
 <body>
 <main>
-<header>
-  <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill-rule="evenodd" fill="currentColor" d="M50,8 C50,8 18,54 18,68 A32,32 0 1 0 82,68 C82,54 50,8 50,8 Z M30,52 L50,66 L70,52 L70,59 L50,73 L30,59 Z"/></svg>
-  <span class="wordmark">Tahor</span>
-  <span class="hebrew" lang="he">טָהוֹר</span>
-</header>
+{header}
 <h1>Pending decisions <span class="count">{count}</span></h1>
 {sieve_banner}
 {cards}
@@ -362,6 +389,45 @@ CARD_GENERIC = """
 </div>
 """
 
+SETTINGS_PAGE_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tahor — classification mode</title>
+<link rel="icon" type="image/svg+xml" href="{icon}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Source+Sans+3:wght@400;600&family=DM+Mono&display=swap">
+{style}
+</head>
+<body>
+<main>
+{header}
+<h1>Classification mode</h1>
+{status_line}
+<form method="post" action="/settings">
+  <div class="mode-options">
+    {mode_cards}
+  </div>
+  <button type="submit" class="primary">Save</button>
+</form>
+</main>
+</body>
+</html>
+"""
+
+MODE_OPTION = """
+<label class="card mode-option{active_class}">
+  <div class="mode-option-head">
+    <input type="radio" name="classify_mode" value="{value}"{checked}>
+    <span class="summary">{label}</span>
+    {active_badge}
+  </div>
+  <p class="context">{description}</p>
+</label>
+"""
+
 
 def known_buckets(db):
     rows = db.execute(
@@ -406,7 +472,89 @@ def index():
     sieve_content = SIEVE_PATH.read_text() if SIEVE_PATH.exists() else "(not yet synced)"
 
     return PAGE_TEMPLATE.format(
-        count=len(pending), sieve_banner=sieve_banner, cards=body, sieve_content=sieve_content
+        icon=TAHOR_ICON,
+        style=STYLE_BLOCK,
+        header=TAHOR_HEADER.format(nav_href="/settings", nav_label="Settings"),
+        count=len(pending),
+        sieve_banner=sieve_banner,
+        cards=body,
+        sieve_content=sieve_content,
+    )
+
+
+MODE_LABELS = {"free": "Free", "paid": "Paid", "auto": "Auto"}
+MODE_DESCRIPTIONS = {
+    "free": "No cost, but capped at OpenRouter's free daily quota (about 1,000 requests a day) and slower.",
+    "paid": "Fastest option, running at full measured throughput, but it costs real money (roughly $0.0003 per email).",
+    "auto": "Balances the two: stays on free by default, and only spends money on paid capacity when the backlog would otherwise take over an hour to clear.",
+}
+
+
+def _settings_status_line(current_mode):
+    backlog_estimate, _ = mailbox_settings.get_cached_backlog(mailbox_settings.BACKLOG_REFRESH_SECONDS)
+    if backlog_estimate is None:
+        return ""
+    free_rate = mailbox_settings.recent_free_rate()
+    if free_rate <= 0:
+        return ""
+    hours_at_free = backlog_estimate / free_rate / 3600
+
+    if current_mode == "paid":
+        return (
+            f'<p class="hint">Backlog estimate: ~{backlog_estimate} messages. '
+            f"Paid mode is active, so it's running at full throughput regardless of backlog size.</p>"
+        )
+    if current_mode == "free":
+        return (
+            f'<p class="hint">Backlog estimate: ~{backlog_estimate} messages, '
+            f"would clear in ~{hours_at_free:.1f}h at the current free rate.</p>"
+        )
+
+    free_count, paid_count = mailbox_settings.decide_backend_split(
+        backlog_estimate, free_rate, mailbox_settings.DISPLAY_BATCH_SIZE
+    )
+    if paid_count == 0:
+        return (
+            f'<p class="hint">Auto mode: currently running free (no paid spend), '
+            f"backlog (~{backlog_estimate} messages) would clear in ~{hours_at_free:.1f}h at the free rate.</p>"
+        )
+    paid_fraction = paid_count / mailbox_settings.DISPLAY_BATCH_SIZE
+    dollars_per_hour = paid_fraction * mailbox_settings.PAID_RATE_MSGS_PER_SEC * 3600 * mailbox_settings.COST_PER_PAID_MSG
+    return (
+        f'<p class="hint">Auto mode: currently blending in paid (~{paid_fraction * 100:.0f}% of each batch), '
+        f"roughly ${dollars_per_hour:.2f}/hour in paid spend to keep the backlog "
+        f"(~{backlog_estimate} messages) under an hour.</p>"
+    )
+
+
+@app.route("/settings", methods=["GET", "POST"])
+@login_required
+def settings_page():
+    if request.method == "POST":
+        mode = request.form.get("classify_mode", "")
+        if mode in mailbox_settings.MODES:
+            mailbox_settings.set_classify_mode(mode)
+        return redirect("/settings")
+
+    current_mode = mailbox_settings.get_classify_mode()
+    mode_cards = "".join(
+        MODE_OPTION.format(
+            value=m,
+            label=MODE_LABELS[m],
+            description=MODE_DESCRIPTIONS[m],
+            active_class=" active" if m == current_mode else "",
+            checked=" checked" if m == current_mode else "",
+            active_badge='<span class="count">current</span>' if m == current_mode else "",
+        )
+        for m in mailbox_settings.MODES
+    )
+
+    return SETTINGS_PAGE_TEMPLATE.format(
+        icon=TAHOR_ICON,
+        style=STYLE_BLOCK,
+        header=TAHOR_HEADER.format(nav_href="/", nav_label="Pending decisions"),
+        status_line=_settings_status_line(current_mode),
+        mode_cards=mode_cards,
     )
 
 
