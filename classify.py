@@ -1,13 +1,25 @@
 #!/usr/bin/env python3
 """
-Classify a batch of emails through an LLM. Two backends:
+Classify a batch of emails through an LLM. Four backends (CLASSIFY_BACKEND):
 
-  CLASSIFY_BACKEND=local   (default) LM Studio's OpenAI-compatible API at
-                            http://localhost:1234 — free, private, requires
-                            the machine running LM Studio to be on.
-  CLASSIFY_BACKEND=gemini  Google's Gemini API (needs GEMINI_API_KEY) — works
-                            anywhere, including a headless cron box with no
-                            local LLM. Uses Gemini's own free tier.
+  local             (default) LM Studio/Ollama's OpenAI-compatible API at
+                    http://localhost:1234 — free, private, requires the
+                    machine running the model to be on.
+  gemini            Google's Gemini API (needs GEMINI_API_KEY) — works
+                    anywhere, including a headless cron box with no local
+                    LLM. Uses Gemini's own free tier.
+  openrouter        OpenRouter (needs OPENROUTER_API_KEY) — same model as
+                    the "local" backend, hosted. Paid but cheap.
+  openrouter-free   OpenRouter's free tier (needs OPENROUTER_API_KEY, no
+                    spend) — a hosted fallback for when you want zero local
+                    setup and don't want to burn Gemini's daily cap.
+
+A machine you leave on and a free hosted API both cost nothing — the
+tradeoff is privacy and control (local) versus not needing a machine
+online 24/7 (gemini/openrouter/openrouter-free). A genuinely headless,
+always-on server should set CLASSIFY_BACKEND explicitly; "local" is the
+default here because it's the friendlier zero-config choice for someone
+just trying this out on their own machine.
 
 Usage:
   python3 classify.py <input.json> <output.json> <system_prompt.txt> [--concurrency N] [--model NAME]
@@ -138,7 +150,7 @@ def main():
         sys.exit(1)
     input_path, output_path, prompt_path = sys.argv[1:4]
 
-    backend_name = os.environ.get("CLASSIFY_BACKEND", "openrouter-free")
+    backend_name = os.environ.get("CLASSIFY_BACKEND", "local")
     if backend_name not in BACKENDS:
         raise SystemExit(f"Unknown CLASSIFY_BACKEND={backend_name!r}. Choose from: {', '.join(BACKENDS)}")
     backend = BACKENDS[backend_name]
