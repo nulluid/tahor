@@ -48,9 +48,48 @@ RULE_MODELS = {
 }
 DEFAULT_RULE_MODEL = "claude-opus"
 
+# Reply drafting runs more often than rule drafting (once per matching
+# email, not a few times a month) and the whole point is prose quality --
+# a separate model choice from RULE_MODELS, defaulting to a free option so
+# a zero-cost setup is possible out of the box.
+REPLY_MODELS = {
+    "gemini-flash": {
+        "label": "Gemini 3.6 Flash — free, solid everyday English",
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "model": "gemini-3.6-flash",
+        "auth_env": "GEMINI_API_KEY",
+    },
+    "nemotron-free": {
+        "label": "Nemotron 3 Super (via OpenRouter, free tier)",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "model": "nvidia/nemotron-3-super-120b-a12b:free",
+        "auth_env": "OPENROUTER_API_KEY",
+    },
+    "euryale-70b": {
+        "label": "Euryale 70B (via OpenRouter) — prose quality, cheap at low volume",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "model": "sao10k/l3.3-euryale-70b",
+        "auth_env": "OPENROUTER_API_KEY",
+    },
+    "claude-opus": {
+        "label": "Claude Opus 5 (via OpenRouter) — best writing, highest cost",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "model": "anthropic/claude-opus-5",
+        "auth_env": "OPENROUTER_API_KEY",
+    },
+    "gpt5": {
+        "label": "GPT-5.1 (via OpenRouter) — strong alternative",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "model": "openai/gpt-5.1",
+        "auth_env": "OPENROUTER_API_KEY",
+    },
+}
+DEFAULT_REPLY_MODEL = "gemini-flash"
+
 DEFAULT_SETTINGS = {
     "classify_mode": "free",
     "rule_model": DEFAULT_RULE_MODEL,
+    "reply_model": DEFAULT_REPLY_MODEL,
     "free_rate_log": [],  # rolling [{"messages": N, "seconds": S}, ...], see record_free_batch
     "backlog_estimate": None,
     "backlog_estimate_at": None,
@@ -104,6 +143,8 @@ def load_settings():
         merged["classify_mode"] = "free"
     if merged.get("rule_model") not in RULE_MODELS:
         merged["rule_model"] = DEFAULT_RULE_MODEL
+    if merged.get("reply_model") not in REPLY_MODELS:
+        merged["reply_model"] = DEFAULT_REPLY_MODEL
     return merged
 
 
@@ -134,6 +175,18 @@ def set_rule_model(key):
         raise ValueError(f"Unknown rule_model {key!r}, choose from {tuple(RULE_MODELS)}")
     settings = load_settings()
     settings["rule_model"] = key
+    save_settings(settings)
+
+
+def get_reply_model():
+    return load_settings().get("reply_model", DEFAULT_REPLY_MODEL)
+
+
+def set_reply_model(key):
+    if key not in REPLY_MODELS:
+        raise ValueError(f"Unknown reply_model {key!r}, choose from {tuple(REPLY_MODELS)}")
+    settings = load_settings()
+    settings["reply_model"] = key
     save_settings(settings)
 
 
