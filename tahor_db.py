@@ -15,13 +15,15 @@ SENDER_RULES = ("block_all", "block_marketing")  # block everything, or just mar
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS decisions (
@@ -178,24 +180,18 @@ def get_unsubscribe_candidate(sender_domain):
 
 
 def execute_unsubscribe(candidate, from_addr, app_password, smtp_host="smtp.fastmail.com", smtp_port=465):
-    url = candidate["unsubscribe_url"]
-    mailto = candidate["unsubscribe_mailto"]
-    if candidate["one_click"] and url:
-        req = urllib.request.Request(url, data=b"List-Unsubscribe=One-Click", method="POST")
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return f"one-click POST to {url}: {resp.status}"
-    if mailto:
-        if not (from_addr and app_password):
-            return "no SMTP credentials configured, mailto unsubscribe skipped"
-        msg = MIMEText("")
-        msg["From"] = from_addr
-        msg["To"] = mailto
-        msg["Subject"] = "unsubscribe"
-        with smtplib.SMTP_SSL(smtp_host, smtp_port) as smtp:
-            smtp.login(from_addr, app_password)
-            smtp.send_message(msg)
-        return f"sent unsubscribe email to {mailto}"
-    if url:
-        with urllib.request.urlopen(url, timeout=15) as resp:
-            return f"GET {url}: {resp.status}"
-    return "no unsubscribe mechanism available"
+    from unsubscribe import execute
+    return execute(candidate, from_addr, app_password, smtp_host, smtp_port)
+
+
+def queue_message_review(mailbox, message_id, subject):
+    context = json.dumps({"mailbox": mailbox, "message_id": message_id})
+    conn = get_db()
+    try:
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            exists = conn.execute("SELECT 1 FROM decisions WHERE kind='message_review' AND context=?", (context,)).fetchone()
+            if exists is None:
+                conn.execute("INSERT INTO decisions(kind,summary,context,status,created_at) VALUES ('message_review',?,?, 'pending',?)", (subject, context, datetime.now(timezone.utc).isoformat()))
+    finally:
+        conn.close()

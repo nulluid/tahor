@@ -35,6 +35,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import mailbox_settings
 import tahor_db
+from data_changes import atomic_write, commit_data
+import generate_sieve
 
 DB_PATH = tahor_db.DB_PATH
 
@@ -87,7 +89,7 @@ def rule_model_call(user_content):
     backend = mailbox_settings.RULE_MODELS[mailbox_settings.get_rule_model()]
     key = os.environ.get(backend["auth_env"])
     if not key:
-        raise SystemExit(f"Set {backend['auth_env']} in the environment for rule_model {backend['model']!r}.")
+        raise RuntimeError(f"Set {backend['auth_env']} in the environment for rule_model {backend['model']!r}.")
     payload = {
         "model": backend["model"],
         "messages": [
@@ -118,15 +120,7 @@ def git(*args):
 
 
 def commit_and_push_data(message):
-    git("add", "-A")
-    result = subprocess.run(
-        ["git", "-C", str(DATA_DIR), "diff", "--cached", "--quiet"]
-    )
-    if result.returncode == 0:
-        return False  # nothing changed
-    git("commit", "-m", message)
-    git("push", "origin", "main")
-    return True
+    return commit_data(DATA_DIR, message, ["vendor_buckets.json", "prompt.txt", "sieve.txt", "needs_code_change.md"])
 
 
 def apply_vendor_mapping(row, resolution):
@@ -137,12 +131,17 @@ def apply_vendor_mapping(row, resolution):
     if not bucket or not vendor_name:
         return "skipped (missing bucket or vendor name)"
 
-    context = json.loads(row["context"] or "{}") if isinstance(row["context"], str) else {}
+    try:
+        context = json.loads(row["context"] or "{}")
+    except (ValueError, TypeError):
+        context = {}
+    if not isinstance(context, dict):
+        context = {}
     sender_label = context.get("sender_label") or row["summary"].split(":")[-1].strip().split(" ")[0].lower()
 
     buckets = json.loads(VENDOR_BUCKETS_PATH.read_text()) if VENDOR_BUCKETS_PATH.exists() else {}
     buckets[sender_label.lower()] = [bucket, vendor_name]
-    VENDOR_BUCKETS_PATH.write_text(json.dumps(buckets, indent=2) + "\n")
+    atomic_write(VENDOR_BUCKETS_PATH, json.dumps(buckets, indent=2) + "\n")
     return f"mapped {sender_label} -> {bucket}/{vendor_name}"
 
 
@@ -152,7 +151,9 @@ def apply_sender_rule(sender_rule):
     if not domain or rule not in tahor_db.SENDER_RULES:
         return f"skipped (bad sender_rule: {sender_rule!r})"
 
+    generate_sieve.domain_test(domain)
     tahor_db.set_sender_rule(domain, rule)
+    generate_sieve.refresh_sieve()
     outcome = f"blocked ({rule}) for {domain}"
 
     if sender_rule.get("attempt_unsubscribe"):
@@ -188,60 +189,87 @@ def apply_free_text_rule(row, resolution):
         return apply_sender_rule(result["sender_rule"])
 
     if kind == "needs_code_change" or result.get("needs_code_change"):
-        flag_path = DATA_DIR / "decision-app" / "needs_code_change.md"
+        flag_path = DATA_DIR / "needs_code_change.md"
         existing = flag_path.read_text() if flag_path.exists() else "# Rules needing a code change\n\n"
-        flag_path.write_text(
+        atomic_write(flag_path,
             existing + f"## #{row['id']}: {text}\n\n{result.get('explanation')}\n\n"
         )
         return f"flagged for manual review (needs code change): {result.get('explanation')}"
 
     changed = []
     if result.get("vendor_buckets_json"):
-        VENDOR_BUCKETS_PATH.write_text(result["vendor_buckets_json"])
+        parsed_buckets = json.loads(result["vendor_buckets_json"])
+        if not isinstance(parsed_buckets, dict) or any(not isinstance(value, list) or len(value) != 2 or not all(isinstance(part, str) and part.strip() and not any(c in part for c in '\r\n"\\') for part in value) for value in parsed_buckets.values()):
+            raise ValueError("Model returned invalid vendor mappings")
+        atomic_write(VENDOR_BUCKETS_PATH, json.dumps(parsed_buckets, indent=2) + "\n")
         changed.append("vendor_buckets.json")
     if result.get("prompt_txt"):
-        PROMPT_PATH.write_text(result["prompt_txt"])
+        if not isinstance(result["prompt_txt"], str) or not result["prompt_txt"].strip():
+            raise ValueError("Model returned an invalid prompt")
+        atomic_write(PROMPT_PATH, result["prompt_txt"])
         changed.append("prompt.txt")
     return f"applied: {', '.join(changed) or 'no file changes'} — {result.get('explanation')}"
 
 
-def main():
-    conn = tahor_db.get_db()
-    rows = conn.execute(
-        "SELECT * FROM decisions WHERE status = 'resolved' AND resolution IS NOT NULL "
-        "AND (context IS NULL OR context NOT LIKE '%\"applied\": true%')"
-    ).fetchall()
-
-    if not rows:
-        print("Nothing to apply.")
-        return
-
-    results = []
-    for row in rows:
-        resolution = json.loads(row["resolution"])
-        if row["kind"] == "vendor_mapping":
-            outcome = apply_vendor_mapping(row, resolution)
-        elif row["kind"] == "free_text_rule":
-            outcome = apply_free_text_rule(row, resolution)
-        else:
-            outcome = "skipped (unknown kind)"
-        results.append((row["id"], outcome))
+def apply_one(decision_id):
+    import fcntl
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with (DATA_DIR / ".decisions.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        conn = tahor_db.get_db()
         try:
-            context = json.loads(row["context"]) if row["context"] else {}
+            row = conn.execute("SELECT * FROM decisions WHERE id=?", (decision_id,)).fetchone()
+            if row is None or not row["resolution"]:
+                raise ValueError("Decision is missing its resolution")
+            try:
+                context = json.loads(row["context"] or "{}")
+            except (ValueError, TypeError):
+                context = {"note": row["context"]}
             if not isinstance(context, dict):
                 context = {"note": row["context"]}
-        except (json.JSONDecodeError, TypeError):
-            context = {"note": row["context"]}
-        context["applied"] = True
-        context["outcome"] = outcome
-        conn.execute("UPDATE decisions SET context = ? WHERE id = ?", (json.dumps(context), row["id"]))
-        conn.commit()
+            if context.get("applied"):
+                return context.get("outcome", "Already applied")
+            resolution = json.loads(row["resolution"])
+            if row["kind"] == "vendor_mapping":
+                outcome = apply_vendor_mapping(row, resolution)
+            elif row["kind"] == "free_text_rule":
+                outcome = apply_free_text_rule(row, resolution)
+            elif row["kind"] == "message_review":
+                import keyword_tool
+                action = resolution.get("action")
+                if action not in ("keep", "trash"):
+                    raise ValueError("Choose Keep or Trash for this message")
+                add = ["retention-standard"] if action == "keep" else ["retention-transient", "category-marketing"]
+                result = keyword_tool.apply_ops([{"mailbox": context["mailbox"], "message_id": context["message_id"], "add": add, "remove": ["retention-pending-review", "needs-attention"]}])
+                if context["message_id"] not in result["applied"]:
+                    raise RuntimeError("Message could not be tagged; it remains available for retry")
+                outcome = "Message kept" if action == "keep" else "Message marked for retention cleanup once read"
+            else:
+                raise ValueError("This decision needs manual review; no mailbox action was applied")
+            commit_and_push_data("apply mailbox decision")
+            context.update(applied=True, outcome=outcome)
+            with conn:
+                conn.execute("UPDATE decisions SET context=? WHERE id=?", (json.dumps(context), decision_id))
+            return outcome
+        finally:
+            conn.close()
 
-    if commit_and_push_data("apply resolved decisions"):
-        print("Pushed data changes.")
 
-    for decision_id, outcome in results:
-        print(f"#{decision_id}: {outcome}")
+def main():
+    conn = tahor_db.get_db()
+    try:
+        ids = [row["id"] for row in conn.execute("SELECT id FROM decisions WHERE status='resolved' AND resolution IS NOT NULL")]
+    finally:
+        conn.close()
+    failures = 0
+    for decision_id in ids:
+        try:
+            print(f"{decision_id}: {apply_one(decision_id)}")
+        except Exception as exc:
+            failures += 1
+            print(f"{decision_id}: could not apply: {exc}", file=sys.stderr)
+    if failures:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

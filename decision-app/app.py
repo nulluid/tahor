@@ -12,10 +12,12 @@ apply_decisions.py (a separate script, run by cron, or called inline from
 them directly (vendor mappings, sender rules: pure data/enforcement) or
 hands free-text rules to a model to draft the change.
 
-No auth yet -- bind to 127.0.0.1 only until Google OAuth is wired in.
+Google OAuth restricts access to the configured mailbox owner.
 """
 import json
 import os
+import re
+from html import escape
 import secrets
 import sqlite3
 import sys
@@ -25,10 +27,11 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 import requests
-from flask import Flask, g, redirect, request, session
+from flask import Flask, g, redirect, request, session, abort
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import apply_decisions
+import generate_sieve
 import config
 import mailbox_settings
 import tahor_db
@@ -60,7 +63,37 @@ if not SECRET_KEY_PATH.exists():
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY_PATH.read_text().strip()
-app.config.update(SESSION_COOKIE_SECURE=BASE_URL.startswith("https://"), SESSION_COOKIE_HTTPONLY=True)
+app.config.update(SESSION_COOKIE_SECURE=BASE_URL.startswith("https://"), SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", MAX_CONTENT_LENGTH=64 * 1024)
+
+
+def html(value):
+    return escape(str(value if value is not None else ""), quote=True)
+
+
+@app.before_request
+def protect_forms():
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        expected = session.get("csrf_token")
+        supplied = request.form.get("csrf_token", "")
+        if not expected or not secrets.compare_digest(expected, supplied):
+            abort(400, "This form expired. Reload the page and try again.")
+
+
+@app.after_request
+def secure_response(response):
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["Content-Security-Policy"] = "frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
+    if response.mimetype == "text/html" and not response.is_streamed:
+        body = response.get_data(as_text=True)
+        if '<form ' in body:
+            token = session.setdefault("csrf_token", secrets.token_urlsafe(32))
+            field = f'<input type="hidden" name="csrf_token" value="{html(token)}">'
+            body = re.sub(r'(<form\b[^>]*method="post"[^>]*>)', lambda match: match[0] + field, body, flags=re.I)
+            response.set_data(body)
+    return response
 
 
 def login_required(view):
@@ -91,7 +124,9 @@ def login():
 
 @app.route("/auth/google/callback")
 def google_callback():
-    if request.args.get("state") != session.get("oauth_state"):
+    expected_state = session.pop("oauth_state", None)
+    supplied_state = request.args.get("state", "")
+    if not expected_state or not secrets.compare_digest(supplied_state, expected_state):
         return "Invalid state.", 400
     code = request.args.get("code")
     if not code:
@@ -119,8 +154,9 @@ def google_callback():
     email = (userinfo.get("email") or "").lower()
 
     if email != ALLOWED_EMAIL or not userinfo.get("email_verified"):
-        return f"Access denied for {email}.", 403
+        return "Access denied.", 403
 
+    session.clear()
     session["email"] = email
     return redirect("/")
 
@@ -502,10 +538,12 @@ UNSUBSCRIBE_PAGE_TEMPLATE = """<!doctype html>
 <body>
 <main>
 {header}
+{flash}
 <h1>Unsubscribe <span class="count">{count}</span></h1>
 <p class="hint">Every sender seen with a List-Unsubscribe header, most recent first. Whichever action you pick removes it from this list. Unsubscribing isn't always honored, so blocking is offered alongside it -- "block entirely" unsubscribes too, then blocks going forward regardless.</p>
 {non_compliant_banner}
 {cards}
+<section><h2>Blocked senders</h2>{blocked_senders}</section>
 </main>
 </body>
 </html>
@@ -584,10 +622,15 @@ DRAFT_CARD = """
 
 
 def known_buckets(db):
-    rows = db.execute(
-        "SELECT DISTINCT json_extract(resolution, '$.bucket') AS b FROM decisions WHERE resolution IS NOT NULL"
-    ).fetchall()
-    return sorted({r["b"] for r in rows if r["b"]})
+    buckets = set()
+    for row in db.execute("SELECT resolution FROM decisions WHERE resolution IS NOT NULL"):
+        try:
+            value = json.loads(row["resolution"])
+        except (ValueError, TypeError):
+            continue
+        if isinstance(value, dict) and isinstance(value.get("bucket"), str):
+            buckets.add(value["bucket"])
+    return sorted(buckets)
 
 
 @app.route("/")
@@ -599,19 +642,21 @@ def index():
     ).fetchall()
 
     buckets = known_buckets(db)
-    bucket_options = "".join(f'<option value="{b}">{b}</option>' for b in buckets)
+    bucket_options = "".join(f'<option value="{html(b)}">{html(b)}</option>' for b in buckets)
 
     cards = []
     for row in pending:
         ctx = row["context"] or ""
-        if row["kind"] == "vendor_mapping":
+        if row["kind"] == "free_text_rule":
+            cards.append(f'<div class="card"><div class="summary">{html(row["summary"])}</div><form method="post" action="/retry-rule/{row["id"]}"><button type="submit">Retry rule</button></form></div>')
+        elif row["kind"] == "vendor_mapping":
             cards.append(
                 CARD_VENDOR_MAPPING.format(
-                    id=row["id"], summary=row["summary"], context=ctx, bucket_options=bucket_options
+                    id=row["id"], summary=html(row["summary"]), context=html(ctx), bucket_options=bucket_options
                 )
             )
         else:
-            cards.append(CARD_GENERIC.format(id=row["id"], summary=row["summary"], context=ctx))
+            cards.append(CARD_GENERIC.format(id=row["id"], summary=html(row["summary"]), context=html(ctx)))
 
     body = "".join(cards) if cards else '<p class="empty">Nothing pending — all caught up.</p>'
 
@@ -620,13 +665,13 @@ def index():
         "ORDER BY created_at DESC LIMIT 1"
     ).fetchone()
     sieve_banner = (
-        SIEVE_BANNER.format(id=sieve_row["id"], context=sieve_row["context"] or "")
+        SIEVE_BANNER.format(id=sieve_row["id"], context=html(sieve_row["context"]))
         if sieve_row else ""
     )
     sieve_content = SIEVE_PATH.read_text() if SIEVE_PATH.exists() else "(not yet synced)"
 
     flash_message = session.pop("flash", None)
-    flash = FLASH_BANNER.format(message=flash_message) if flash_message else ""
+    flash = FLASH_BANNER.format(message=html(flash_message)) if flash_message else ""
 
     return PAGE_TEMPLATE.format(
         icon=TAHOR_ICON,
@@ -636,7 +681,7 @@ def index():
         flash=flash,
         sieve_banner=sieve_banner,
         cards=body,
-        sieve_content=sieve_content,
+        sieve_content=html(sieve_content),
     )
 
 
@@ -749,8 +794,8 @@ def settings_page():
     if triggers:
         reply_triggers_list = "".join(
             REPLY_TRIGGER_ROW.format(
-                value=t["value"],
-                type=t["type"],
+                value=html(t["value"]),
+                type=html(t["type"]),
                 type_label="Whole domain" if t["type"] == "sender_domain" else "Specific address",
             )
             for t in triggers
@@ -776,7 +821,10 @@ def add_reply_trigger():
     trigger_type = request.form.get("trigger_type", "")
     value = request.form.get("value", "")
     if trigger_type in mailbox_settings.TRIGGER_TYPES and value.strip():
-        mailbox_settings.add_reply_trigger(trigger_type, value)
+        try:
+            mailbox_settings.add_reply_trigger(trigger_type, value)
+        except ValueError as exc:
+            abort(400, str(exc))
     return redirect("/settings")
 
 
@@ -792,7 +840,7 @@ def remove_reply_trigger():
 def dismiss_sieve(decision_id):
     db = get_db()
     db.execute(
-        "UPDATE decisions SET status = 'resolved', resolved_at = ? WHERE id = ?",
+        "UPDATE decisions SET status = 'resolved', resolved_at = ? WHERE id = ? AND kind = 'sieve_update'",
         (datetime.now(timezone.utc).isoformat(), decision_id),
     )
     db.commit()
@@ -803,17 +851,30 @@ def dismiss_sieve(decision_id):
 @login_required
 def resolve(decision_id):
     db = get_db()
+    row = db.execute("SELECT * FROM decisions WHERE id=?", (decision_id,)).fetchone()
+    if row is None:
+        abort(404)
     action = request.form.get("action")
+    allowed = ("map", "skip") if row["kind"] == "vendor_mapping" else ("keep", "trash", "skip")
+    if action not in allowed:
+        abort(400, "Unknown decision action.")
+    if action == "skip" and row["kind"] != "vendor_mapping":
+        return redirect("/")
     resolution = {"action": action}
     if action == "map":
-        bucket = request.form.get("bucket_custom") or request.form.get("bucket")
-        resolution["bucket"] = bucket
-        resolution["vendor_name"] = request.form.get("vendor_name")
-    db.execute(
-        "UPDATE decisions SET status = 'resolved', resolution = ?, resolved_at = ? WHERE id = ?",
-        (json.dumps(resolution), datetime.now(timezone.utc).isoformat(), decision_id),
-    )
+        bucket = (request.form.get("bucket_custom") or request.form.get("bucket") or "").strip()
+        vendor = request.form.get("vendor_name", "").strip()
+        if not bucket or not vendor or any(c in bucket + vendor for c in '\r\n"\\'):
+            abort(400, "Enter a folder and vendor name without quotes or control characters.")
+        resolution.update(bucket=bucket, vendor_name=vendor)
+    db.execute("UPDATE decisions SET status='resolved', resolution=?, resolved_at=? WHERE id=?", (json.dumps(resolution), datetime.now(timezone.utc).isoformat(), decision_id))
     db.commit()
+    try:
+        session["flash"] = apply_decisions.apply_one(decision_id)
+    except Exception as exc:
+        db.execute("UPDATE decisions SET status='pending' WHERE id=?", (decision_id,))
+        db.commit()
+        session["flash"] = f"Could not apply this decision: {exc}. It is still pending."
     return redirect("/")
 
 
@@ -829,7 +890,7 @@ def add_rule():
             "VALUES ('free_text_rule', ?, ?, 'resolved', ?, ?, ?)",
             (
                 f"Rule: {rule_text[:80]}",
-                "Submitted directly by Jason via the rule box.",
+                "Submitted through the rule box.",
                 json.dumps(resolution),
                 datetime.now(timezone.utc).isoformat(),
                 datetime.now(timezone.utc).isoformat(),
@@ -839,18 +900,31 @@ def add_rule():
         row_id = cur.lastrowid
 
         try:
-            outcome = apply_decisions.apply_free_text_rule({"id": row_id}, resolution)
-            db.execute(
-                "UPDATE decisions SET context = ? WHERE id = ?",
-                (json.dumps({"note": "Submitted directly by Jason via the rule box.", "applied": True, "outcome": outcome}), row_id),
-            )
-            db.commit()
+            outcome = apply_decisions.apply_one(row_id)
             session["flash"] = f"Rule applied: {outcome}"
         except Exception as e:
+            db.execute("UPDATE decisions SET status='pending' WHERE id=?", (row_id,))
+            db.commit()
             session["flash"] = (
                 f"Rule saved, but couldn't apply it right now ({e}). "
-                "It'll be retried on the next scheduled run."
+                "Use Retry on the decisions page."
             )
+    return redirect("/")
+
+
+@app.route("/retry-rule/<int:decision_id>", methods=["POST"])
+@login_required
+def retry_rule(decision_id):
+    db = get_db()
+    row = db.execute("SELECT * FROM decisions WHERE id=? AND kind='free_text_rule'", (decision_id,)).fetchone()
+    if row is None:
+        abort(404)
+    try:
+        session["flash"] = apply_decisions.apply_one(decision_id)
+        db.execute("UPDATE decisions SET status='resolved' WHERE id=?", (decision_id,))
+        db.commit()
+    except Exception as exc:
+        session["flash"] = f"Could not apply rule: {exc}. You can retry."
     return redirect("/")
 
 
@@ -859,8 +933,8 @@ def _unsubscribe_card(row, non_compliant=False):
     template = NON_COMPLIANT_CARD if non_compliant else UNSUBSCRIBE_CARD
     return template.format(
         id=row["id"],
-        display_name=row["display_name"] or row["sender_domain"],
-        sender_email=row["sender_email"] or row["sender_domain"],
+        display_name=html(row["display_name"] or row["sender_domain"]),
+        sender_email=html(row["sender_email"] or row["sender_domain"]),
         message_count=row["message_count"],
         mechanism=mechanism,
     )
@@ -887,8 +961,15 @@ def unsubscribe_page():
         icon=TAHOR_ICON,
         style=STYLE_BLOCK,
         header=tahor_header("unsubscribe"),
+        flash=FLASH_BANNER.format(message=html(session.pop("flash", ""))) if session.get("flash") else "",
         count=len(non_compliant_rows) + len(pending_rows),
         non_compliant_banner=non_compliant_banner,
+        blocked_senders="".join(
+            f'<div class="card"><div class="summary">{html(row["sender_domain"])}</div>'
+            f'<p>{"All mail" if row["rule"] == "block_all" else "Marketing only"}</p>'
+            f'<form method="post" action="/unblock-sender"><input type="hidden" name="domain" value="{html(row["sender_domain"])}"><button type="submit">Remove block</button></form></div>'
+            for row in db.execute("SELECT sender_domain,rule FROM sender_rules ORDER BY sender_domain")
+        ) or '<p class="empty">No blocked senders.</p>',
         cards=body,
     )
 
@@ -899,7 +980,13 @@ def unsubscribe_action(candidate_id):
     db = get_db()
     row = db.execute("SELECT * FROM unsubscribe_candidates WHERE id = ?", (candidate_id,)).fetchone()
     action = request.form.get("action")
+    if row is None:
+        abort(404)
+    if action not in ("unsubscribe", "unsubscribe_block_marketing", "block_all", "dismiss"):
+        abort(400, "Unknown subscription action.")
     new_status = "resolved"
+    outcome = "Subscription kept."
+    unsubscribe_failed = False
     if row and action in ("unsubscribe", "unsubscribe_block_marketing", "block_all"):
         try:
             outcome = tahor_db.execute_unsubscribe(
@@ -910,15 +997,38 @@ def unsubscribe_action(candidate_id):
                 config.SMTP_PORT,
             )
         except Exception as e:
-            outcome = f"failed: {e}"  # best-effort: a dead unsubscribe link or SMTP failure shouldn't block the rest of the action
+            unsubscribe_failed = True
+            outcome = f"Unsubscribe failed: {e}"  # best-effort: a dead unsubscribe link or SMTP failure shouldn't block the rest of the action
         app.logger.info("unsubscribe %s (%s): %s", row["sender_domain"], action, outcome)
         if action == "unsubscribe":
-            new_status = "unsubscribed"  # watched: if this sender mails again, it resurfaces flagged non-compliant
+            new_status = "pending" if unsubscribe_failed else "unsubscribed"  # watched: if this sender mails again, it resurfaces flagged non-compliant
     if row and action in ("unsubscribe_block_marketing", "block_all"):
         rule = "block_all" if action == "block_all" else "block_marketing"
         tahor_db.set_sender_rule(row["sender_domain"], rule)
+        outcome += "; sender block saved."
+        try:
+            generate_sieve.refresh_sieve()
+            outcome += " Sieve proposal updated on the decisions page."
+        except Exception as exc:
+            outcome += f" Sieve proposal could not be updated: {exc}. The worker block is active."
     db.execute("UPDATE unsubscribe_candidates SET status = ?, non_compliant = 0 WHERE id = ?", (new_status, candidate_id))
     db.commit()
+    session["flash"] = outcome
+    return redirect("/unsubscribe")
+
+
+@app.route("/unblock-sender", methods=["POST"])
+@login_required
+def unblock_sender():
+    domain = request.form.get("domain", "").strip().lower()
+    if not tahor_db.get_sender_rule(domain):
+        abort(404)
+    tahor_db.clear_sender_rule(domain)
+    try:
+        generate_sieve.refresh_sieve()
+        session["flash"] = "Block removed from the worker. Apply the updated Sieve proposal to remove the provider-side block too."
+    except Exception as exc:
+        session["flash"] = f"Worker block removed, but the Sieve proposal needs retry: {exc}"
     return redirect("/unsubscribe")
 
 
@@ -932,10 +1042,10 @@ def drafts_page():
     cards = [
         DRAFT_CARD.format(
             id=row["id"],
-            subject=row["subject"],
-            recipient_email=row["recipient_email"],
+            subject=html(row["subject"]),
+            recipient_email=html(row["recipient_email"]),
             created_at=row["created_at"][:16].replace("T", " "),
-            draft_body=row["draft_body"],
+            draft_body=html(row["draft_body"]),
         )
         for row in rows
     ]
