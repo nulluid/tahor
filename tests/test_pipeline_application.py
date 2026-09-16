@@ -41,7 +41,7 @@ class PipelineTests(unittest.TestCase):
             envelopes = [dict(message_id=str(i), uid=str(10+i), subject='Same subject', from_email='sender@example.com', internaldate='01-Jan-2026 00:00:00 +0000') for i in range(3)]
             for suffix, rows in [('in', inputs), ('out', outputs), ('env', envelopes)]:
                 Path(prefix + '_' + suffix + '.json').write_text(json.dumps(rows))
-            with patch.object(sys, 'argv', ['process_batch.py', prefix, 'INBOX']), patch.object(process_batch.tahor_db, 'get_sender_rule', return_value=None):
+            with patch.object(sys, 'argv', ['process_batch.py', prefix, 'INBOX']), patch.object(process_batch.tahor_db, 'get_sender_rule', return_value=None), patch.object(process_batch.tahor_db, 'has_sender_sample', return_value=False):
                 mapping = process_batch.main()
             ops = json.loads(Path(prefix + '_ops.json').read_text())
             self.assertEqual(len(ops), 3)
@@ -49,6 +49,11 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual({op['uid'] for op in ops}, {'10', '11', '12'})
             self.assertEqual(sum('retention-transient' in op['add'] for op in ops), 2)
             self.assertEqual(sum('retention-forever' in op['add'] for op in ops), 1)
+            with patch.object(sys, 'argv', ['process_batch.py', prefix, 'INBOX']), patch.object(process_batch.tahor_db, 'get_sender_rule', return_value=None), patch.object(process_batch.tahor_db, 'has_sender_sample', return_value=True):
+                process_batch.main()
+            later_ops = json.loads(Path(prefix + '_ops.json').read_text())
+            self.assertEqual(sum('retention-transient' in op['add'] for op in later_ops), 3)
+            self.assertFalse(any('sample_sender' in op for op in later_ops))
 
 
 if __name__ == '__main__':

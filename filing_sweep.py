@@ -21,12 +21,13 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 import config
+import tahor_db
 
 CATEGORY_KEYWORDS = ["category-receipt", "category-statement", "category-government-tax"]
 
 
 def connect():
-    conn = imaplib.IMAP4_SSL(config.IMAP_HOST, config.IMAP_PORT)
+    conn = imaplib.IMAP4_SSL(config.IMAP_HOST, config.IMAP_PORT, timeout=60)
     conn.login(config.email_address(), config.app_password())
     return conn
 
@@ -38,9 +39,11 @@ def vendor_for(from_header, buckets):
     # The registrable label is the second-to-last segment, not the leftmost
     # one, or every subdomain (notification.example.com) becomes its own vendor.
     label = (parts[-2] if len(parts) >= 2 else (parts[0] if parts else "")).lower()
+    if domain in buckets:
+        return buckets[domain]
     if label in buckets:
         return buckets[label]
-    return ("_Unsorted", label.capitalize() if label else "Unknown")
+    return ("_Unsorted", domain if domain else "Unknown")
 
 
 def ensure_folder(conn, path, created):
@@ -94,6 +97,8 @@ def main():
         bucket, vendor = vendor_for(from_header, buckets)
         if bucket == "_Unsorted":
             unsorted_labels.add(vendor)
+            if not dry_run and vendor != "Unknown":
+                tahor_db.queue_vendor_mapping(vendor)
         by_dest[f"{root}/{bucket}/{vendor}"].append(uid)
 
     capabilities = {c.decode().upper() if isinstance(c, bytes) else c.upper() for c in conn.capabilities}

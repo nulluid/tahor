@@ -1,18 +1,11 @@
-require ["fileinto", "envelope", "header"];
+# BEGIN TAHOR SENDER RULES
 
-if anyof (
-        address :domain :is "from" "unwanted-vendor.example.com"
-    ) {
+if address :domain :is "from" "unwanted-vendor.example.com" {
     discard;
     stop;
 }
 
-if allof (
-    anyof (
-            address :domain :is "from" "marketing-only.example.com"
-    ),
-    header :exists "List-Unsubscribe"
-) {
-    discard;
-    stop;
-}
+# Marketing-only rules stay in the classifier so receipts are preserved.
+# marketing-only.example.com
+
+# END TAHOR SENDER RULES

@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 IMAP_HOST = os.environ.get("FASTMAIL_HOST", "imap.fastmail.com")
 IMAP_PORT = 993
@@ -34,7 +35,7 @@ def filing_min_age_days(status, default):
 
 
 def vendor_buckets():
-    path = os.environ.get("VENDOR_BUCKETS_PATH", "vendor_buckets.json")
+    path = os.environ.get("VENDOR_BUCKETS_PATH", str(Path(os.environ.get("DATA_DIR", Path(__file__).resolve().parent)) / "vendor_buckets.json"))
     with open(path) as f:
         raw = json.load(f)
     return {key.lower(): tuple(value) for key, value in raw.items()}

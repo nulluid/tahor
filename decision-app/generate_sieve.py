@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Maintain a reviewable Sieve block section without replacing custom rules."""
 import os
+import fcntl
 from pathlib import Path
 import re
 import sys
@@ -23,16 +24,16 @@ def domain_test(domain):
 
 def build_sieve(block_all, block_marketing):
     parts = [BEGIN]
-    for domains, marketing in ((block_all, False), (block_marketing - block_all, True)):
-        if not domains:
-            continue
-        tests = ',\n    '.join(domain_test(domain) for domain in sorted(domains))
-        condition = f'anyof (\n    {tests}\n)'
-        if marketing:
-            condition = f'allof ({condition}, exists "List-Unsubscribe")'
-        parts.append(f'if {condition} {{\n    discard;\n    stop;\n}}')
+    for domain in block_all | block_marketing:
+        domain_test(domain)
+    if block_all:
+        tests = ",\n    ".join(domain_test(domain) for domain in sorted(block_all))
+        parts.append(f'if anyof (\n    {tests}\n) {{\n    discard;\n    stop;\n}}')
+    if block_marketing - block_all:
+        parts.append("# Marketing-only rules stay in the classifier so receipts are preserved.\n"
+                     + "\n".join("# " + domain for domain in sorted(block_marketing - block_all)))
     parts.append(END)
-    return '\n\n'.join(parts) + '\n'
+    return "\n\n".join(parts) + "\n"
 
 
 def merge_sieve(existing, generated):
@@ -49,6 +50,13 @@ def merge_sieve(existing, generated):
 
 
 def refresh_sieve():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with (DATA_DIR / ".sieve.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _refresh_sieve()
+
+
+def _refresh_sieve():
     conn = tahor_db.get_db()
     try:
         rows = conn.execute('SELECT sender_domain, rule FROM sender_rules').fetchall()
@@ -62,8 +70,6 @@ def refresh_sieve():
     changed = generated != existing
     if changed:
         atomic_write(path, generated)
-    # Retry an earlier failed commit even when the contents are already current.
-    commit_data(DATA_DIR, 'update sender blocking rules', ['sieve.txt'])
     if changed:
         conn = tahor_db.get_db()
         try:
@@ -71,9 +77,10 @@ def refresh_sieve():
             now = datetime.now(timezone.utc).isoformat()
             with conn:
                 conn.execute("UPDATE decisions SET status='resolved', resolved_at=? WHERE kind='sieve_update' AND status='pending'", (now,))
-                conn.execute("INSERT INTO decisions(kind,summary,context,status,created_at) VALUES ('sieve_update', 'Sieve filter update recommended', ?, 'pending', ?)", (f'{len(block_all)} blocked domain(s), {len(marketing)} marketing block(s). Review and install this script in your mail provider.', now))
+                conn.execute("INSERT INTO decisions(kind,summary,context,status,created_at) VALUES ('sieve_update', 'Sieve filter update recommended', ?, 'pending', ?)", (f'{len(block_all)} provider-side domain block(s). Marketing-only blocks stay in the classifier. Review and install this script in your mail provider.', now))
         finally:
             conn.close()
+    commit_data(DATA_DIR, 'update sender blocking rules', ['sieve.txt'])
     return changed
 
 

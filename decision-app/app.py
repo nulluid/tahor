@@ -15,6 +15,7 @@ hands free-text rules to a model to draft the change.
 Google OAuth restricts access to the configured mailbox owner.
 """
 import json
+import fcntl
 import os
 import re
 from html import escape
@@ -32,6 +33,7 @@ from flask import Flask, g, redirect, request, session, abort
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import apply_decisions
 import generate_sieve
+import runtime_status
 import config
 import mailbox_settings
 import tahor_db
@@ -56,9 +58,13 @@ GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 
 # Secret key for signed session cookies. Persisted to a local file so
 # restarting the app doesn't invalidate every open session.
-SECRET_KEY_PATH = Path(__file__).parent / ".flask_secret_key"
-if not SECRET_KEY_PATH.exists():
-    SECRET_KEY_PATH.write_text(secrets.token_hex(32))
+SECRET_KEY_PATH = Path(os.environ.get("TAHOR_SECRET_KEY_PATH", DB_PATH.parent / ".flask_secret_key"))
+SECRET_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+with SECRET_KEY_PATH.with_suffix(".lock").open("a") as secret_lock:
+    fcntl.flock(secret_lock, fcntl.LOCK_EX)
+    if not SECRET_KEY_PATH.exists():
+        from data_changes import atomic_write
+        atomic_write(SECRET_KEY_PATH, secrets.token_hex(32))
     SECRET_KEY_PATH.chmod(0o600)
 
 app = Flask(__name__)
@@ -75,7 +81,7 @@ def protect_forms():
     if request.method in ("POST", "PUT", "PATCH", "DELETE"):
         expected = session.get("csrf_token")
         supplied = request.form.get("csrf_token", "")
-        if not expected or not secrets.compare_digest(expected, supplied):
+        if not expected or not supplied.isascii() or not secrets.compare_digest(expected, supplied):
             abort(400, "This form expired. Reload the page and try again.")
 
 
@@ -126,7 +132,7 @@ def login():
 def google_callback():
     expected_state = session.pop("oauth_state", None)
     supplied_state = request.args.get("state", "")
-    if not expected_state or not secrets.compare_digest(supplied_state, expected_state):
+    if not expected_state or not supplied_state.isascii() or not secrets.compare_digest(supplied_state, expected_state):
         return "Invalid state.", 400
     code = request.args.get("code")
     if not code:
@@ -211,6 +217,7 @@ def tahor_header(current):
         ("unsubscribe", "/unsubscribe", "Unsubscribe"),
         ("drafts", "/drafts", "Drafts"),
         ("settings", "/settings", "Settings"),
+        ("status", "/status", "Status"),
     ]
     parts = []
     for key, href, label in links:
@@ -225,6 +232,7 @@ def tahor_header(current):
 # drifting from a copy-pasted stylesheet.
 STYLE_BLOCK = """
 <style>
+  a { color: var(--accent); }
   :root {
     color-scheme: dark;
     --ground: #0B1F1D;
@@ -370,6 +378,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <body>
 <main>
 {header}
+<p class="hint">{worker_summary} <a href="/status">Worker status</a></p>
 <h1>Pending decisions <span class="count">{count}</span></h1>
 {flash}
 {sieve_banner}
@@ -502,7 +511,7 @@ CARD_VENDOR_MAPPING = """
       <input type="text" name="vendor_name" placeholder="Display name, e.g. Kate Spade">
     </div>
     <div class="actions">
-      <button type="submit" name="action" value="map" class="primary">File here</button>
+      <button type="submit" name="action" value="map" class="primary">Save routing rule</button>
       <button type="submit" name="action" value="skip">Leave unsorted</button>
     </div>
   </form>
@@ -614,11 +623,27 @@ DRAFT_CARD = """
   <div class="summary">Re: {subject}</div>
   <div class="context">To {recipient_email} &middot; drafted {created_at}</div>
   <pre>{draft_body}</pre>
-  <form method="post" action="/dismiss-draft/{id}">
-    <button type="submit">Mark reviewed</button>
-  </form>
+  <p class="hint">{save_status}</p>
+  {review_action}
 </div>
 """
+
+
+def decision_context(row):
+    raw = row["context"] or ""
+    try:
+        context = json.loads(raw)
+    except (ValueError, TypeError):
+        return raw
+    if not isinstance(context, dict):
+        return str(context)
+    if context.get("note"):
+        return str(context["note"])
+    if row["kind"] == "vendor_mapping":
+        return f'Sender: {context.get("sender_label", "unknown")}. Choose where future receipts should be filed.'
+    if row["kind"] == "message_review":
+        return f'In {context.get("mailbox", "your mailbox")}. Protected from retention cleanup until you decide.'
+    return str(context.get("outcome") or context.get("explanation") or "Ready for your review.")
 
 
 def known_buckets(db):
@@ -646,7 +671,7 @@ def index():
 
     cards = []
     for row in pending:
-        ctx = row["context"] or ""
+        ctx = decision_context(row)
         if row["kind"] == "free_text_rule":
             cards.append(f'<div class="card"><div class="summary">{html(row["summary"])}</div><form method="post" action="/retry-rule/{row["id"]}"><button type="submit">Retry rule</button></form></div>')
         elif row["kind"] == "vendor_mapping":
@@ -677,6 +702,7 @@ def index():
         icon=TAHOR_ICON,
         style=STYLE_BLOCK,
         header=tahor_header("decisions"),
+        worker_summary=html(runtime_status.describe_status()),
         count=len(pending),
         flash=flash,
         sieve_banner=sieve_banner,
@@ -687,9 +713,9 @@ def index():
 
 MODE_LABELS = {"free": "Free", "paid": "Paid", "auto": "Auto"}
 MODE_DESCRIPTIONS = {
-    "free": "No cost, but capped at OpenRouter's free daily quota (about 1,000 requests a day) and slower.",
-    "paid": "Fastest option, running at full measured throughput, but it costs real money (roughly $0.0003 per email).",
-    "auto": "Balances the two: stays on free by default, and only spends money on paid capacity when the backlog would otherwise take over an hour to clear.",
+    "free": "No paid classification requests. Speed and availability depend on the provider’s free quota.",
+    "paid": "Paid capacity for clearing a backlog faster. Provider usage charges apply; failed requests can temporarily fall back to free.",
+    "auto": "Balances free and paid capacity using estimated backlog and throughput. The one-hour target is an estimate, not a guarantee.",
 }
 
 
@@ -705,7 +731,7 @@ def _settings_status_line(current_mode):
     if current_mode == "paid":
         return (
             f'<p class="hint">Backlog estimate: ~{backlog_estimate} messages. '
-            f"Paid mode is active, so it's running at full throughput regardless of backlog size.</p>"
+            f"Paid mode is selected. The Status page shows actual processing and retries.</p>"
         )
     if current_mode == "free":
         return (
@@ -1037,12 +1063,14 @@ def unblock_sender():
 def drafts_page():
     db = get_db()
     rows = db.execute(
-        "SELECT * FROM reply_drafts WHERE status = 'pending' ORDER BY created_at DESC"
+        "SELECT * FROM reply_drafts WHERE status IN ('pending', 'preparing') ORDER BY created_at DESC"
     ).fetchall()
     cards = [
         DRAFT_CARD.format(
             id=row["id"],
             subject=html(row["subject"]),
+            save_status="Saved in Drafts" if row["status"] == "pending" else "Waiting to save to your mailbox; the watcher will retry",
+            review_action=f'<form method="post" action="/dismiss-draft/{row["id"]}"><button type="submit">Mark reviewed</button></form>' if row["status"] == "pending" else "",
             recipient_email=html(row["recipient_email"]),
             created_at=row["created_at"][:16].replace("T", " "),
             draft_body=html(row["draft_body"]),
@@ -1060,11 +1088,32 @@ def drafts_page():
 def dismiss_draft(draft_id):
     db = get_db()
     db.execute(
-        "UPDATE reply_drafts SET status = 'reviewed', resolved_at = ? WHERE id = ?",
+        "UPDATE reply_drafts SET status = 'reviewed', resolved_at = ? WHERE id = ? AND status = 'pending'",
         (datetime.now(timezone.utc).isoformat(), draft_id),
     )
     db.commit()
     return redirect("/drafts")
+
+
+
+
+@app.route("/status")
+@login_required
+def worker_status():
+    snapshot = runtime_status.read_status()
+    details = [("Configured speed", mailbox_settings.get_classify_mode()),
+               ("Last worker update", snapshot.get("updated_at", "Not recorded")),
+               ("Last successful batch", snapshot.get("last_success_at", "Not recorded")),
+               ("Applied in last batch", snapshot.get("last_batch_applied", "—")),
+               ("Pending retry in last batch", snapshot.get("last_batch_pending", "—"))]
+    rows = "".join(f'<tr><th style="text-align:left;padding:10px">{html(label)}</th><td>{html(value)}</td></tr>' for label, value in details)
+    return f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Tahor — status</title>{STYLE_BLOCK}</head><body><main>{tahor_header("status")}<h1>Worker status</h1><p>{html(runtime_status.describe_status(snapshot))}</p><div class="card"><table>{rows}</table></div><p class="hint">Speed is your preference. Temporary provider fallback does not change it. Refresh this page for the latest worker report.</p></main></body></html>'
+
+
+@app.route("/healthz")
+def healthz():
+    get_db().execute("SELECT 1")
+    return {"ok": True}
 
 
 if __name__ == "__main__":

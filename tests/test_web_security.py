@@ -25,7 +25,7 @@ class AppTestCase(unittest.TestCase):
         sys.path.insert(0, str(ROOT))
         sys.path.insert(0, str(ROOT / 'decision-app'))
         # Other test modules may already have loaded shared modules.
-        cls.saved = {key: sys.modules.pop(key, None) for key in ('config', 'mailbox_settings', 'tahor_db', 'apply_decisions', 'generate_sieve')}
+        cls.saved = {key: sys.modules.pop(key, None) for key in ('config', 'mailbox_settings', 'tahor_db', 'apply_decisions', 'generate_sieve', 'runtime_status')}
         spec = importlib.util.spec_from_file_location('security_app', ROOT / 'decision-app/app.py')
         cls.module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.module)

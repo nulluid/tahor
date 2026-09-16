@@ -11,7 +11,9 @@ class SieveTests(unittest.TestCase):
         script = generate_sieve.build_sieve({'blocked.example'}, {'marketing.example'})
         parser = Parser()
         self.assertTrue(parser.parse(script), getattr(parser, "error", "Invalid Sieve"))
-        self.assertIn('exists "List-Unsubscribe"', script)
+        self.assertNotIn('exists "List-Unsubscribe"', script)
+        self.assertIn('# marketing.example', script)
+        self.assertEqual(script.count('discard;'), 1)
 
     def test_custom_rules_preserved_and_managed_section_replaced(self):
         original = '# My rules\nrequire ["fileinto"];\nif true { fileinto "Archive"; stop; }\n'

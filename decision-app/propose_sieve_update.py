@@ -1,53 +1,39 @@
 #!/usr/bin/env python3
-"""
-Propose a new Sieve script: commit it to DATA_DIR, then insert a
-'sieve_update' row so the decisions page shows a dismissable banner until
-you confirm you've pasted it into your mail provider (Sieve can't be
-pushed via API).
-
-Usage: python3 propose_sieve_update.py <new_sieve_file> "<one-line reason>"
-"""
-import subprocess
-import sys
+"""Save a complete, explicitly supplied Sieve proposal for manual installation."""
+import argparse
 from datetime import datetime, timezone
-from pathlib import Path
 import os
+from pathlib import Path
+import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from data_changes import atomic_write, commit_data
 import tahor_db
-
-DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).resolve().parent.parent))
-SIEVE_PATH = DATA_DIR / "sieve.txt"
-
-
-def git(*args):
-    subprocess.run(["git", "-C", str(DATA_DIR), *args], check=True)
 
 
 def main():
-    if len(sys.argv) < 3:
-        print(__doc__)
-        sys.exit(1)
-    new_content = Path(sys.argv[1]).read_text()
-    reason = sys.argv[2]
-
-    SIEVE_PATH.write_text(new_content)
-    git("add", "sieve.txt")
-    result = subprocess.run(["git", "-C", str(DATA_DIR), "diff", "--cached", "--quiet"])
-    if result.returncode == 0:
-        print("No change from current sieve.txt -- nothing to propose.")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('source', type=Path)
+    parser.add_argument('reason')
+    args = parser.parse_args()
+    data_dir = Path(os.environ.get('DATA_DIR', Path(__file__).resolve().parent.parent))
+    content = args.source.read_text()
+    if not content.strip():
+        raise SystemExit('Refusing an empty Sieve proposal')
+    target = data_dir / 'sieve.txt'
+    if target.exists() and target.read_text() == content:
+        print('Sieve proposal is unchanged.')
         return
-    git("commit", "-m", f"propose sieve update: {reason}")
-    git("push", "origin", "main")
-
+    atomic_write(target, content)
     conn = tahor_db.get_db()
-    conn.execute(
-        "INSERT INTO decisions (kind, summary, context, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
-        ("sieve_update", "Sieve filter update recommended", reason, datetime.now(timezone.utc).isoformat()),
-    )
-    conn.commit()
-    print(f"Committed and flagged for review: {reason}")
+    try:
+        with conn:
+            conn.execute("INSERT INTO decisions(kind,summary,context,status,created_at) VALUES ('sieve_update','Review Sieve proposal',?,'pending',?)", (args.reason, datetime.now(timezone.utc).isoformat()))
+    finally:
+        conn.close()
+    commit_data(data_dir, 'update Sieve proposal', ['sieve.txt'])
+    print('Proposal saved for review. No provider filter was changed.')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

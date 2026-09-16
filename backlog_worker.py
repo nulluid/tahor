@@ -38,15 +38,18 @@ import classify
 import process_batch
 import keyword_tool
 import mailbox_settings
+import runtime_status
 
 # PROMPT_PATH can point anywhere, including a separate private repo, if you
 # want your prompt/config to have its own tracked history -- it's just an
 # env var, not a hardcoded assumption. Defaults to this repo's own
 # gitignored prompt.txt (see config.py's vendor_buckets() for the same
 # convention).
-PROMPT_PATH = Path(os.environ.get("PROMPT_PATH", REPO / "prompt.txt"))
-PROCESSED_IDS_PATH = REPO / "processed_message_ids.txt"
-LOG_PATH = REPO / "logs" / "backlog_worker.log"
+PROMPT_PATH = Path(os.environ.get("PROMPT_PATH", Path(os.environ.get("DATA_DIR", REPO)) / "prompt.txt"))
+STATE_DIR = Path(os.environ.get("TAHOR_STATE_DIR", REPO))
+STATE_DIR.mkdir(parents=True, exist_ok=True)
+PROCESSED_IDS_PATH = STATE_DIR / "processed_message_ids.txt"
+LOG_PATH = STATE_DIR / "logs" / "backlog_worker.log"
 
 # IMAP folders this worker watches. Edit for your own mailbox layout --
 # add any folder besides INBOX you want it to keep working through.
@@ -354,13 +357,15 @@ def _classify_batch(records, mode):
 
 
 def process_one_batch(mailbox):
-    prefix = str(REPO / "current_batch")
+    prefix = str(STATE_DIR / "current_batch")
+    runtime_status.write_status("fetching", mailbox=mailbox)
     records = fetch(mailbox, prefix)
     if not records:
         return "empty"
 
     mode = mailbox_settings.get_classify_mode()
     log(f"{mailbox}: classify_mode={mode}, classifying {len(records)} message(s)")
+    runtime_status.write_status("classifying", mode=mode, batch_size=len(records))
     free_results, paid_results = classify_batch(records, mode)
     results = free_results + paid_results
     Path(f"{prefix}_out.json").write_text(json.dumps(results, indent=1))
@@ -371,8 +376,8 @@ def process_one_batch(mailbox):
 
     old_argv = sys.argv
     try:
-        sys.argv = ["process_batch.py", "current_batch", mailbox]
-        os.chdir(REPO)
+        runtime_status.write_status("applying")
+        sys.argv = ["process_batch.py", prefix, mailbox]
         operation_ids = process_batch.main()
     finally:
         sys.argv = old_argv
@@ -381,6 +386,9 @@ def process_one_batch(mailbox):
     ops = json.loads(ops_path.read_text()) if ops_path.exists() else []
     applied = keyword_tool.apply_ops(ops)
     applied_ids = {operation_ids[mid] for mid in applied["applied"] if mid in operation_ids}
+    for operation in ops:
+        if operation.get("sample_sender") and operation["message_id"] in applied["applied"]:
+            process_batch.tahor_db.record_sender_sample(operation["sample_sender"], operation["message_id"])
 
     trash_ids = json.loads(Path(f"{prefix}_trash_ids.json").read_text())
     if trash_ids:
@@ -399,6 +407,10 @@ def process_one_batch(mailbox):
 
     mailbox_settings.decrement_backlog_estimate(len(applied_ids))
     log(f"{mailbox}: {len(applied_ids)} applied, {len(records) - len(applied_ids)} left for retry")
+    fields = {"last_batch_applied": len(applied_ids), "last_batch_pending": len(records) - len(applied_ids)}
+    if applied_ids:
+        fields["last_success_at"] = datetime.now(timezone.utc).isoformat()
+    runtime_status.write_status("processed" if applied_ids else "error", **fields)
 
     # Judge final outcomes after fallback, including batches smaller than ten.
     # Any successful work keeps the normal cadence; a total outage gets a
@@ -416,6 +428,7 @@ BACKEND_RETRY_SECONDS = 300
 
 
 def main():
+    process_batch.tahor_db.init_db()
     PROCESSED_IDS_PATH.touch(exist_ok=True)
     log("backlog_worker starting (in-process mode)")
 
@@ -432,6 +445,7 @@ def main():
             except Exception as e:
                 log(f"{mailbox}: exception {e!r}, backing off")
                 status = "error"
+                runtime_status.write_status("error", error=str(e)[:200])
 
             if status != "empty":
                 all_empty = False
@@ -440,12 +454,14 @@ def main():
                 time.sleep(SLEEP_BETWEEN_BATCHES)
             elif status == "backend_unavailable":
                 log(f"{mailbox}: no classifications succeeded -- retrying in {BACKEND_RETRY_SECONDS}s")
+                runtime_status.write_status("retrying", retry_seconds=BACKEND_RETRY_SECONDS)
                 time.sleep(BACKEND_RETRY_SECONDS)
             elif status == "error":
                 time.sleep(SLEEP_BETWEEN_BATCHES)
 
         if all_empty:
             log(f"No new mail in any mailbox -- sleeping {SLEEP_WHEN_IDLE}s")
+            runtime_status.write_status("idle")
             time.sleep(SLEEP_WHEN_IDLE)
 
 

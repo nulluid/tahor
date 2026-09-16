@@ -81,3 +81,42 @@ class WebActionTests(AppTestCase):
         db.close()
         self.assertEqual(self.post(f'/dismiss-draft/{id}').status_code, 302)
         self.assertNotIn('Draft text', self.client.get('/drafts').get_data(as_text=True))
+
+
+    def test_unblock_updates_worker_and_sieve(self):
+        self.module.tahor_db.set_sender_rule('blocked.example', 'block_all')
+        self.module.generate_sieve.refresh_sieve()
+        self.assertIn('blocked.example', self.client.get('/unsubscribe').get_data(as_text=True))
+        self.assertEqual(self.post('/unblock-sender', domain='blocked.example').status_code, 302)
+        self.assertIsNone(self.module.tahor_db.get_sender_rule('blocked.example'))
+        self.assertNotIn('blocked.example', (self.root / 'sieve.txt').read_text())
+
+    def test_message_keep_and_trash_apply_keywords_before_resolution(self):
+        import keyword_tool
+        for action, keyword in [('keep', 'retention-standard'), ('trash', 'retention-transient')]:
+            id = self.decision('message_review', {'mailbox': 'INBOX', 'message_id': '<review@example.com>'})
+            with patch.object(keyword_tool, 'apply_ops', return_value={'applied': {'<review@example.com>'}}) as apply:
+                self.assertEqual(self.post(f'/resolve/{id}', action=action).status_code, 302)
+            operation = apply.call_args.args[0][0]
+            self.assertIn(keyword, operation['add'])
+            self.assertIn('retention-pending-review', operation['remove'])
+
+    def test_sieve_dismissal_does_not_resolve_unrelated_decision(self):
+        id = self.decision('message_review')
+        self.post(f'/dismiss-sieve/{id}')
+        db = self.module.tahor_db.get_db()
+        self.assertEqual(db.execute('SELECT status FROM decisions WHERE id=?', (id,)).fetchone()['status'], 'pending')
+        db.close()
+
+    def test_preparing_draft_is_visible_but_cannot_be_marked_reviewed(self):
+        self.module.tahor_db.prepare_reply_draft('preparing-id', 'preparing-thread', 'person@example.com', 'Saved later', 'Please retry this draft.', 'test')
+        page = self.client.get('/drafts').get_data(as_text=True)
+        self.assertIn('Waiting to save', page)
+        self.assertNotIn('Mark reviewed', page)
+
+    def test_status_requires_login_but_health_check_is_public(self):
+        self.assertEqual(self.client.get('/status').status_code, 200)
+        self.client.get('/logout')
+        for route in ('/', '/settings', '/unsubscribe', '/drafts', '/status'):
+            self.assertEqual(self.client.get(route).status_code, 302)
+        self.assertEqual(self.client.get('/healthz').json, {'ok': True})

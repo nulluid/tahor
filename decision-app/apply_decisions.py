@@ -120,7 +120,7 @@ def git(*args):
 
 
 def commit_and_push_data(message):
-    return commit_data(DATA_DIR, message, ["vendor_buckets.json", "prompt.txt", "sieve.txt", "needs_code_change.md"])
+    return commit_data(DATA_DIR, message, ["vendor_buckets.json", PROMPT_PATH.name, "sieve.txt", "needs_code_change.md"])
 
 
 def apply_vendor_mapping(row, resolution):
@@ -196,18 +196,24 @@ def apply_free_text_rule(row, resolution):
         )
         return f"flagged for manual review (needs code change): {result.get('explanation')}"
 
+    if kind != "file_edit":
+        raise ValueError("The model did not return an actionable rule")
     changed = []
-    if result.get("vendor_buckets_json"):
-        parsed_buckets = json.loads(result["vendor_buckets_json"])
+    new_buckets = result.get("vendor_buckets_json")
+    new_prompt = result.get("prompt_txt")
+    if new_buckets is not None:
+        parsed_buckets = json.loads(new_buckets)
         if not isinstance(parsed_buckets, dict) or any(not isinstance(value, list) or len(value) != 2 or not all(isinstance(part, str) and part.strip() and not any(c in part for c in '\r\n"\\') for part in value) for value in parsed_buckets.values()):
             raise ValueError("Model returned invalid vendor mappings")
+    if new_prompt is not None and (not isinstance(new_prompt, str) or not new_prompt.strip()):
+        raise ValueError("Model returned an invalid prompt")
+    if new_buckets is not None:
         atomic_write(VENDOR_BUCKETS_PATH, json.dumps(parsed_buckets, indent=2) + "\n")
         changed.append("vendor_buckets.json")
-    if result.get("prompt_txt"):
-        if not isinstance(result["prompt_txt"], str) or not result["prompt_txt"].strip():
-            raise ValueError("Model returned an invalid prompt")
-        atomic_write(PROMPT_PATH, result["prompt_txt"])
+    if new_prompt is not None:
+        atomic_write(PROMPT_PATH, new_prompt)
         changed.append("prompt.txt")
+
     return f"applied: {', '.join(changed) or 'no file changes'} — {result.get('explanation')}"
 
 

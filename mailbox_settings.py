@@ -24,6 +24,12 @@ MODES = ("free", "paid", "auto")
 
 # Rule drafting is rare and judgment-heavy, so it's worth a stronger model than routine classification uses.
 RULE_MODELS = {
+    "nemotron-free": {
+        "label": "Nemotron 3 Super — free tier",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "model": "nvidia/nemotron-3-super-120b-a12b:free",
+        "auth_env": "OPENROUTER_API_KEY",
+    },
     "gemini-flash": {
         "label": "Gemini 3.6 Flash — fast, effectively free",
         "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
@@ -49,7 +55,7 @@ RULE_MODELS = {
         "auth_env": "OPENROUTER_API_KEY",
     },
 }
-DEFAULT_RULE_MODEL = "claude-opus"
+DEFAULT_RULE_MODEL = "nemotron-free"
 
 # Reply drafting runs more often than rule drafting (once per matching
 # email, not a few times a month) and the whole point is prose quality --
@@ -87,7 +93,7 @@ REPLY_MODELS = {
         "auth_env": "OPENROUTER_API_KEY",
     },
 }
-DEFAULT_REPLY_MODEL = "gemini-flash"
+DEFAULT_REPLY_MODEL = "nemotron-free"
 
 DEFAULT_SETTINGS = {
     "classify_mode": "free",
@@ -110,15 +116,10 @@ DEFAULT_FREE_RATE = 50 / (4 * 60)  # ~0.208 msg/sec
 # recount is worth its cost.
 BACKLOG_REFRESH_SECONDS = 15 * 60
 
-# Empirically measured on this box (2026-09-14): concurrency 20 against
-# openrouter-paid sustained ~2.06s/message end-to-end with zero errors;
-# concurrency 40 gave zero additional throughput, confirming 20 is
-# OpenRouter's own ceiling here, not this box's. Throughput = concurrency /
-# per-message latency. Keep PAID_CONCURRENCY in sync with classify.py's
-# openrouter-paid default_concurrency if that ever changes.
+# Initial throughput estimate, measured end-to-end at concurrency 20.
 PAID_CONCURRENCY = 20
 PAID_MSG_LATENCY_SECONDS = 2.06
-PAID_RATE_MSGS_PER_SEC = PAID_CONCURRENCY / PAID_MSG_LATENCY_SECONDS  # ~9.71 msg/sec
+PAID_RATE_MSGS_PER_SEC = 1 / PAID_MSG_LATENCY_SECONDS  # measured aggregate seconds per message
 
 # Roughly $0.0003/email at current OpenRouter pricing for the paid backend's
 # model at this project's snippet size -- used only for the settings page's

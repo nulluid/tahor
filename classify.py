@@ -167,6 +167,8 @@ def classify_one(url, headers, model, system_prompt, record, retries=3):
                     raise ValueError("Invalid attention flag")
             result = {"id": record["id"], "action": parsed["action"], "reason": str(parsed.get("reason", ""))}
             result.update({field: parsed.get(field, "") for field in SCHEMA_FIELDS})
+            if result["action"] == "trash":
+                result.update(category="marketing", retention="transient", expense_type="n/a", needs_attention=False, folder_domain="Other")
             return result
         except urllib.error.HTTPError as e:
             last_err = e

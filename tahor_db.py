@@ -87,6 +87,7 @@ def init_db():
     reply_cols = {row[1] for row in conn.execute("PRAGMA table_info(reply_drafts)")}
     if "thread_root" not in reply_cols:
         conn.execute("ALTER TABLE reply_drafts ADD COLUMN thread_root TEXT NOT NULL DEFAULT ''")
+    conn.execute("CREATE TABLE IF NOT EXISTS sender_samples (sender_email TEXT PRIMARY KEY, message_id TEXT NOT NULL, created_at TEXT NOT NULL)")
     conn.commit()
     conn.close()
 
@@ -193,5 +194,61 @@ def queue_message_review(mailbox, message_id, subject):
             exists = conn.execute("SELECT 1 FROM decisions WHERE kind='message_review' AND context=?", (context,)).fetchone()
             if exists is None:
                 conn.execute("INSERT INTO decisions(kind,summary,context,status,created_at) VALUES ('message_review',?,?, 'pending',?)", (subject, context, datetime.now(timezone.utc).isoformat()))
+    finally:
+        conn.close()
+
+
+def get_reply_draft_for_thread(thread_root):
+    conn = get_db()
+    try:
+        return conn.execute("SELECT * FROM reply_drafts WHERE thread_root=? ORDER BY id LIMIT 1", (thread_root,)).fetchone()
+    finally:
+        conn.close()
+
+
+def prepare_reply_draft(original_message_id, thread_root, recipient_email, subject, draft_body, trigger_reason):
+    conn = get_db()
+    try:
+        with conn:
+            conn.execute("INSERT INTO reply_drafts(original_message_id,thread_root,recipient_email,subject,draft_body,trigger_reason,status,created_at) VALUES (?,?,?,?,?,?,'preparing',?)", (original_message_id,thread_root,recipient_email,subject,draft_body,trigger_reason,datetime.now(timezone.utc).isoformat()))
+    finally:
+        conn.close()
+
+
+def finish_reply_draft(thread_root):
+    conn = get_db()
+    try:
+        with conn:
+            conn.execute("UPDATE reply_drafts SET status='pending' WHERE thread_root=? AND status='preparing'", (thread_root,))
+    finally:
+        conn.close()
+
+
+def queue_vendor_mapping(sender_domain):
+    context = json.dumps({"sender_label": sender_domain})
+    conn = get_db()
+    try:
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            exists = conn.execute("SELECT 1 FROM decisions WHERE kind='vendor_mapping' AND context=?", (context,)).fetchone()
+            if exists is None:
+                conn.execute("INSERT INTO decisions(kind,summary,context,status,created_at) VALUES ('vendor_mapping',?,?, 'pending',?)", (f"Choose a filing folder for {sender_domain}", context, datetime.now(timezone.utc).isoformat()))
+    finally:
+        conn.close()
+
+
+def has_sender_sample(sender_email):
+    conn = get_db()
+    try:
+        return conn.execute("SELECT 1 FROM sender_samples WHERE sender_email=?", (sender_email.strip().lower(),)).fetchone() is not None
+    finally:
+        conn.close()
+
+
+def record_sender_sample(sender_email, message_id):
+    conn = get_db()
+    try:
+        with conn:
+            conn.execute("INSERT OR IGNORE INTO sender_samples(sender_email,message_id,created_at) VALUES (?,?,?)", (sender_email.strip().lower(), message_id, datetime.now(timezone.utc).isoformat()))
     finally:
         conn.close()

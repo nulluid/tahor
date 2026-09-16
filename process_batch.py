@@ -82,10 +82,10 @@ def main():
             by_sender[inrecs[r["id"]]["from"]].append(r)
 
     trash_final, holdback = [], []
-    for items in by_sender.values():
+    for sender, items in by_sender.items():
         trashables = [r for r in items if r["action"] == "trash"]
         others = [r for r in items if r["action"] != "trash"]
-        if trashables and not others and not any(r.get("reason", "").startswith("sender rule:") for r in trashables):
+        if trashables and not others and not tahor_db.has_sender_sample(sender) and not any(r.get("reason", "").startswith("sender rule:") for r in trashables):
             trashables.sort(key=lambda r: inrecs[r["id"]]["date"])
             holdback.append(trashables[0])
             trash_final.extend(trashables[1:])
@@ -146,6 +146,7 @@ def main():
                 "mailbox": mailbox,
                 "message_id": msgids[r["id"]],
                 "uid": msgid_to_uid.get(msgids[r["id"]]),
+                "sample_sender": inrecs[r["id"]]["from"],
                 "add": ["retention-forever", f"category-{r.get('category', 'marketing')}"],
             })
 

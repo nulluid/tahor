@@ -18,7 +18,7 @@ def load(name):
     return module
 
 classifier = load('classify')
-with patch.dict(sys.modules, {name: Mock() for name in ('fetch_batch', 'process_batch', 'keyword_tool', 'mailbox_settings', 'classify')}):
+with patch.dict(sys.modules, {name: Mock() for name in ('fetch_batch', 'process_batch', 'keyword_tool', 'mailbox_settings', 'classify', 'runtime_status')}):
     worker = load('backlog_worker')
 real_classify_with_backend = worker.classify_with_backend
 
@@ -112,7 +112,7 @@ class RecoveryTests(unittest.TestCase):
             (root / 'current_batch_trash_ids.json').write_text('[]')
             worker.process_batch.main.return_value = {'0': '0'}
             worker.keyword_tool.apply_ops.return_value = {'applied': {'0'}, 'failed': set(), 'missing': set()}
-            with patch.object(worker, 'REPO', root), patch.object(worker, 'PROCESSED_IDS_PATH', root / 'processed.txt'), patch.object(worker, 'fetch', return_value=self.records), patch.object(worker, 'classify_batch', return_value=(errors(self.records[1:]), ok(self.records[:1]))), patch.object(worker.os, 'chdir'):
+            with patch.object(worker, 'STATE_DIR', root), patch.object(worker, 'REPO', root), patch.object(worker, 'PROCESSED_IDS_PATH', root / 'processed.txt'), patch.object(worker, 'fetch', return_value=self.records), patch.object(worker, 'classify_batch', return_value=(errors(self.records[1:]), ok(self.records[:1]))), patch.object(worker.os, 'chdir'):
                 self.assertEqual(worker.process_one_batch('INBOX'), 'processed')
             self.assertEqual((root / 'processed.txt').read_text(), '0\n')
             results = json.loads((root / 'current_batch_out.json').read_text())

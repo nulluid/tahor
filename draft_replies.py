@@ -26,6 +26,9 @@ untagged response or a 25-minute refresh timeout (most servers drop an
 idle connection past ~30 minutes), send DONE, then run a normal pass.
 """
 import email
+import hashlib
+import fcntl
+from pathlib import Path
 import imaplib
 import json
 import os
@@ -65,7 +68,7 @@ def draft_reply_body(subject, sender, body_text):
     backend = mailbox_settings.REPLY_MODELS[key]
     api_key = os.environ.get(backend["auth_env"])
     if not api_key:
-        raise SystemExit(f"Set {backend['auth_env']} in the environment for rule_model {backend['model']!r}.")
+        raise RuntimeError(f"Set {backend['auth_env']} in the environment for rule_model {backend['model']!r}.")
     payload = {
         "model": backend["model"],
         "messages": [
@@ -85,7 +88,7 @@ def draft_reply_body(subject, sender, body_text):
     return result["choices"][0]["message"]["content"].strip()
 
 
-def append_draft(conn, in_reply_to, references, to_addr, subject, body_text):
+def append_draft(conn, in_reply_to, references, to_addr, subject, body_text, draft_id=None):
     from_addr = config.email_address()
     reply_subject = subject if subject.lower().startswith("re:") else f"Re: {subject}"
     msg = MIMEText(body_text)
@@ -94,12 +97,14 @@ def append_draft(conn, in_reply_to, references, to_addr, subject, body_text):
     msg["Subject"] = str(Header(reply_subject, "utf-8"))
     msg["In-Reply-To"] = in_reply_to
     msg["References"] = f"{references} {in_reply_to}".strip()
-    msg["Message-ID"] = make_msgid()
-    conn.append("Drafts", "\\Draft", imaplib.Time2Internaldate(time.time()), msg.as_bytes())
+    msg["Message-ID"] = draft_id or make_msgid()
+    status, _ = conn.append("Drafts", "\\Draft", imaplib.Time2Internaldate(time.time()), msg.as_bytes())
+    if status != "OK":
+        raise RuntimeError("IMAP server rejected the draft")
 
 
 def notify(created):
-    if not created:
+    if not created or os.environ.get("TAHOR_NOTIFY_DRAFTS") != "1":
         return
     lines = [f"- Re: {c['subject']} (to {c['to']})" for c in created]
     body = (
@@ -116,7 +121,7 @@ def notify(created):
         smtp.send_message(msg)
 
 
-def process_new_mail(conn):
+def _process_new_mail(conn):
     """Run one draft-checking pass against an already-connected, already-selected
     conn. Returns the list of drafts created this pass. Shared by main() (which
     owns its own short-lived connection) and watch_forever() (which reuses one
@@ -128,13 +133,13 @@ def process_new_mail(conn):
     uids = set()
     for t in triggers:
         needle = t["value"] if t["type"] == "sender_email" else f"@{t['value']}"
-        typ, data = conn.search(None, "UNKEYWORD", DRAFTED_KEYWORD, "FROM", f'"{needle}"')
+        typ, data = conn.uid("SEARCH", None, "UNKEYWORD", DRAFTED_KEYWORD, "FROM", f'"{needle}"')
         if typ == "OK":
             uids.update(data[0].split())
 
     created = []
     for uid in sorted(uids, key=int):
-        typ, fdata = conn.fetch(uid, "(BODY.PEEK[])")
+        typ, fdata = conn.uid("FETCH", uid, "(BODY.PEEK[])")
         if typ != "OK" or not fdata or not isinstance(fdata[0], tuple):
             continue
         raw = fdata[0][1]
@@ -142,8 +147,10 @@ def process_new_mail(conn):
         _, sender_email = parseaddr(msg.get("From", ""))
         if not mailbox_settings.matches_reply_trigger(sender_email):
             continue
-        if is_no_reply_address(sender_email):
-            conn.store(uid, "+FLAGS", f"({DRAFTED_KEYWORD})")
+        if (is_no_reply_address(sender_email) or sender_email.lower() == config.email_address().lower()
+                or msg.get("Auto-Submitted", "no").lower() != "no"
+                or msg.get("Precedence", "").lower() in ("bulk", "list", "junk")):
+            conn.uid("STORE", uid, "+FLAGS", f"({DRAFTED_KEYWORD})")
             print(f"  {sender_email}: no-reply address, skipping a reply that couldn't be read anyway")
             continue
 
@@ -151,65 +158,95 @@ def process_new_mail(conn):
         if not message_id:
             continue
         references = msg.get("References", "")
-        thread_root = references.split()[0] if references.split() else message_id
+        thread_root = references.split()[0] if references.split() else (msg.get("In-Reply-To", "").strip() or message_id)
 
-        if tahor_db.has_reply_draft_for_thread(thread_root):
-            conn.store(uid, "+FLAGS", f"({DRAFTED_KEYWORD})")
-            print(f"  {message_id}: already drafted a reply earlier in this thread, skipped")
+        saved = tahor_db.get_reply_draft_for_thread(thread_root)
+        if saved is not None and saved["status"] in ("pending", "reviewed"):
+            conn.uid("STORE", uid, "+FLAGS", f"({DRAFTED_KEYWORD})")
             continue
-
         subject = fetch_batch.decode_str(msg.get("Subject", ""))
-        body_text = fetch_batch.extract_body_text(raw)
-
+        digest = hashlib.sha256((config.email_address().lower() + "\n" + thread_root).encode()).hexdigest()
+        draft_id = f"<tahor-draft-{digest}@localhost>"
         try:
-            draft_body = draft_reply_body(subject, sender_email, body_text)
-        except Exception as e:
-            print(f"  {message_id}: draft failed: {e}")
-            continue
-
-        conn.store(uid, "+FLAGS", f"({DRAFTED_KEYWORD})")
-        if draft_body.strip() == "NO_REPLY_NEEDED":
-            print(f"  {message_id}: no reply needed, skipped")
-            continue
-
-        append_draft(conn, message_id, references, sender_email, subject, draft_body)
-        tahor_db.create_reply_draft(message_id, thread_root, sender_email, subject, draft_body, trigger_reason=sender_email)
-        created.append({"subject": subject, "to": sender_email})
-        print(f"  drafted reply to {sender_email}: {subject}")
+            if saved is None:
+                body_text = fetch_batch.extract_body_text(raw)
+                draft_body = draft_reply_body(subject, sender_email, body_text)
+                if not draft_body:
+                    raise ValueError("Reply model returned an empty draft")
+                if draft_body.strip() == "NO_REPLY_NEEDED":
+                    conn.uid("STORE", uid, "+FLAGS", f"({DRAFTED_KEYWORD})")
+                    continue
+                tahor_db.prepare_reply_draft(message_id, thread_root, sender_email, subject, draft_body, sender_email)
+            else:
+                draft_body = saved["draft_body"]
+            # A stable Message-ID recovers an APPEND whose response was lost.
+            if not draft_exists(draft_id):
+                append_draft(conn, message_id, references, sender_email, subject, draft_body, draft_id)
+            tahor_db.finish_reply_draft(thread_root)
+            conn.uid("STORE", uid, "+FLAGS", f"({DRAFTED_KEYWORD})")
+            created.append({"subject": subject, "to": sender_email})
+        except Exception as exc:
+            print(f"Draft could not be saved; retained for retry: {exc}", flush=True)
 
     return created
 
 
+def draft_exists(message_id):
+    check = fetch_batch.connect()
+    try:
+        status, _ = check.select('"Drafts"', readonly=True)
+        if status != "OK":
+            raise RuntimeError("Could not select Drafts")
+        status, data = check.uid("SEARCH", None, "HEADER", "Message-ID", f'"{message_id}"')
+        if status != "OK":
+            raise RuntimeError("Could not check existing drafts")
+        return bool(data and data[0])
+    finally:
+        check.logout()
+
+
+def process_new_mail(conn):
+    path = tahor_db.DB_PATH.parent / "draft-replies.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _process_new_mail(conn)
+
+
 def main():
     conn = fetch_batch.connect()
-    conn.select(f'"{MAILBOX}"')
-    created = process_new_mail(conn)
-    conn.logout()
+    try:
+        status, _ = conn.select(f'"{MAILBOX}"')
+        if status != "OK":
+            raise RuntimeError("Could not select draft source mailbox")
+        created = process_new_mail(conn)
+    finally:
+        conn.logout()
     notify(created)
     print(f"Done. {len(created)} draft(s) created.")
 
 
-def wait_for_new_mail(conn, timeout=1500):
-    """Blocks in IMAP IDLE until the server pushes an untagged response (new
-    mail, a deletion, etc.) or timeout elapses, whichever comes first.
-    Returns True if something happened, False on a clean timeout. Must be
-    called with no command in flight; leaves the connection ready for a
-    normal command afterward (IDLE is always terminated before returning)."""
-    tag = conn._new_tag().decode()
-    conn.send(f"{tag} IDLE\r\n".encode())
-    conn.readline()  # continuation response, "+ idling" or similar
-
-    # select(), not sock.settimeout() -- a timeout that interrupts imaplib's
-    # buffered readline() mid-read leaves that file wrapper permanently broken
-    # ("cannot read from timed out object" on every later read). select()
-    # only tells us when data is ready; the actual readline() below never
-    # blocks long enough to hit a timeout.
-    readable, _, _ = select.select([conn.sock], [], [], timeout)
-    line = conn.readline() if readable else b""
-
-    conn.send(b"DONE\r\n")
-    conn.readline()  # tagged "OK IDLE terminated"
-    return bool(line.strip())
+def wait_for_new_mail(conn, timeout=60):
+    """Drain IDLE through its tagged completion before issuing more commands."""
+    tag = conn._new_tag()
+    conn.send(tag + b" IDLE\r\n")
+    while conn._get_response() is not None:
+        if conn.tagged_commands.get(tag) is not None:
+            result = conn.tagged_commands.pop(tag)
+            raise RuntimeError(f"IMAP IDLE rejected: {result[0]}")
+    pending = getattr(conn.sock, "pending", lambda: 0)()
+    readable, _, _ = select.select([conn.sock], [], [], 0 if pending else timeout)
+    received = bool(pending or readable)
+    if received:
+        conn._get_response()
+    if conn.tagged_commands.get(tag) is None:
+        conn.send(b"DONE\r\n")
+    while conn.tagged_commands.get(tag) is None:
+        conn._get_response()
+    status, _ = conn.tagged_commands.pop(tag)
+    if status != "OK":
+        raise RuntimeError("IMAP IDLE did not complete successfully")
+    return received
 
 
 def watch_forever():
@@ -218,15 +255,15 @@ def watch_forever():
         conn = None
         try:
             conn = fetch_batch.connect()
-            conn.select(f'"{MAILBOX}"')
+            status, _ = conn.select(f'"{MAILBOX}"')
+            if status != "OK":
+                raise RuntimeError("Could not select draft source mailbox")
             while True:
-                got_something = wait_for_new_mail(conn)
-                if not got_something:
-                    continue  # just the periodic IDLE refresh, nothing to check
                 created = process_new_mail(conn)
                 if created:
                     notify(created)
                     print(f"{len(created)} draft(s) created.")
+                wait_for_new_mail(conn)
         except Exception as e:
             print(f"IDLE connection error ({e!r}), reconnecting in 30s")
             if conn is not None:

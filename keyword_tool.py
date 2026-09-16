@@ -25,7 +25,7 @@ import config
 
 
 def connect():
-    conn = imaplib.IMAP4_SSL(config.IMAP_HOST, config.IMAP_PORT)
+    conn = imaplib.IMAP4_SSL(config.IMAP_HOST, config.IMAP_PORT, timeout=60)
     conn.login(config.email_address(), config.app_password())
     return conn
 
