@@ -8,3 +8,22 @@ __pycache__/
 decisions.db
 .flask_secret_key
 sieve.txt
+
+# Private mailbox state and local environments
+.env.*
+!.env.example
+*.db-*
+*.sqlite*
+current_batch_*.json
+*_batch_*.json
+processed_message_ids.txt
+worker_status.json
+settings.json
+*.lock
+logs/
+venv/
+.venv/
+state/
+config.env
+*.pem
+*.key
