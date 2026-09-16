@@ -1,5 +1,6 @@
 from pathlib import Path
 import socket
+import ssl
 import sys
 import unittest
 from unittest.mock import Mock, patch
@@ -8,6 +9,28 @@ import unsubscribe
 
 
 class UnsubscribeTests(unittest.TestCase):
+    def test_dns_rebinding_is_rejected_before_connect(self):
+        public = [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('93.184.216.34', 80))]
+        private = [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('127.0.0.1', 80))]
+        with patch.object(socket, 'getaddrinfo', side_effect=[public, private]), patch.object(socket, 'socket') as create:
+            unsubscribe.validate_url('http://example.com/unsubscribe')
+            with self.assertRaises(ValueError):
+                unsubscribe.PublicHTTPConnection('example.com', timeout=15).connect()
+            create.assert_not_called()
+
+    def test_connection_uses_validated_address_and_original_tls_hostname(self):
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('93.184.216.34', 443))]
+        context = Mock()
+        with patch.object(socket, 'getaddrinfo', return_value=addresses) as resolve, patch.object(socket, 'socket') as create:
+            conn = unsubscribe.PublicHTTPSConnection('example.com', timeout=15, context=context)
+            conn.connect()
+            create.return_value.connect.assert_called_once_with(('93.184.216.34', 443))
+            context.wrap_socket.assert_called_once_with(create.return_value, server_hostname='example.com')
+            resolve.assert_called_once()
+        secure = unsubscribe.PublicHTTPSConnection('example.com')
+        self.assertTrue(secure._context.check_hostname)
+        self.assertEqual(secure._context.verify_mode, ssl.CERT_REQUIRED)
+
     def test_private_and_link_local_urls_rejected(self):
         for address in ('127.0.0.1', '169.254.169.254', '10.0.0.1', '::1'):
             with patch.object(socket, 'getaddrinfo', return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, '', (address, 80))]):

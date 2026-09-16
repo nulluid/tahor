@@ -15,6 +15,8 @@ Configuration mistakes, model classification errors, and external-provider
 outages are operational risks even when the application behaves as designed.
 
 Unsubscribe URLs are checked for non-public destinations and redirects are
-checked again. These checks are not a replacement for network-level egress rules
+checked again. Connections use the validated address directly, preventing a second
+DNS lookup from redirecting the connection, while retaining TLS hostname checks.
+These checks are not a replacement for network-level egress rules
 in a hostile environment. Use a dedicated service account and keep cloud instance
 metadata and other internal services inaccessible where possible.

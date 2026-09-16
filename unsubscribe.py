@@ -1,10 +1,18 @@
 """Execute user-requested unsubscribe actions with bounded, public-only URLs."""
 import ipaddress
+import http.client
 import smtplib
 import socket
 import urllib.request
 from email.message import EmailMessage
 from urllib.parse import parse_qs, unquote, urlsplit
+
+
+def public_addresses(host, port):
+    addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    if not addresses or any(not ipaddress.ip_address(row[4][0]).is_global for row in addresses):
+        raise ValueError('Unsubscribe URL points to a non-public address')
+    return addresses
 
 
 def validate_url(url):
@@ -14,10 +22,47 @@ def validate_url(url):
     if any(ord(c) < 32 for c in url):
         raise ValueError('Invalid unsubscribe URL')
     port = parsed.port or (443 if parsed.scheme == 'https' else 80)
-    addresses = socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)
-    if not addresses or any(not ipaddress.ip_address(row[4][0]).is_global for row in addresses):
-        raise ValueError('Unsubscribe URL points to a non-public address')
+    public_addresses(parsed.hostname, port)
     return url
+
+
+class PublicHTTPConnection(http.client.HTTPConnection):
+    def connect(self):
+        if self._tunnel_host:
+            raise ValueError('Unsubscribe requests cannot use a proxy tunnel')
+        addresses = public_addresses(self.host, self.port)
+        last_error = None
+        for family, kind, protocol, _, address in addresses:
+            connection = socket.socket(family, kind, protocol)
+            try:
+                connection.settimeout(self.timeout)
+                connection.connect(address)
+                self.sock = connection
+                return
+            except OSError as exc:
+                connection.close()
+                last_error = exc
+        raise last_error
+
+
+class PublicHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        PublicHTTPConnection.connect(self)
+        try:
+            self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
+        except Exception:
+            self.sock.close()
+            raise
+
+
+class PublicHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, request):
+        return self.do_open(PublicHTTPConnection, request)
+
+
+class PublicHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, request):
+        return self.do_open(PublicHTTPSConnection, request, context=self._context)
 
 
 class PublicRedirect(urllib.request.HTTPRedirectHandler):
@@ -28,7 +73,7 @@ class PublicRedirect(urllib.request.HTTPRedirectHandler):
 
 def open_public(request):
     validate_url(request.full_url)
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), PublicRedirect())
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), PublicRedirect(), PublicHTTPHandler(), PublicHTTPSHandler())
     return opener.open(request, timeout=15)
 
 
