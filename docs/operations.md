@@ -47,6 +47,29 @@ Recovery intervals are checked between batches, not by a separate real-time
 billing monitor. A long model request or a running batch can delay a probe.
 Free fallback is best-effort: provider account restrictions can affect both tiers.
 
+Subscription tracking compares delivery time with the successful unsubscribe
+request. Older backlog mail and messages classified as transactional do not
+resurface the request as new marketing. Retried messages are counted once.
+Historical unsubscribe records without a request timestamp cannot establish that
+a message arrived afterward.
+
+### SELinux and system services
+
+On an SELinux-enforcing host, a system service launched from a home-directory
+virtual environment can fail with `203/EXEC` and `Permission denied`, even when
+the same command works in a shell. Check the journal and audit log first. If the
+executable context is the cause, an administrator can label that specific
+environment instead of disabling SELinux:
+
+```bash
+sudo semanage fcontext -a -t bin_t '/home/your-user/tahor/venv/bin(/.*)?'
+sudo restorecon -Rv /home/your-user/tahor/venv/bin
+```
+
+Use your actual checkout path, then restart the affected service. Oracle Linux
+provides `semanage` in `policycoreutils-python-utils`. An SELinux-confined reverse
+proxy may separately need permission to connect to the loopback application port.
+
 ## Configuration reference
 
 `run.py` reads the private environment file before importing a component. Pass

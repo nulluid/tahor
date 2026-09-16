@@ -205,9 +205,12 @@ to your own monitoring. It does not send notification email by default.
   notifications require `TAHOR_NOTIFY_DRAFTS="1"` and SMTP credentials.
 - **Free-text rules:** submit an instruction from the decision queue. A model can
   update routing or classification rules; failures stay visible for retry.
+  Instructions that require new code stay pending and are recorded for manual
+  implementation; submitting one does not change application code.
 - **Sender blocks:** apply in the worker immediately. For earlier provider-side
   blocking, review the generated Sieve proposal and install it in your provider’s
   Sieve editor. Removing a block also requires installing the updated proposal.
+  Use **Refresh proposal** on the decisions page to retry a failed generation.
 - **Private version history:** initialize a private Git repository at `DATA_DIR`.
   Tahor commits configuration edits locally. `TAHOR_DATA_PUSH="1"` explicitly
   enables pushing to that repository’s configured origin.

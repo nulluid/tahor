@@ -148,6 +148,9 @@ flowchart LR
 The worker searches for unclassified UIDs instead of repeatedly downloading the
 whole inbox. A message is recorded as processed only after its IMAP keyword
 write succeeds. Failed writes and classifications remain eligible for retry.
+Messages without a Message-ID use a local identity derived from the mailbox and
+UID. Before applying saved UID operations, Tahor checks the mailbox’s UIDVALIDITY
+value so a reset cannot redirect an old operation to a different message.
 
 **Classification, filing, and deletion are separate operations.** This makes it
 possible to inspect tags and preview sweeps before enabling mailbox changes.
