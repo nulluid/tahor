@@ -5,6 +5,12 @@ checkout, use an app password, and expose the review app only through a trusted
 local connection or HTTPS proxy. Access is restricted to one configured, verified
 Google account. Hosted inference sends message excerpts to your selected provider.
 
+Internet-facing services should run as a dedicated account without sudo access,
+using administrator-owned application code and a separate writable data directory.
+See [service isolation](docs/service-isolation.md) for the layout, hardened system
+units, migration checks and limitations. A separate process under the same
+administrator account is not a credential security boundary.
+
 Do not put real mail, tokens, passwords, or personal Sieve rules in public issues.
 For a suspected vulnerability, use GitHub’s private vulnerability reporting for
 this repository if enabled. Otherwise contact the maintainer through their GitHub

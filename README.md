@@ -119,6 +119,9 @@ The worker logs fetch, classification, and application timings for tuning.
 Paid classification defaults to 40 concurrent requests, configurable for your
 host and provider. Free-tier concurrency remains separate.
 
+For an internet-facing server, use the [dedicated service-account setup](docs/service-isolation.md)
+to keep application code read-only and run without administrator privileges.
+
 In Paid or Auto mode, failed paid classifications retry on the free tier.
 Widespread failures start a five-minute cooldown, followed by a single-message
 paid recovery probe at the next batch. If both tiers fail, messages stay pending
