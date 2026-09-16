@@ -48,11 +48,13 @@ def list_all_paths(conn):
 def sweep_mailbox(conn, path, keyword, cutoff_days, dry_run):
     typ, _ = conn.select('"' + path.replace('\\', '\\\\').replace('"', '\\"') + '"', readonly=dry_run)
     if typ != "OK":
-        return 0, 0
+        raise RuntimeError("Retention could not select a mailbox")
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=cutoff_days)).strftime("%d-%b-%Y")
     typ, data = conn.uid("SEARCH", None, "SEEN", "BEFORE", cutoff, "KEYWORD", keyword, "UNKEYWORD", "retention-forever", "UNKEYWORD", "retention-pending-review", "UNKEYWORD", "needs-attention")
-    if typ != "OK" or not data or not data[0]:
+    if typ != "OK":
+        raise RuntimeError("Retention search failed; no messages changed in this pass")
+    if not data or not data[0]:
         return 0, 0
 
     uids = data[0].split()
@@ -94,6 +96,8 @@ def main():
         print(f"\nDRY RUN. {grand_found} messages would be deleted.")
     else:
         print(f"\nDone. {grand_deleted}/{grand_found} matched messages deleted.")
+        if grand_deleted != grand_found:
+            raise RuntimeError("Retention incomplete: some messages could not be marked for deletion; retry the sweep")
 
 
 if __name__ == "__main__":

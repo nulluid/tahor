@@ -78,6 +78,9 @@ def main():
     for kw in CATEGORY_KEYWORDS:
         for criteria in (("SEEN", "BEFORE", read_cutoff), ("UNSEEN", "BEFORE", unread_cutoff)):
             typ, data = conn.uid("SEARCH", None, *criteria, "KEYWORD", kw)
+            if typ != "OK":
+                conn.logout()
+                raise RuntimeError("Filing search failed; no messages moved")
             if typ == "OK" and data and data[0]:
                 candidates.update(data[0].split())
 
@@ -88,9 +91,11 @@ def main():
 
     by_dest = defaultdict(list)
     unsorted_labels = set()
+    failures = 0
     for uid in candidates:
         typ, msg_data = conn.uid("FETCH", uid, "(BODY.PEEK[HEADER.FIELDS (FROM)])")
         if typ != "OK" or not msg_data or not msg_data[0]:
+            failures += 1
             continue
         header_blob = msg_data[0][1].decode(errors="replace")
         from_header = header_blob.split(":", 1)[-1].strip() if ":" in header_blob else header_blob
@@ -116,6 +121,7 @@ def main():
             if typ == "OK":
                 total_moved += 1
             else:
+                failures += 1
                 print(f"  FAILED to move uid {uid.decode()} to {dest}")
     conn.logout()
 
@@ -126,6 +132,8 @@ def main():
         print(f"\nDRY RUN. {total} messages would be filed across {len(by_dest)} folder(s).")
     else:
         print(f"\nDone. {total_moved} messages filed.")
+    if failures:
+        raise RuntimeError(f"Filing incomplete: {failures} message operation(s) failed; retry the sweep")
 
 
 if __name__ == "__main__":

@@ -1,12 +1,25 @@
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import retention_sweep
 
 
 class RetentionSafetyTests(unittest.TestCase):
+    def test_search_failure_is_not_reported_as_no_eligible_mail(self):
+        conn = self.connection()
+        conn.uid.side_effect = [('NO', [])]
+        with self.assertRaisesRegex(RuntimeError, 'search failed'):
+            retention_sweep.sweep_mailbox(conn, 'INBOX', 'retention-transient', 7, False)
+
+    def test_partial_deletion_fails_the_scheduled_command(self):
+        conn = self.connection()
+        with patch.object(retention_sweep, 'connect', return_value=conn), patch.object(retention_sweep, 'list_all_paths', return_value=['INBOX']), patch.object(retention_sweep, 'sweep_mailbox', return_value=(2, 1)), patch.object(sys, 'argv', ['retention_sweep.py']):
+            with self.assertRaisesRegex(RuntimeError, 'incomplete'):
+                retention_sweep.main()
+        conn.logout.assert_called_once()
+
     def connection(self):
         conn = Mock()
         conn.capabilities = (b'IMAP4rev1', b'UIDPLUS')

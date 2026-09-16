@@ -37,6 +37,7 @@ systemctl --user list-timers 'tahor-*'
 | Free capacity is exhausted | Failed messages stay pending. Free-only mode never escalates to paid. |
 | Both tiers fail | The worker waits five minutes and retries; it does not mark failed classifications complete. |
 | IMAP tagging fails | Only confirmed writes are recorded. Other messages remain unclassified and are fetched again. |
+| Filing or retention partially fails | The sweep exits nonzero. Messages not changed remain eligible for the next sweep; inspect the failed service or cron logs. |
 | Worker is active but idle | Read Status and logs: caught-up, fetching, classifying, and retrying are distinct states. |
 | A rule fails | The decision queue offers Retry. The failure does not disappear as a successful action. |
 | Unsubscribe fails | The candidate remains pending. A separately requested block can still take effect. |
