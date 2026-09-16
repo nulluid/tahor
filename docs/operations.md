@@ -4,7 +4,8 @@
 
 ## Know what is running
 
-The continuous worker classifies and tags INBOX. It does not run retention or
+The continuous worker classifies and tags every selectable folder, with no size limit.
+It checks INBOX between other folders and rediscovers folders on each pass. It does not run retention or
 filing itself. Reply drafting has its own watcher. The web app reads the same
 SQLite database and settings file; its Status page reports the worker’s actual
 last batch rather than inferring health from the selected speed.

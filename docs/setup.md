@@ -80,8 +80,16 @@ venv/bin/python run.py worker
 ```
 
 Use Ctrl-C to stop. The worker records progress only after applying message tags,
-so it can resume. It watches INBOX by default. Adjust `MAILBOXES` in the worker if
-you intentionally want additional folders processed.
+so it can resume. It discovers all selectable folders, including archives, imported
+mail, Sent, Drafts, Spam, and Trash, with no folder-size ceiling. Each folder gets
+one bounded batch per pass, with INBOX checked between folders. Folder discovery
+repeats every pass so newly created folders join automatically. Classification
+adds tags; filing and retention remain separate scheduled operations.
+
+Each batch combines recent arrivals with a rotating portion of older unclassified
+mail. Failed messages remain eligible for retry without blocking older messages.
+The private `fetch_cursors.json` state preserves that rotation across restarts.
+The worker polls every ten minutes after a complete pass finds no unclassified mail.
 
 ## 3. Enable the review app
 

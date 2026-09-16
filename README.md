@@ -17,7 +17,8 @@
 </p>
 
 **Tahor is a self-hosted email assistant that works inside your existing mailbox.**
-It classifies the backlog, tags messages, files receipts, helps you unsubscribe,
+It classifies the backlog across every folder without a folder-size limit, tags
+messages, files receipts, helps you unsubscribe,
 and prepares replies for review. Your usual email client stays your email client.
 
 The name comes from **טָהוֹר**, Hebrew for “clean, pure.” The aim is practical:

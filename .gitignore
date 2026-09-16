@@ -16,6 +16,7 @@ sieve.txt
 *.sqlite*
 current_batch_*.json
 *_batch_*.json
+fetch_cursors.json
 processed_message_ids.txt
 worker_status.json
 settings.json

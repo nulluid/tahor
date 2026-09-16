@@ -2,7 +2,7 @@
 """
 Continuously classify unprocessed mail, running unattended.
 
-Loop: for each mailbox in MAILBOXES, fetch a batch of not-yet-processed
+Loop: discover every selectable mailbox, fetch a batch of not-yet-processed
 messages -> classify -> turn into ops -> apply real IMAP keywords -> record
 the batch's message-ids as processed.
 
@@ -39,6 +39,7 @@ import process_batch
 import keyword_tool
 import mailbox_settings
 import runtime_status
+from data_changes import atomic_write
 
 # PROMPT_PATH can point anywhere, including a separate private repo, if you
 # want your prompt/config to have its own tracked history -- it's just an
@@ -51,9 +52,6 @@ STATE_DIR.mkdir(parents=True, exist_ok=True)
 PROCESSED_IDS_PATH = STATE_DIR / "processed_message_ids.txt"
 LOG_PATH = STATE_DIR / "logs" / "backlog_worker.log"
 
-# IMAP folders this worker watches. Edit for your own mailbox layout --
-# add any folder besides INBOX you want it to keep working through.
-MAILBOXES = ["INBOX"]
 RETENTION_KEYWORDS = {"retention-forever", "retention-standard", "retention-transient", "retention-pending-review"}
 BATCH_SIZE = int(os.environ.get("WORKER_BATCH_SIZE", 50))
 # Concurrency is no longer a single flat setting here -- each backend runs at
@@ -87,9 +85,73 @@ def parse_list_unsubscribe(header_value):
     return url, mailto
 
 
+def quote_mailbox(mailbox):
+    return '"' + mailbox.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def discover_mailboxes():
+    conn = fetch_batch.connect()
+    try:
+        typ, rows = conn.list('""', '"*"')
+        if typ != "OK":
+            raise RuntimeError("Mailbox discovery failed")
+        names = []
+        for row in rows or []:
+            if row in (None, b''):
+                continue
+            literal = row[1] if isinstance(row, tuple) else None
+            line = row[0] if isinstance(row, tuple) else row
+            match = re.fullmatch(rb'\(([^)]*)\)\s+(?:NIL|"(?:[^"\\]|\\.)*")\s+(.+)', line)
+            if not match:
+                raise RuntimeError("Unrecognized IMAP LIST response")
+            if b'\\noselect' in match[1].lower().split():
+                continue
+            value = match[2]
+            if literal is not None:
+                value = literal
+            elif value.startswith(b'"') and value.endswith(b'"'):
+                value = re.sub(rb'\\(.)', rb'\1', value[1:-1])
+            elif value.startswith(b'"') or value.startswith(b'{'):
+                raise RuntimeError("Invalid IMAP mailbox name")
+            name = value.decode('ascii')  # Preserve IMAP's modified UTF-7 wire name.
+            if name.upper() == 'INBOX':
+                name = 'INBOX'
+            if name not in names:
+                names.append(name)
+        if not names:
+            raise RuntimeError("No selectable mailboxes discovered")
+        return sorted(names, key=lambda name: (name != 'INBOX', name))
+    finally:
+        conn.logout()
+
+
+def scheduled_mailboxes(mailboxes):
+    for mailbox in mailboxes:
+        yield mailbox
+        if mailbox != 'INBOX' and 'INBOX' in mailboxes:
+            yield 'INBOX'
+
+
+def choose_uids(uids, cursor, limit):
+    ordered = sorted(set(uids), key=int, reverse=True)
+    newest = ordered[:limit // 2]
+    older = ordered[len(newest):]
+    if cursor:
+        older = [uid for uid in older if int(uid) < cursor] + [uid for uid in older if int(uid) >= cursor]
+    rotating = older[:limit - len(newest)]
+    return newest + rotating, int(rotating[-1]) if rotating else 0
+
+
 def fetch(mailbox, prefix):
     conn = fetch_batch.connect()
-    typ, _ = conn.select(f'"{mailbox}"', readonly=True)
+    try:
+        return _fetch(conn, mailbox, prefix)
+    finally:
+        conn.logout()
+
+
+def _fetch(conn, mailbox, prefix):
+    typ, _ = conn.select(quote_mailbox(mailbox), readonly=True)
     if typ != "OK":
         raise RuntimeError(f"Could not select mailbox {mailbox!r}")
     uidvalidity = fetch_batch.mailbox_uidvalidity(conn)
@@ -99,8 +161,23 @@ def fetch(mailbox, prefix):
     typ, data = conn.uid("SEARCH", None, *criteria)
     if typ != "OK":
         raise RuntimeError("SEARCH failed")
-    uids = data[0].split()
-    uids = uids[::-1]  # newest first: highest UID = most recent
+    pending = data[0].split() if data and data[0] else []
+    cursor_path = STATE_DIR / "fetch_cursors.json"
+    try:
+        cursors = json.loads(cursor_path.read_text())
+        if not isinstance(cursors, dict):
+            cursors = {}
+    except (OSError, ValueError):
+        cursors = {}
+    saved = cursors.get(mailbox, {})
+    if not isinstance(saved, dict):
+        saved = {}
+    cursor = saved.get("uid", 0) if saved.get("uidvalidity") == uidvalidity else 0
+    if not isinstance(cursor, int) or cursor < 0:
+        cursor = 0
+    uids, cursor = choose_uids(pending, cursor, BATCH_SIZE)
+    cursors[mailbox] = {"uidvalidity": uidvalidity, "uid": cursor}
+    atomic_write(cursor_path, json.dumps(cursors) + "\n")
 
     in_records, env_records = [], []
     chunk = 50
@@ -172,7 +249,8 @@ def fetch(mailbox, prefix):
                     "one_click": one_click,
                 }
             )
-    conn.logout()
+    if pending and not in_records:
+        raise RuntimeError("Unclassified messages remain but FETCH returned no usable records")
 
     Path(f"{prefix}_in.json").write_text(json.dumps(in_records, indent=1))
     Path(f"{prefix}_env.json").write_text(json.dumps(env_records, indent=1))
@@ -243,15 +321,16 @@ def full_backlog_count(mailboxes):
     total = 0
     try:
         for mailbox in mailboxes:
-            typ, _ = conn.select(f'"{mailbox}"', readonly=True)
+            typ, _ = conn.select(quote_mailbox(mailbox), readonly=True)
             if typ != "OK":
-                continue
+                raise RuntimeError("Backlog count could not select a mailbox")
             criteria = []
             for kw in RETENTION_KEYWORDS:
                 criteria += ["UNKEYWORD", kw]
             typ, data = conn.uid("SEARCH", None, *criteria)
-            if typ == "OK":
-                total += len(data[0].split())
+            if typ != "OK":
+                raise RuntimeError("Backlog count search failed")
+            total += len(data[0].split()) if data and data[0] else 0
     finally:
         conn.logout()
     return total
@@ -268,7 +347,7 @@ def get_backlog_estimate():
     split, not billing or a user-facing count."""
     estimate, is_fresh = mailbox_settings.get_cached_backlog(mailbox_settings.BACKLOG_REFRESH_SECONDS)
     if not is_fresh:
-        estimate = full_backlog_count(MAILBOXES)
+        estimate = full_backlog_count(discover_mailboxes())
         mailbox_settings.set_backlog_estimate(estimate)
         log(f"backlog estimate refreshed via full IMAP scan: {estimate}")
     return estimate
@@ -443,7 +522,15 @@ def main():
         # retry right after their own backoff instead of also being logged
         # as "no new mail" and sleeping an extra SLEEP_WHEN_IDLE on top.
         all_empty = True
-        for mailbox in MAILBOXES:
+        try:
+            mailboxes = discover_mailboxes()
+        except Exception as e:
+            log(f"Mailbox discovery failed: {e!r}; retrying")
+            runtime_status.write_status("error", error=str(e)[:200])
+            time.sleep(SLEEP_BETWEEN_BATCHES)
+            continue
+        runtime_status.write_status("fetching", mailbox_count=len(mailboxes))
+        for mailbox in scheduled_mailboxes(mailboxes):
             try:
                 status = process_one_batch(mailbox)
             except Exception as e:

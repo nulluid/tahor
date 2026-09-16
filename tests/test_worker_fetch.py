@@ -22,6 +22,8 @@ class WorkerFetchTests(unittest.TestCase):
             return 'OK', [(b'1 (UID 42 INTERNALDATE "16-Sep-2026 12:00:00 +0000" FLAGS ()', headers), (b'BODY[]', b'Hello')]
         conn.uid.side_effect = uid
         with tempfile.TemporaryDirectory() as directory, patch.object(fetch_batch, 'connect', return_value=conn), patch.object(fetch_batch.config, 'email_address', return_value='owner@example.com'):
+            self.addCleanup(patch.stopall)
+            patch.object(backlog_worker, 'STATE_DIR', Path(directory)).start()
             prefix = str(Path(directory) / 'batch')
             records = backlog_worker.fetch('INBOX', prefix)
             expected = fetch_batch.local_message_id('INBOX', '100', '42')
