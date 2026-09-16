@@ -158,6 +158,8 @@ def classify_one(url, headers, model, system_prompt, record, retries=3):
             return result
         except urllib.error.HTTPError as e:
             last_err = e
+            if e.code in (400, 401, 402, 403, 404):
+                break  # These need configuration, credit, or a different backend.
             if e.code == 429 and attempt < retries:  # rate limited — back off and retry
                 time.sleep(2 ** attempt * 2)
                 continue
@@ -165,7 +167,10 @@ def classify_one(url, headers, model, system_prompt, record, retries=3):
         except Exception as e:
             last_err = e
             continue
-    return {"id": record["id"], "action": "error", "reason": f"classification failed: {last_err}"}
+    result = {"id": record["id"], "action": "error", "reason": f"classification failed: {last_err}"}
+    if isinstance(last_err, urllib.error.HTTPError):
+        result["http_status"] = last_err.code
+    return result
 
 
 def main():

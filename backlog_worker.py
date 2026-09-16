@@ -202,7 +202,11 @@ def classify_with_backend(records, backend_name):
     deadline = max(90, len(records) * 8)
     try:
         for fut in as_completed(futures, timeout=deadline):
-            results[futures[fut]] = fut.result()
+            try:
+                results[futures[fut]] = fut.result()
+            except Exception as exc:
+                rec = records[futures[fut]]
+                results[futures[fut]] = {"id": rec["id"], "action": "error", "reason": f"classification failed: {exc}"}
     except FutureTimeoutError:
         pass
     ex.shutdown(wait=False)
@@ -220,7 +224,7 @@ def _classify_free_and_time(records):
     auto-mode escalation decision is based on)."""
     t0 = time.monotonic()
     results = classify_with_backend(records, "openrouter-free")
-    mailbox_settings.record_free_batch(len(records), time.monotonic() - t0)
+    mailbox_settings.record_free_batch(sum(r["action"] != "error" for r in results), time.monotonic() - t0)
     return results
 
 
@@ -266,7 +270,56 @@ def get_backlog_estimate():
     return estimate
 
 
+PAID_RETRY_SECONDS = 300
+_paid_retry_at = 0.0
+
+
 def classify_batch(records, mode):
+    """Retry paid failures on free, periodically probing paid for recovery.
+
+    The saved mode stays unchanged. Free mode never initiates paid requests.
+    Only final results are returned, so each message is applied once.
+    """
+    global _paid_retry_at
+    if not records:
+        return [], []
+    if mode == "free":
+        return _classify_batch(records, mode)
+
+    probe_results = []
+    if _paid_retry_at:
+        if time.monotonic() < _paid_retry_at:
+            log("Paid backend cooling down; using free tier")
+            return _classify_free_and_time(records), []
+        log("Probing paid backend for recovery with one message")
+        probe_results = classify_with_backend(records[:1], "openrouter-paid")
+        if probe_results[0]["action"] == "error":
+            _paid_retry_at = time.monotonic() + PAID_RETRY_SECONDS
+            log("Paid probe failed; using free tier and retrying paid in 300s")
+            return _classify_free_and_time(records), []
+        _paid_retry_at = 0.0
+        log("Paid backend recovered; resuming configured mode")
+        remaining = records[1:]
+    else:
+        remaining = records
+
+    free_results, paid_results = _classify_batch(remaining, mode) if remaining else ([], [])
+    paid_results = probe_results + paid_results
+    failures = [r for r in paid_results if r["action"] == "error"]
+    if failures:
+        if (any(r.get("http_status") == 402 for r in failures)
+                or len(failures) / len(paid_results) >= 0.8):
+            _paid_retry_at = time.monotonic() + PAID_RETRY_SECONDS
+            log("Paid backend unavailable; next recovery probe in 300s")
+        failed_ids = {r["id"] for r in failures}
+        retry_records = [r for r in records if r["id"] in failed_ids]
+        log(f"Retrying {len(retry_records)} failed paid classification(s) on free tier")
+        free_results += _classify_free_and_time(retry_records)
+        paid_results = [r for r in paid_results if r["id"] not in failed_ids]
+    return free_results, paid_results
+
+
+def _classify_batch(records, mode):
     """Returns (free_results, paid_results) -- kept separate, rather than one
     merged list, so the caller can tell a free-only quota exhaustion apart
     from a genuine paid-backend problem (see process_one_batch)."""
@@ -354,31 +407,17 @@ def process_one_batch(mailbox):
 
     mailbox_settings.decrement_backlog_estimate(len(records) - len(errored_ids))
 
-    # A near-total error rate on a real-sized batch almost always means a
-    # backend's quota/capacity is exhausted, not a handful of transient
-    # failures -- worth backing off instead of hammering it every 90s. But
-    # that check has to be per-backend: in auto mode a batch is a free/paid
-    # split, and free running out (which happens daily, on schedule) must
-    # never look like "everything is exhausted" and put the whole worker
-    # to sleep for 2 hours -- paid has no daily cap and should just keep
-    # going. Only a backend that was actually *used* in this batch and
-    # came back mostly errors counts.
-    def exhausted(subset):
-        return len(subset) >= 10 and sum(1 for r in subset if r["action"] == "error") / len(subset) >= 0.8
-
-    free_exhausted = exhausted(free_results)
-    paid_exhausted = exhausted(paid_results)
-
-    if paid_results and not paid_exhausted:
-        if free_exhausted:
-            log(f"{mailbox}: free tier looks exhausted mid-batch -- staying on paid, no worker-wide backoff")
-        return "processed"
-    if free_exhausted or paid_exhausted:
-        return "quota_exhausted"
-    return "processed"
+    # Judge final outcomes after fallback, including batches smaller than ten.
+    # Any successful work keeps the normal cadence; a total outage gets a
+    # bounded retry instead of the old two-hour sleep.
+    return batch_status(results)
 
 
-QUOTA_BACKOFF_SECONDS = 2 * 60 * 60  # 2 hours -- self-correcting even without knowing the exact daily reset time
+def batch_status(results):
+    return "backend_unavailable" if results and all(r["action"] == "error" for r in results) else "processed"
+
+
+BACKEND_RETRY_SECONDS = 300
 
 
 def main():
@@ -387,7 +426,7 @@ def main():
 
     while True:
         # "empty" (genuinely no unprocessed mail left) is the only status
-        # that should trigger the idle sleep below -- "quota_exhausted" and
+        # that should trigger the idle sleep below -- "backend_unavailable" and
         # "error" mean real mail is still waiting, just blocked, and should
         # retry right after their own backoff instead of also being logged
         # as "no new mail" and sleeping an extra SLEEP_WHEN_IDLE on top.
@@ -404,9 +443,9 @@ def main():
 
             if status == "processed":
                 time.sleep(SLEEP_BETWEEN_BATCHES)
-            elif status == "quota_exhausted":
-                log(f"{mailbox}: quota looks exhausted (>=80% error rate) -- sleeping {QUOTA_BACKOFF_SECONDS}s")
-                time.sleep(QUOTA_BACKOFF_SECONDS)
+            elif status == "backend_unavailable":
+                log(f"{mailbox}: no classifications succeeded -- retrying in {BACKEND_RETRY_SECONDS}s")
+                time.sleep(BACKEND_RETRY_SECONDS)
             elif status == "error":
                 time.sleep(SLEEP_BETWEEN_BATCHES)
 

@@ -225,3 +225,21 @@ inbox before there's been a real chance to see it.
 ## License
 
 MIT — see LICENSE.
+
+### Worker recovery
+
+The continuous worker reads the speed setting each batch: paid for fast
+processing, free for no-cost processing, or auto for a balanced split.
+In paid or auto mode, failed paid classifications retry on the free tier.
+Credit errors or widespread paid failures start a five-minute cooldown,
+then a single-message paid probe checks for recovery at the next batch.
+A successful probe restores the configured mode without changing settings.
+Free-only mode never sends paid requests.
+
+When neither tier can process mail, the worker waits five minutes before
+retrying. Failed messages remain pending. OpenRouter may reject even free
+requests when the account balance is negative; see its
+[credit limits documentation](https://openrouter.ai/docs/api_reference/limits).
+
+Recovery tests run without network or mailbox access:
+`python3 -m unittest discover -s tests -v`.
