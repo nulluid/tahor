@@ -41,8 +41,8 @@ import generate_sieve
 DB_PATH = tahor_db.DB_PATH
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).resolve().parent.parent))
-VENDOR_BUCKETS_PATH = DATA_DIR / "vendor_buckets.json"
-PROMPT_PATH = DATA_DIR / "prompt.txt"
+VENDOR_BUCKETS_PATH = Path(os.environ.get("VENDOR_BUCKETS_PATH", DATA_DIR / "vendor_buckets.json"))
+PROMPT_PATH = Path(os.environ.get("PROMPT_PATH", DATA_DIR / "prompt.txt"))
 
 RULE_DRAFTING_SYSTEM_PROMPT = """You maintain a personal email-sweep pipeline. A free-text instruction from
 the mailbox's owner can call for one of three kinds of change:
@@ -120,7 +120,9 @@ def git(*args):
 
 
 def commit_and_push_data(message):
-    return commit_data(DATA_DIR, message, ["vendor_buckets.json", PROMPT_PATH.name, "sieve.txt", "needs_code_change.md"])
+    paths = [VENDOR_BUCKETS_PATH, PROMPT_PATH, DATA_DIR / "sieve.txt", DATA_DIR / "needs_code_change.md"]
+    relative = [str(path.resolve().relative_to(DATA_DIR.resolve())) for path in paths if path.resolve().is_relative_to(DATA_DIR.resolve())]
+    return commit_data(DATA_DIR, message, relative)
 
 
 def apply_vendor_mapping(row, resolution):

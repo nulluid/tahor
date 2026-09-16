@@ -1,2 +1,2 @@
 -r requirements.txt
-sievelib>=1.5,<2
+sievelib>=1.4.3,<2
