@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 import config
 import tahor_db
 import mailbox_settings
+from mailbox_paths import list_mailboxes, quote_mailbox
 
 CATEGORY_KEYWORDS = ["category-receipt", "category-statement", "category-government-tax"]
 
@@ -53,12 +54,69 @@ def ensure_folder(conn, path, created):
         return
     # LIST rather than SELECT to probe existence — a failed SELECT drops the
     # session out of the selected state, breaking whatever comes after it.
-    typ, data = conn.list('""', f'"{path}"')
+    typ, data = conn.list('""', quote_mailbox(path))
     if typ != "OK" or not data or not data[0]:
-        typ, _ = conn.create(f'"{path}"')
+        typ, _ = conn.create(quote_mailbox(path))
         if typ != "OK":
             raise RuntimeError(f"Could not create filing destination {path!r}")
     created.add(path)
+
+
+
+PROTECTED = ("UNFLAGGED", "UNKEYWORD", "needs-attention", "UNKEYWORD", "retention-pending-review", "UNKEYWORD", "delete-pending")
+CLASSIFIED = ("OR", "KEYWORD", "retention-standard", "OR", "KEYWORD", "retention-transient", "KEYWORD", "retention-forever")
+SPECIAL_FOLDERS = {"inbox", "drafts", "sent", "trash", "spam", "junk", "scheduled", "snoozed"}
+SPECIAL_FLAGS = {"\\drafts", "\\sent", "\\trash", "\\junk", "\\all"}
+
+
+def eligible_uids(conn, criteria):
+    candidates = set()
+    for keyword in CATEGORY_KEYWORDS:
+        typ, data = conn.uid("SEARCH", None, *criteria, "KEYWORD", keyword, *PROTECTED, *CLASSIFIED)
+        if typ != "OK":
+            raise RuntimeError("Filing search failed; retry the sweep")
+        if data and data[0]:
+            candidates.update(data[0].split())
+    return candidates
+
+
+def mark_filed_read(conn, mailbox, dry_run=False):
+    if mailbox.upper() == "INBOX":
+        raise ValueError("Read-state reconciliation must not mark INBOX messages read")
+    typ, _ = conn.select(quote_mailbox(mailbox), readonly=dry_run)
+    if typ != "OK":
+        raise RuntimeError("Could not select filed mailbox")
+    days = mailbox_settings.get_inbox_grace_days()["unread"]
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%d-%b-%Y")
+    criteria = ("UNSEEN", "BEFORE", cutoff) if days else ("UNSEEN",)
+    candidates = sorted(eligible_uids(conn, criteria), key=int)
+    if dry_run:
+        return len(candidates)
+    changed = 0
+    for offset in range(0, len(candidates), 200):
+        batch = candidates[offset:offset + 200]
+        typ, _ = conn.uid("STORE", b','.join(batch).decode(), "+FLAGS.SILENT", "(\\Seen)")
+        if typ != "OK":
+            raise RuntimeError("Could not mark filed mail read; unread messages will be retried")
+        changed += len(batch)
+    return changed
+
+
+def reconcile_filed_mail(conn, dry_run=False):
+    total = failures = 0
+    for name, flags in list_mailboxes(conn):
+        if name.lower() in SPECIAL_FOLDERS or flags & SPECIAL_FLAGS:
+            continue
+        try:
+            changed = mark_filed_read(conn, name, dry_run)
+            total += changed
+            if changed:
+                print(f"{name}: {'would mark' if dry_run else 'marked'} {changed} filed message(s) read")
+        except (RuntimeError, imaplib.IMAP4.error, OSError) as exc:
+            failures += 1
+            print(f"{name}: read-state cleanup failed: {exc}")
+    print(f"Filed-mail read-state cleanup: {total} {'eligible' if dry_run else 'marked read'}, {failures} folder failure(s).")
+    return total, failures
 
 
 def main():
@@ -78,20 +136,11 @@ def main():
 
     read_criteria = ("SEEN", "BEFORE", read_cutoff) if read_min_age > 0 else ("SEEN",)
     unread_criteria = ("UNSEEN", "BEFORE", unread_cutoff) if unread_min_age > 0 else ("UNSEEN",)
-    candidates = set()
-    for kw in CATEGORY_KEYWORDS:
-        for criteria in (read_criteria, unread_criteria):
-            typ, data = conn.uid("SEARCH", None, *criteria, "KEYWORD", kw)
-            if typ != "OK":
-                conn.logout()
-                raise RuntimeError("Filing search failed; no messages moved")
-            if typ == "OK" and data and data[0]:
-                candidates.update(data[0].split())
-
-    if not candidates:
-        print("Nothing to file.")
+    try:
+        candidates = eligible_uids(conn, read_criteria) | eligible_uids(conn, unread_criteria)
+    except Exception:
         conn.logout()
-        return
+        raise
 
     by_dest = defaultdict(list)
     unsorted_labels = set()
@@ -111,7 +160,7 @@ def main():
         by_dest[f"{root}/{bucket}/{vendor}"].append(uid)
 
     capabilities = {c.decode().upper() if isinstance(c, bytes) else c.upper() for c in conn.capabilities}
-    if not dry_run and "MOVE" not in capabilities:
+    if candidates and not dry_run and "MOVE" not in capabilities:
         raise RuntimeError("Filing requires IMAP MOVE to avoid copying or deleting unrelated mail")
     created, total_moved = set(), 0
     for dest, uids in sorted(by_dest.items()):
@@ -119,15 +168,30 @@ def main():
         print(f"{dest}: {verb} {len(uids)} message(s)")
         if dry_run:
             continue
+        typ, _ = conn.select('"INBOX"')
+        if typ != "OK":
+            raise RuntimeError("Could not reselect INBOX")
         ensure_folder(conn, dest, created)
+        moved_here = 0
         for uid in uids:
-            typ, _ = conn.uid("MOVE", uid, f'"{dest}"')
+            typ, _ = conn.uid("MOVE", uid, quote_mailbox(dest))
             if typ == "OK":
                 total_moved += 1
+                moved_here += 1
             else:
                 failures += 1
                 print(f"  FAILED to move uid {uid.decode()} to {dest}")
-    conn.logout()
+        if moved_here:
+            try:
+                mark_filed_read(conn, dest)
+            except (RuntimeError, imaplib.IMAP4.error, OSError) as exc:
+                failures += 1
+                print(f"{dest}: moved mail needs a read-state retry: {exc}")
+    try:
+        _, read_failures = reconcile_filed_mail(conn, dry_run)
+        failures += read_failures
+    finally:
+        conn.logout()
 
     if unsorted_labels:
         print(f"\n{len(unsorted_labels)} unmapped sender(s), add to vendor_buckets.json: {sorted(unsorted_labels)}")

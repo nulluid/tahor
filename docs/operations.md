@@ -161,6 +161,30 @@ New routing choices affect future filing. Existing folders are not silently
 renamed or merged. Explicit trash is deleted without retaining a new sender sample.
 Older forever-tagged samples remain protected.
 
+### Read state after filing
+
+Filing requires a completed classification in a supported category (receipt,
+statement, or government tax), the appropriate read/unread age, and no
+needs-attention, pending-review, delete-pending, or starred flag. These exclusions
+also prevent filing from hiding messages that need attention.
+
+After successful moves to a destination, the sweep marks eligible unread messages
+there read using UID STORE. It never marks a source message read before MOVE, so
+a rejected move leaves the message unread in INBOX. If setting the read flag
+fails, the message remains eligible for retry and the sweep reports failure.
+
+Every filing sweep also reconciles existing folders, even when there is nothing
+to move from INBOX. It uses the same unread age, classification, and attention
+criteria. It preserves classifications and folders and changes only the Seen flag.
+INBOX, Drafts, Sent, Trash, Spam/Junk, Scheduled/Snoozed, and special-use aggregate
+mailboxes are excluded from this backfill. Other existing folders, including
+archives and imported folders, are eligible. Forever retention protects against
+deletion but does not prevent an otherwise eligible filed message being marked read.
+
+`run.py filing --dry-run` previews both moves and read-state changes without writing
+flags. The normal daily filing job performs both operations for new and existing
+installations. Repeated runs leave already-read messages alone.
+
 ## Private data and backups
 
 Treat credentials, prompt customizations, sender rules, drafts, classification

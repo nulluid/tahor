@@ -28,7 +28,7 @@ that should not be left to a model.
 | The routine work | Your control |
 | :--- | :--- |
 | Classify and tag messages in the background | Review ambiguous mail before retention cleanup |
-| Route receipts and statements to useful folders | Choose the vendor’s destination in the app |
+| File routine receipts and statements, then mark them read | Choose the vendor’s destination in the app |
 | Track unsubscribe requests and sender blocks | Keep subscriptions, block marketing, or block a domain |
 | Draft a response when a chosen sender writes | Edit and send it yourself from your mail client |
 | Recover from provider failures | See actual worker progress and retry status |
@@ -188,6 +188,10 @@ small deployment: one mailbox owner and one host, with SQLite and local file loc
 - **Give mail time in the inbox.** Folder moves wait three days for read mail and
   seven days for unread mail by default. Change both in Settings. Categorization
   happens immediately; these delays apply only to filing.
+- **Filed mail should not clutter unread counts.** After a successful folder move,
+  eligible mail is marked read. The same check cleans up qualifying unread mail
+  already in existing folders, including on a new installation. Messages needing
+  attention or review, starred messages, and recent unread mail are left alone.
 - **Trash does not wait to be read.** Messages classified as trash are tagged and
   deleted immediately. Other mail is deleted when its retention period expires,
   whether read or unread. Forever, pending-review, and needs-attention tags protect

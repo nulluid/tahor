@@ -49,6 +49,8 @@ class Mailbox:
                         left = criterion(next(tokens))
                         right = criterion(next(tokens))
                         return left or right
+                    if token == 'UNFLAGGED':
+                        return not row.get('flagged', False)
                     if token == 'SEEN':
                         return row['read']
                     if token == 'UNSEEN':
@@ -67,6 +69,10 @@ class Mailbox:
             return 'OK', [(b'1', b'From: billing@example.com\r\n')]
         if command == 'STORE':
             assert not self.readonly
+            if args[1:] == ('+FLAGS.SILENT', '(\\Seen)'):
+                for uid in str(args[0]).encode().split(b','):
+                    self.rows[uid]['read'] = True
+                return 'OK', []
             assert args[0] in self.rows
             assert args[1:] == ('+FLAGS', '(\\Deleted)')
             return 'OK', []
@@ -133,7 +139,7 @@ class UnreadGraceTests(unittest.TestCase):
         conn = Mailbox({key: row for key, row in self.rows.items() if int(key) < 7})
         conn.rows[b'10'] = message(0, True)
         argv = ['filing_sweep.py'] + (['--dry-run'] if dry_run else [])
-        with patch.dict(os.environ, env, clear=True), patch.object(filing_sweep, 'datetime', FrozenDateTime), patch.object(filing_sweep, 'connect', return_value=conn), patch.object(filing_sweep.config, 'vendor_buckets', return_value={'example.com': ('Shopping', 'Shop')}), patch.object(sys, 'argv', argv):
+        with patch.object(filing_sweep, 'list_mailboxes', return_value=[]), patch.dict(os.environ, env, clear=True), patch.object(filing_sweep, 'datetime', FrozenDateTime), patch.object(filing_sweep, 'connect', return_value=conn), patch.object(filing_sweep.config, 'vendor_buckets', return_value={'example.com': ('Shopping', 'Shop')}), patch.object(sys, 'argv', argv):
             filing_sweep.main()
         return conn
 

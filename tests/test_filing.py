@@ -7,6 +7,11 @@ import filing_sweep
 
 
 class FilingTests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.object(filing_sweep, 'list_mailboxes', return_value=[])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_failed_move_fails_the_scheduled_command(self):
         conn = Mock()
         conn.select.return_value = ('OK', [])
@@ -63,7 +68,8 @@ class FilingTests(unittest.TestCase):
         commands = [call.args[0] for call in conn.uid.call_args_list]
         self.assertIn('MOVE', commands)
         self.assertNotIn('COPY', commands)
-        self.assertNotIn('STORE', commands)
+        self.assertGreater(commands.index('STORE'), commands.index('MOVE'))
+        self.assertEqual(conn.uid.call_args_list[-1].args[-1], '(\\Seen)')
         conn.expunge.assert_not_called()
 
 

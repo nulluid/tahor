@@ -186,6 +186,10 @@ Filing moves eligible receipts, statements, and tax messages into vendor folders
 The default filing delays are three days for read mail and seven for unread mail.
 Change either under **Settings → Time in the inbox**. Classification happens
 immediately, regardless of those delays.
+After a successful move, qualifying unread mail is marked read in its destination.
+The filing sweep also checks existing folders, so first-time installations clean
+up already-filed unread mail using the same rules. It leaves starred messages,
+mail needing attention or review, and unclassified mail untouched.
 Unmapped vendors go under `Filed/_Unsorted` and get a routing decision in the app.
 Saving a routing rule affects future filing; it does not silently relocate older
 messages already filed elsewhere.

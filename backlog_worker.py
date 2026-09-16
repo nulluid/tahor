@@ -41,6 +41,7 @@ import mailbox_settings
 import runtime_status
 import retention_sweep
 from data_changes import atomic_write
+from mailbox_paths import quote_mailbox, list_mailboxes
 
 # PROMPT_PATH can point anywhere, including a separate private repo, if you
 # want your prompt/config to have its own tracked history -- it's just an
@@ -86,42 +87,10 @@ def parse_list_unsubscribe(header_value):
     return url, mailto
 
 
-def quote_mailbox(mailbox):
-    return '"' + mailbox.replace('\\', '\\\\').replace('"', '\\"') + '"'
-
-
 def discover_mailboxes():
     conn = fetch_batch.connect()
     try:
-        typ, rows = conn.list('""', '"*"')
-        if typ != "OK":
-            raise RuntimeError("Mailbox discovery failed")
-        names = []
-        for row in rows or []:
-            if row in (None, b''):
-                continue
-            literal = row[1] if isinstance(row, tuple) else None
-            line = row[0] if isinstance(row, tuple) else row
-            match = re.fullmatch(rb'\(([^)]*)\)\s+(?:NIL|"(?:[^"\\]|\\.)*")\s+(.+)', line)
-            if not match:
-                raise RuntimeError("Unrecognized IMAP LIST response")
-            if b'\\noselect' in match[1].lower().split():
-                continue
-            value = match[2]
-            if literal is not None:
-                value = literal
-            elif value.startswith(b'"') and value.endswith(b'"'):
-                value = re.sub(rb'\\(.)', rb'\1', value[1:-1])
-            elif value.startswith(b'"') or value.startswith(b'{'):
-                raise RuntimeError("Invalid IMAP mailbox name")
-            name = value.decode('ascii')  # Preserve IMAP's modified UTF-7 wire name.
-            if name.upper() == 'INBOX':
-                name = 'INBOX'
-            if name not in names:
-                names.append(name)
-        if not names:
-            raise RuntimeError("No selectable mailboxes discovered")
-        return sorted(names, key=lambda name: (name != 'INBOX', name))
+        return [name for name, flags in list_mailboxes(conn)]
     finally:
         conn.logout()
 
