@@ -40,6 +40,7 @@ script. See prompt.example.txt for the schema this project was built around.
 """
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -153,7 +154,18 @@ def classify_one(url, headers, model, system_prompt, record, retries=3):
                     content = content[4:]
                 content = content.strip()
             parsed = json.loads(content)
-            result = {"id": record["id"], "action": parsed.get("action", "unsure"), "reason": parsed.get("reason", "")}
+            if not isinstance(parsed, dict) or parsed.get("action") not in ("keep", "trash", "mixed"):
+                raise ValueError("Invalid classification action")
+            if parsed.get("action") != "trash":
+                if parsed.get("retention") not in ("transient", "standard", "forever", "pending-review"):
+                    raise ValueError("Invalid retention tier")
+                if not isinstance(parsed.get("category"), str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,40}", parsed["category"]):
+                    raise ValueError("Invalid category")
+                if parsed.get("expense_type") not in ("business", "personal", "n/a", "", None):
+                    raise ValueError("Invalid expense type")
+                if not isinstance(parsed.get("needs_attention"), bool):
+                    raise ValueError("Invalid attention flag")
+            result = {"id": record["id"], "action": parsed["action"], "reason": str(parsed.get("reason", ""))}
             result.update({field: parsed.get(field, "") for field in SCHEMA_FIELDS})
             return result
         except urllib.error.HTTPError as e:

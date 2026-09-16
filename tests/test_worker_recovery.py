@@ -110,6 +110,8 @@ class RecoveryTests(unittest.TestCase):
             root = Path(directory)
             (root / 'current_batch_ops.json').write_text('[]')
             (root / 'current_batch_trash_ids.json').write_text('[]')
+            worker.process_batch.main.return_value = {'0': '0'}
+            worker.keyword_tool.apply_ops.return_value = {'applied': {'0'}, 'failed': set(), 'missing': set()}
             with patch.object(worker, 'REPO', root), patch.object(worker, 'PROCESSED_IDS_PATH', root / 'processed.txt'), patch.object(worker, 'fetch', return_value=self.records), patch.object(worker, 'classify_batch', return_value=(errors(self.records[1:]), ok(self.records[:1]))), patch.object(worker.os, 'chdir'):
                 self.assertEqual(worker.process_one_batch('INBOX'), 'processed')
             self.assertEqual((root / 'processed.txt').read_text(), '0\n')

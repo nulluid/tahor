@@ -48,9 +48,9 @@ def parse_internaldate(s):
 
 def main():
     prefix, mailbox = sys.argv[1], sys.argv[2]
-    inrecs = {r["id"]: r for r in json.load(open(f"{prefix}_in.json"))}
-    outrecs = json.load(open(f"{prefix}_out.json"))
-    envs = json.load(open(f"{prefix}_env.json"))
+    inrecs = {r["id"]: r for r in json.loads(Path(f"{prefix}_in.json").read_text())}
+    outrecs = json.loads(Path(f"{prefix}_out.json").read_text())
+    envs = json.loads(Path(f"{prefix}_env.json").read_text())
 
     for r in outrecs:
         rec = inrecs.get(r["id"])
@@ -85,7 +85,7 @@ def main():
     for items in by_sender.values():
         trashables = [r for r in items if r["action"] == "trash"]
         others = [r for r in items if r["action"] != "trash"]
-        if trashables and not others:
+        if trashables and not others and not any(r.get("reason", "").startswith("sender rule:") for r in trashables):
             trashables.sort(key=lambda r: inrecs[r["id"]]["date"])
             holdback.append(trashables[0])
             trash_final.extend(trashables[1:])
@@ -103,8 +103,11 @@ def main():
         subj_idx[norm(e["subject"])].append(e)
 
     msgids, unmatched = {}, []
-    for r in keep_mixed + holdback:
+    for r in keep_mixed + holdback + trash_final:
         rec = inrecs[r["id"]]
+        if r["id"] in msgid_to_uid:
+            msgids[r["id"]] = r["id"]
+            continue
         cands = idx.get((norm(rec["subject"]), rec["from"].lower()), [])
         if not cands:
             # from_email parse can fail on odd headers; fall back to subject-only.
@@ -120,6 +123,10 @@ def main():
 
     ops = []
     for r in keep_mixed:
+        if r.get("action") == "mixed":
+            r["retention"] = "pending-review"
+        if r.get("retention") == "pending-review" and r["id"] not in unmatched:
+            tahor_db.queue_message_review(mailbox, msgids[r["id"]], inrecs[r["id"]]["subject"])
         if r["id"] in unmatched:
             continue
         add = [f"category-{r.get('category', 'marketing')}", f"retention-{r.get('retention', 'pending-review')}"]
@@ -128,21 +135,27 @@ def main():
         if r.get("needs_attention") is True:
             add.append("needs-attention")
         ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]], "uid": msgid_to_uid.get(msgids[r["id"]]), "add": add})
+    for r in trash_final:
+        if r["id"] not in unmatched:
+            ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]],
+                        "uid": msgid_to_uid.get(msgids[r["id"]]),
+                        "add": ["category-marketing", "retention-transient"]})
     for r in holdback:
         if r["id"] not in unmatched:
             ops.append({
                 "mailbox": mailbox,
                 "message_id": msgids[r["id"]],
+                "uid": msgid_to_uid.get(msgids[r["id"]]),
                 "add": ["retention-forever", f"category-{r.get('category', 'marketing')}"],
             })
 
-    json.dump([r["id"] for r in trash_final], open(f"{prefix}_trash_ids.json", "w"))
-    json.dump(ops, open(f"{prefix}_ops.json", "w"), indent=1)
+    Path(f"{prefix}_trash_ids.json").write_text(json.dumps([r["id"] for r in trash_final]))
+    Path(f"{prefix}_ops.json").write_text(json.dumps(ops, indent=1))
 
     print(f"total={len(outrecs)} trash_final={len(trash_final)} holdback={len(holdback)} "
           f"keep_mixed={len(keep_mixed)} needs_attn={needs_attn} unmatched={len(unmatched)}")
-    for rid in unmatched:
-        print("  UNMATCHED:", rid, inrecs[rid]["subject"], inrecs[rid]["from"], inrecs[rid]["date"])
+    return {op["message_id"]: next((rid for rid, mid in msgids.items() if mid == op["message_id"]), op["message_id"]) for op in ops}
+
 
 
 if __name__ == "__main__":

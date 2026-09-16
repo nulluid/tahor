@@ -86,16 +86,13 @@ def parse_list_unsubscribe(header_value):
 
 def fetch(mailbox, prefix):
     conn = fetch_batch.connect()
-    try:
-        with open(PROCESSED_IDS_PATH) as f:
-            processed = set(line.strip() for line in f if line.strip())
-    except FileNotFoundError:
-        processed = set()
-
     typ, _ = conn.select(f'"{mailbox}"', readonly=True)
     if typ != "OK":
         raise RuntimeError(f"Could not select mailbox {mailbox!r}")
-    typ, data = conn.search(None, "ALL")
+    criteria = ["ALL"]
+    for keyword in sorted(RETENTION_KEYWORDS):
+        criteria.extend(["UNKEYWORD", keyword])
+    typ, data = conn.uid("SEARCH", None, *criteria)
     if typ != "OK":
         raise RuntimeError("SEARCH failed")
     uids = data[0].split()
@@ -108,8 +105,8 @@ def fetch(mailbox, prefix):
             break
         batch = uids[i : i + chunk]
         idset = b",".join(batch).decode()
-        typ, fdata = conn.fetch(
-            idset,
+        typ, fdata = conn.uid(
+            "FETCH", idset,
             "(UID INTERNALDATE FLAGS BODY.PEEK[HEADER.FIELDS "
             "(MESSAGE-ID SUBJECT FROM DATE LIST-UNSUBSCRIBE LIST-UNSUBSCRIBE-POST)] BODY.PEEK[])",
         )
@@ -133,7 +130,7 @@ def fetch(mailbox, prefix):
             import email
             header_msg = email.message_from_bytes(header_bytes)
             message_id = (header_msg.get("Message-ID") or "").strip()
-            if not message_id or message_id in processed:
+            if not message_id:
                 continue
 
             from email.utils import parseaddr, parsedate_to_datetime
@@ -245,7 +242,7 @@ def full_backlog_count(mailboxes):
             criteria = []
             for kw in RETENTION_KEYWORDS:
                 criteria += ["UNKEYWORD", kw]
-            typ, data = conn.search(None, *criteria)
+            typ, data = conn.uid("SEARCH", None, *criteria)
             if typ == "OK":
                 total += len(data[0].split())
     finally:
@@ -376,19 +373,14 @@ def process_one_batch(mailbox):
     try:
         sys.argv = ["process_batch.py", "current_batch", mailbox]
         os.chdir(REPO)
-        process_batch.main()
+        operation_ids = process_batch.main()
     finally:
         sys.argv = old_argv
 
     ops_path = Path(f"{prefix}_ops.json")
     ops = json.loads(ops_path.read_text()) if ops_path.exists() else []
-    if ops:
-        old_argv = sys.argv
-        try:
-            sys.argv = ["keyword_tool.py", f"{prefix}_ops.json"]
-            keyword_tool.main()
-        finally:
-            sys.argv = old_argv
+    applied = keyword_tool.apply_ops(ops)
+    applied_ids = {operation_ids[mid] for mid in applied["applied"] if mid in operation_ids}
 
     trash_ids = json.loads(Path(f"{prefix}_trash_ids.json").read_text())
     if trash_ids:
@@ -402,14 +394,17 @@ def process_one_batch(mailbox):
         log(f"{mailbox}: {len(errored_ids)} message(s) errored, will retry next pass")
     with open(PROCESSED_IDS_PATH, "a") as f:
         for r in records:
-            if r["id"] not in errored_ids:
+            if r["id"] in applied_ids:
                 f.write(r["id"] + "\n")
 
-    mailbox_settings.decrement_backlog_estimate(len(records) - len(errored_ids))
+    mailbox_settings.decrement_backlog_estimate(len(applied_ids))
+    log(f"{mailbox}: {len(applied_ids)} applied, {len(records) - len(applied_ids)} left for retry")
 
     # Judge final outcomes after fallback, including batches smaller than ten.
     # Any successful work keeps the normal cadence; a total outage gets a
     # bounded retry instead of the old two-hour sleep.
+    if not applied_ids and any(r["action"] != "error" for r in results):
+        return "error"
     return batch_status(results)
 
 

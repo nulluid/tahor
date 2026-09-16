@@ -17,6 +17,7 @@ ops.json: a JSON array of
 """
 import imaplib
 import json
+import re
 import sys
 from collections import defaultdict
 
@@ -50,59 +51,61 @@ def find_uid(conn, message_id):
 def store_flags(conn, uid, keywords, sign):
     if not keywords:
         return True
+    if sign not in ("+", "-") or any(not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", keyword) for keyword in keywords):
+        raise ValueError("Invalid IMAP keyword operation")
     typ, _ = conn.uid("STORE", uid, f"{sign}FLAGS", f"({' '.join(keywords)})")
     return typ == "OK"
 
 
-def main():
-    if len(sys.argv) < 2:
-        print(__doc__)
-        sys.exit(1)
-
-    with open(sys.argv[1]) as f:
-        ops = json.load(f)
-
+def apply_ops(ops):
     by_mailbox = defaultdict(list)
     for op in ops:
         by_mailbox[op["mailbox"]].append(op)
-
+    outcome = {"applied": set(), "failed": set(), "missing": set()}
+    if not ops:
+        return outcome
     conn = connect()
-    done = missing = failed = 0
-
     try:
         for mailbox, mailbox_ops in by_mailbox.items():
-            typ, _ = conn.select(f'"{mailbox}"')
+            typ, _ = conn.select('"' + mailbox.replace('\\', '\\\\').replace('"', '\\"') + '"')
             if typ != "OK":
-                print(f"  SKIP mailbox not found: {mailbox} ({len(mailbox_ops)} ops)")
-                failed += len(mailbox_ops)
+                outcome["failed"].update(op["message_id"] for op in mailbox_ops)
                 continue
-
             for op in mailbox_ops:
+                message_id = op["message_id"]
                 try:
-                    uid = op["uid"] if op.get("uid") else find_uid(conn, op["message_id"])
+                    uid = op.get("uid") or find_uid(conn, message_id)
                     if uid is None:
-                        print(f"  NOT FOUND: {op['message_id']} in {mailbox}")
-                        missing += 1
+                        outcome["missing"].add(message_id)
                         continue
-
+                    # Verify UID shortcuts still refer to a message. STORE can
+                    # return OK for a UID removed concurrently by another client.
+                    typ, data = conn.uid("FETCH", uid, "(UID)")
+                    if typ != "OK" or not data or not any(item for item in data if item is not None):
+                        outcome["missing"].add(message_id)
+                        continue
                     ok_add = store_flags(conn, uid, op.get("add", []), "+")
-                    ok_remove = store_flags(conn, uid, op.get("remove", []), "-")
-
-                    if ok_add and ok_remove:
-                        done += 1
-                    else:
-                        print(f"  STORE FAILED: {op['message_id']} in {mailbox}")
-                        failed += 1
-                except (imaplib.IMAP4.error, ValueError) as e:
-                    # One malformed header shouldn't abort the rest of the batch.
-                    print(f"  ERROR: {op['message_id']} in {mailbox}: {e}")
-                    failed += 1
-
-            conn.close()
+                    ok_remove = store_flags(conn, uid, op.get("remove", []), "-") if ok_add else False
+                    outcome["applied" if ok_add and ok_remove else "failed"].add(message_id)
+                except (imaplib.IMAP4.error, ValueError, OSError):
+                    outcome["failed"].add(message_id)
+            # CLOSE expunges unrelated messages already marked Deleted.
+            if hasattr(conn, "unselect"):
+                conn.unselect()
     finally:
         conn.logout()
+    print(f"Done. {len(outcome['applied'])} tagged, {len(outcome['missing'])} not found, {len(outcome['failed'])} failed.")
+    return outcome
 
-    print(f"\nDone. {done} tagged, {missing} not found, {failed} failed.")
+
+def main():
+    if len(sys.argv) < 2:
+        raise SystemExit(__doc__)
+    with open(sys.argv[1]) as source:
+        outcome = apply_ops(json.load(source))
+    if outcome["failed"] or outcome["missing"]:
+        raise SystemExit(1)
+    return outcome
 
 
 if __name__ == "__main__":
