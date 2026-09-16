@@ -1,5 +1,6 @@
 """Recovery tests use fake backends; no mailbox or network access."""
 import importlib.util
+import io
 import os
 from pathlib import Path
 import sys
@@ -130,7 +131,7 @@ class RecoveryTests(unittest.TestCase):
 
 class ClassifierTests(unittest.TestCase):
     def test_402_returns_status_without_repeating_request(self):
-        error = urllib.error.HTTPError('https://example.invalid', 402, 'Payment Required', {}, None)
+        error = urllib.error.HTTPError('https://example.invalid', 402, 'Payment Required', {}, io.BytesIO(b''))
         with patch.object(classifier.urllib.request, 'urlopen', side_effect=error) as request:
             result = classifier.classify_one('https://example.invalid', {}, 'test', 'test', {'id': '1'})
         self.assertEqual(result['action'], 'error')

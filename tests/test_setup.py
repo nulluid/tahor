@@ -16,6 +16,7 @@ import run
 import doctor
 import fetch_batch
 import tahor_db
+import mailbox_settings
 
 
 class SetupTests(unittest.TestCase):
@@ -29,7 +30,7 @@ class SetupTests(unittest.TestCase):
             conn = Mock(capabilities=('IMAP4REV1', 'MOVE', 'UIDPLUS'))
             conn.select.return_value = ('OK', [])
             values = dict(FASTMAIL_EMAIL='owner@example.com', FASTMAIL_APP_PASSWORD='fake', OPENROUTER_API_KEY='fake', DATA_DIR=directory, TAHOR_DB_PATH=str(root / 'test.db'), PROMPT_PATH=str(prompt), VENDOR_BUCKETS_PATH=str(mapping))
-            with patch.dict(os.environ, values, clear=True), patch.object(sys, 'argv', ['doctor.py', '--check-imap']), patch.object(tahor_db, 'init_db'), patch.object(fetch_batch, 'connect', return_value=conn):
+            with patch.dict(os.environ, values, clear=True), patch.object(sys, 'argv', ['doctor.py', '--check-imap']), patch.object(tahor_db, 'init_db'), patch.object(mailbox_settings, 'get_classify_mode', return_value='free'), patch.object(fetch_batch, 'connect', return_value=conn):
                 self.assertEqual(doctor.main(), 0)
             conn.select.assert_called_once_with('"INBOX"', readonly=True)
             conn.logout.assert_called_once()
