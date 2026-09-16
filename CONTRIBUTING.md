@@ -15,13 +15,14 @@ sender lists, prompts, credentials, or production screenshots to a pull request.
 A mailbox mutation needs a test for failure and retry as well as success.
 
 Keep classification, tagging, filing, and retention independently testable.
-Preserve the unread-mail retention exclusion and the rule that drafts are never
-sent automatically. Changes to IMAP writes should identify exactly which UIDs can
+Preserve configurable filing delays (read: three days, unread: seven days) without
+using them to delay classification or deletion. Drafts are never sent automatically. Changes to IMAP writes should identify exactly which UIDs can
 be changed and how partial failure is handled.
 
 For UI changes, test authenticated and unauthenticated requests, form-token checks,
 invalid input, and the actual persisted outcome. Refresh synthetic screenshots
-with `scripts/capture_screenshots.py` when visible behavior changes.
+with `scripts/capture_screenshots.py` when visible behavior changes, inspect the
+resulting images, and update any affected README claims in the same change.
 
 For setup changes, test a fresh temporary instance and a repeated setup that must
 preserve existing private data. Update the configuration reference and explain

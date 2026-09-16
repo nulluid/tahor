@@ -91,8 +91,12 @@ def apply_ops(ops):
                         continue
                     ok_add = store_flags(conn, uid, op.get("add", []), "+")
                     ok_remove = store_flags(conn, uid, op.get("remove", []), "-") if ok_add else False
+                    if ok_add and ok_remove and op.get("delete"):
+                        import retention_sweep
+                        _, deleted = retention_sweep.delete_uids(conn, [uid], False)
+                        ok_remove = deleted == 1
                     outcome["applied" if ok_add and ok_remove else "failed"].add(message_id)
-                except (imaplib.IMAP4.error, ValueError, OSError):
+                except (imaplib.IMAP4.error, ValueError, OSError, RuntimeError):
                     outcome["failed"].add(message_id)
             # CLOSE expunges unrelated messages already marked Deleted.
             if hasattr(conn, "unselect"):

@@ -5,7 +5,7 @@
 ## Know what is running
 
 The continuous worker classifies and tags every selectable folder, with no size limit.
-It checks INBOX between other folders and rediscovers folders on each pass. It does not run retention or
+It checks INBOX between other folders and rediscovers folders on each pass. It deletes explicit trash immediately but does not run age-based retention or
 filing itself. Reply drafting has its own watcher. The web app reads the same
 SQLite database and settings file; its Status page reports the worker’s actual
 last batch rather than inferring health from the selected speed.
@@ -117,12 +117,29 @@ budget separately if you need one.
 | :--- | :--- |
 | `RETENTION_TRANSIENT_DAYS` | 7 |
 | `RETENTION_STANDARD_DAYS` | 1095 |
-| `FILING_READ_MIN_AGE_DAYS` | 7 |
-| `FILING_UNREAD_MIN_AGE_DAYS` | 30 |
+| `FILING_READ_MIN_AGE_DAYS` | 3 (legacy fallback) |
+| `FILING_UNREAD_MIN_AGE_DAYS` | 7 (legacy fallback) |
 | `FILING_ROOT` | `Filed` |
 
-Forever, pending-review, and needs-attention tags exclude messages from retention.
-Retention selects only read mail. The reference skip list is `Trash`, `Spam`,
+Use **Settings → Time in the inbox** to configure the read and unread filing
+delays. Defaults are three and seven days respectively; zero allows immediate
+filing. Saved settings override the legacy environment variables and take effect
+on the next sweep without restarting. These delays run from internal delivery
+date, not from when a message was read. IMAP date searches are conservative and
+can add up to one day at the boundary.
+
+Filing grace protects only against moving between folders. It never postpones
+classification, trash deletion, or ordinary retention. Both read and unread mail
+are eligible for deletion when their retention period expires. Forever,
+pending-review, and needs-attention tags exclude messages from retention cleanup.
+
+The worker tags explicit trash with `delete-pending`, then deletes that exact UID.
+The marker survives failed deletion and is retried on the next visit to the folder.
+It no longer keeps a new sample from each trash sender. Existing messages already
+marked forever remain protected. Older trash classifications without the new marker
+continue through normal retention; a transient tag alone does not imply explicit trash.
+
+The reference skip list is `Trash`, `Spam`,
 `Sent`, `Drafts`, and `Archive`; it does not empty Trash. Mailbox names and special
 folders vary across providers, so review the list in `retention_sweep.py` for yours.
 
@@ -141,10 +158,8 @@ read for compatibility. For example:
 ```
 
 New routing choices affect future filing. Existing folders are not silently
-renamed or merged. When every message from a sender in a classification batch is
-trash, one sample is retained forever and recorded only after successful tagging.
-Later batches reuse that record instead of preserving another sample. Explicit
-sender blocks bypass the holdback. Older forever-tagged samples remain protected.
+renamed or merged. Explicit trash is deleted without retaining a new sender sample.
+Older forever-tagged samples remain protected.
 
 ## Private data and backups
 

@@ -3,7 +3,8 @@
 File already-classified mail out of the inbox once it's had a fair chance
 to be seen: read and older than FILING_READ_MIN_AGE_DAYS, or still unread
 past FILING_UNREAD_MIN_AGE_DAYS. Filing this on arrival would mean it's
-never seen at all, so both gates default to a grace period rather than zero.
+never seen at all. The configurable defaults are three days for read mail
+and seven days for unread mail.
 
 Usage:
   python3 filing_sweep.py [--dry-run]
@@ -22,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 
 import config
 import tahor_db
+import mailbox_settings
 
 CATEGORY_KEYWORDS = ["category-receipt", "category-statement", "category-government-tax"]
 
@@ -63,8 +65,8 @@ def main():
     dry_run = "--dry-run" in sys.argv
     buckets = config.vendor_buckets()
     root = config.filing_root()
-    read_min_age = config.filing_min_age_days("read", 7)
-    unread_min_age = config.filing_min_age_days("unread", 30)
+    grace = mailbox_settings.get_inbox_grace_days()
+    read_min_age, unread_min_age = grace["read"], grace["unread"]
 
     conn = connect()
     typ, _ = conn.select('"INBOX"', readonly=dry_run)
@@ -74,9 +76,11 @@ def main():
     read_cutoff = (datetime.now(timezone.utc) - timedelta(days=read_min_age)).strftime("%d-%b-%Y")
     unread_cutoff = (datetime.now(timezone.utc) - timedelta(days=unread_min_age)).strftime("%d-%b-%Y")
 
+    read_criteria = ("SEEN", "BEFORE", read_cutoff) if read_min_age > 0 else ("SEEN",)
+    unread_criteria = ("UNSEEN", "BEFORE", unread_cutoff) if unread_min_age > 0 else ("UNSEEN",)
     candidates = set()
     for kw in CATEGORY_KEYWORDS:
-        for criteria in (("SEEN", "BEFORE", read_cutoff), ("UNSEEN", "BEFORE", unread_cutoff)):
+        for criteria in (read_criteria, unread_criteria):
             typ, data = conn.uid("SEARCH", None, *criteria, "KEYWORD", kw)
             if typ != "OK":
                 conn.logout()

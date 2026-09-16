@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
 Turn one batch's classification output into the two files the rest of the
-pipeline needs: a trash list and a keyword_tool.py ops file. Also applies a
-"keep one message per sender" rule so a sender that's 100% trash this batch
-still leaves one dated record behind, tagged retention-forever.
+pipeline needs: a trash list and a keyword_tool.py ops file. Trash operations
+apply classification tags before deleting the targeted message.
 
 Also enforces standing sender rules from the unsubscribe page and records unsubscribe candidates.
 
@@ -86,21 +85,7 @@ def main():
                 is_marketing=classifications.get(e.get("message_id"), {}).get("category") == "marketing",
             )
 
-    by_sender = defaultdict(list)
-    for r in outrecs:
-        if r["id"] in inrecs:
-            by_sender[inrecs[r["id"]]["from"]].append(r)
-
-    trash_final, holdback = [], []
-    for sender, items in by_sender.items():
-        trashables = [r for r in items if r["action"] == "trash"]
-        others = [r for r in items if r["action"] != "trash"]
-        if trashables and not others and not tahor_db.has_sender_sample(sender) and not any(r.get("reason", "").startswith("sender rule:") for r in trashables):
-            trashables.sort(key=lambda r: inrecs[r["id"]]["date"])
-            holdback.append(trashables[0])
-            trash_final.extend(trashables[1:])
-        else:
-            trash_final.extend(trashables)
+    trash_final = [r for r in outrecs if r["id"] in inrecs and r["action"] == "trash"]
 
     keep_mixed = [r for r in outrecs if r["id"] in inrecs and r["action"] in ("keep", "mixed")]
     needs_attn = sum(1 for r in keep_mixed if r.get("needs_attention") is True)
@@ -114,7 +99,7 @@ def main():
         subj_idx[norm(e["subject"])].append(e)
 
     msgids, unmatched = {}, []
-    for r in keep_mixed + holdback + trash_final:
+    for r in keep_mixed + trash_final:
         rec = inrecs[r["id"]]
         if r["id"] in msgid_to_uid:
             msgids[r["id"]] = r["id"]
@@ -150,17 +135,8 @@ def main():
     for r in trash_final:
         if r["id"] not in unmatched:
             ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]],
-                        "uid": msgid_to_uid.get(msgids[r["id"]]),
-                        "add": ["category-marketing", "retention-transient"]})
-    for r in holdback:
-        if r["id"] not in unmatched:
-            ops.append({
-                "mailbox": mailbox,
-                "message_id": msgids[r["id"]],
-                "uid": msgid_to_uid.get(msgids[r["id"]]),
-                "sample_sender": inrecs[r["id"]]["from"],
-                "add": ["retention-forever", f"category-{r.get('category', 'marketing')}"],
-            })
+                        "uid": msgid_to_uid.get(msgids[r["id"]]), "delete": True,
+                        "add": [f"category-{r.get('category', 'marketing')}", "retention-transient", "delete-pending"]})
 
     for op in ops:
         validity = envelopes_by_id[op["message_id"]].get("uidvalidity")
@@ -169,7 +145,7 @@ def main():
     Path(f"{prefix}_trash_ids.json").write_text(json.dumps([r["id"] for r in trash_final]))
     Path(f"{prefix}_ops.json").write_text(json.dumps(ops, indent=1))
 
-    print(f"total={len(outrecs)} trash_final={len(trash_final)} holdback={len(holdback)} "
+    print(f"total={len(outrecs)} trash_final={len(trash_final)} "
           f"keep_mixed={len(keep_mixed)} needs_attn={needs_attn} unmatched={len(unmatched)}")
     return {op["message_id"]: next((rid for rid, mid in msgids.items() if mid == op["message_id"]), op["message_id"]) for op in ops}
 

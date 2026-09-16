@@ -54,9 +54,9 @@ and reply drafting, plus a Status page showing the last successful batch.
 <details>
 <summary>See model controls and live worker status</summary>
 
-| Choose the speed and models | See whether work is progressing |
+| Choose models and inbox timing | See whether work is progressing |
 | :---: | :---: |
-| ![Classification, rule, and reply model settings](docs/screenshots/settings.png) | ![Worker progress and last successful batch](docs/screenshots/status.png) |
+| ![Model settings and configurable read/unread inbox timing](docs/screenshots/settings.png) | ![Worker progress and last successful batch](docs/screenshots/status.png) |
 
 </details>
 
@@ -86,8 +86,8 @@ venv/bin/python run.py worker
 ```
 
 The check uses a read-only mailbox connection and a synthetic model request.
-The worker applies classification tags. Filing and deletion run separately;
-they are not started by this command.
+The worker applies classification tags and deletes messages classified as trash.
+Folder filing and age-based retention cleanup run as separate scheduled jobs.
 
 **For the complete setup:** [web login, unattended services, safe sweep previews,
 and HTTPS](docs/setup.md). Google OAuth and your mailbox/provider credentials
@@ -153,8 +153,9 @@ Messages without a Message-ID use a local identity derived from the mailbox and
 UID. Before applying saved UID operations, Tahor checks the mailbox’s UIDVALIDITY
 value so a reset cannot redirect an old operation to a different message.
 
-**Classification, filing, and deletion are separate operations.** This makes it
-possible to inspect tags and preview sweeps before enabling mailbox changes.
+**Filing and retention have their own scheduled sweeps.** You can preview both
+before enabling them. The worker applies classifications immediately and deletes
+explicit trash after its tags are saved. Failed deletions retain a retry marker.
 The pipeline uses Python’s standard library; the optional web app adds Flask,
 requests, and Gunicorn. SQLite holds review decisions and draft state. No broker,
 external database, or frontend build is required.
@@ -164,7 +165,7 @@ external database, or frontend build is required.
 | `backlog_worker.py` | Fetch, classify, recover from backend failures, and apply tags |
 | `process_batch.py` / `keyword_tool.py` | Enforce sender rules and track confirmed mailbox writes |
 | `filing_sweep.py` | Move aged receipts, statements, and tax mail with IMAP `MOVE` |
-| `retention_sweep.py` | Delete only eligible read messages using targeted UID expunge |
+| `retention_sweep.py` | Delete expired mail and retry pending trash deletion with targeted UID expunge |
 | `decision-app/` | Review decisions, apply rules, manage subscriptions and model settings |
 | `draft_replies.py` | Prepare recoverable, thread-aware drafts for configured senders |
 | `runtime_status.py` | Share worker progress with the app and health-check command |
@@ -184,9 +185,13 @@ small deployment: one mailbox owner and one host, with SQLite and local file loc
 
 ## Boundaries that matter
 
-- **Unread mail is excluded from retention deletion.** Forever, pending-review,
-  and needs-attention messages are protected as well. Filing can move unread
-  messages after its longer grace period; moving and deleting are distinct.
+- **Give mail time in the inbox.** Folder moves wait three days for read mail and
+  seven days for unread mail by default. Change both in Settings. Categorization
+  happens immediately; these delays apply only to filing.
+- **Trash does not wait to be read.** Messages classified as trash are tagged and
+  deleted immediately. Other mail is deleted when its retention period expires,
+  whether read or unread. Forever, pending-review, and needs-attention tags protect
+  messages from retention cleanup.
 - **Reply drafts are never sent automatically.** A stable draft Message-ID lets
   retries recover an interrupted save without intentionally appending another copy.
 - **Uncertain mail stays reviewable.** Ambiguous classifications receive a

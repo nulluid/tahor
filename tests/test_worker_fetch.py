@@ -32,6 +32,12 @@ class WorkerFetchTests(unittest.TestCase):
             envelope = json.loads(Path(prefix + '_env.json').read_text())[0]
             self.assertEqual(envelope['uid'], '42')
             self.assertEqual(envelope['uidvalidity'], '100')
+        search = next(call.args for call in conn.uid.call_args_list if call.args[0] == 'SEARCH')
+        for gate in ('SEEN', 'UNSEEN', 'BEFORE', 'SINCE'):
+            self.assertNotIn(gate, search)
+        fetch = next(call.args for call in conn.uid.call_args_list if call.args[0] == 'FETCH')
+        self.assertIn('BODY.PEEK[]', fetch[2])
+        conn.select.assert_called_once_with('"INBOX"', readonly=True)
         conn.search.assert_not_called()
         conn.fetch.assert_not_called()
         conn.logout.assert_called_once()

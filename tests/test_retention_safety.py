@@ -35,11 +35,11 @@ class RetentionSafetyTests(unittest.TestCase):
         conn.close.assert_not_called()
         conn.expunge.assert_not_called()
 
-    def test_only_targeted_read_unprotected_messages_deleted(self):
+    def test_only_targeted_eligible_unprotected_messages_deleted(self):
         conn = self.connection()
         self.assertEqual(retention_sweep.sweep_mailbox(conn, 'INBOX', 'retention-transient', 7, False), (1, 1))
         search = conn.uid.call_args_list[0].args
-        for item in ('SEEN', 'retention-forever', 'retention-pending-review', 'needs-attention'):
+        for item in ('retention-forever', 'retention-pending-review', 'needs-attention'):
             self.assertIn(item, search)
         self.assertEqual(conn.uid.call_args_list[-1].args, ('EXPUNGE', b'42'))
         conn.expunge.assert_not_called()

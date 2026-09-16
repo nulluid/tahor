@@ -39,6 +39,7 @@ import process_batch
 import keyword_tool
 import mailbox_settings
 import runtime_status
+import retention_sweep
 from data_changes import atomic_write
 
 # PROMPT_PATH can point anywhere, including a separate private repo, if you
@@ -439,12 +440,31 @@ def _classify_batch(records, mode):
     return free_results, paid_results
 
 
+def delete_pending_trash(mailbox):
+    conn = retention_sweep.connect()
+    try:
+        found, deleted = retention_sweep.sweep_trash(conn, mailbox)
+        if found != deleted:
+            raise RuntimeError("Trash deletion incomplete; pending tags retained for retry")
+        if deleted:
+            log(f"{mailbox}: deleted {deleted} message(s) classified as trash")
+    finally:
+        conn.logout()
+
+
 def process_one_batch(mailbox):
     prefix = str(STATE_DIR / "current_batch")
     runtime_status.write_status("fetching", mailbox=mailbox)
+    trash_error = None
+    try:
+        delete_pending_trash(mailbox)
+    except Exception as exc:
+        trash_error = str(exc)
+        log(f"{mailbox}: trash cleanup failed; will retry: {exc!r}")
+        runtime_status.write_status("error", error=trash_error[:200])
     records = fetch(mailbox, prefix)
     if not records:
-        return "empty"
+        return "error" if trash_error else "empty"
 
     mode = mailbox_settings.get_classify_mode()
     log(f"{mailbox}: classify_mode={mode}, classifying {len(records)} message(s)")
@@ -472,10 +492,6 @@ def process_one_batch(mailbox):
     for operation in ops:
         if operation.get("sample_sender") and operation["message_id"] in applied["applied"]:
             process_batch.tahor_db.record_sender_sample(operation["sample_sender"], operation["message_id"])
-
-    trash_ids = json.loads(Path(f"{prefix}_trash_ids.json").read_text())
-    if trash_ids:
-        log(f"{mailbox}: {len(trash_ids)} message(s) marked for trash -- NOT deleted (handled by retention_sweep.py separately)")
 
     # Only mark real classifications as done -- an "error" result (e.g. a
     # rate-limited request that exhausted its retries) should be retried in

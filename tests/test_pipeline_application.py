@@ -27,6 +27,34 @@ class PipelineTests(unittest.TestCase):
         conn.expunge.assert_not_called()
         conn.logout.assert_called_once()
 
+    def test_trash_is_tagged_then_deleted_by_uid_without_global_expunge(self):
+        conn = Mock()
+        conn.capabilities = (b'UIDPLUS',)
+        conn.select.return_value = ('OK', [])
+        conn.uid.side_effect = [('OK', [b'1 (UID 1)']), ('OK', []), ('OK', []), ('OK', [])]
+        op = dict(mailbox='INBOX', uid='1', message_id='trash', add=['category-marketing', 'delete-pending'], delete=True)
+        with patch.object(keyword_tool, 'connect', return_value=conn):
+            result = keyword_tool.apply_ops([op])
+        self.assertEqual(result['applied'], {'trash'})
+        self.assertEqual([call.args[0] for call in conn.uid.call_args_list], ['FETCH', 'STORE', 'STORE', 'EXPUNGE'])
+        self.assertIn('delete-pending', conn.uid.call_args_list[1].args[-1])
+        self.assertEqual(conn.uid.call_args_list[-1].args, ('EXPUNGE', '1'))
+        conn.expunge.assert_not_called()
+        conn.close.assert_not_called()
+
+    def test_failed_trash_deletion_leaves_retry_tag_and_reports_failure(self):
+        conn = Mock()
+        conn.capabilities = (b'UIDPLUS',)
+        conn.select.return_value = ('OK', [])
+        conn.uid.side_effect = [('OK', [b'1 (UID 1)']), ('OK', []), ('OK', []), ('NO', []), ('OK', [])]
+        op = dict(mailbox='INBOX', uid='1', message_id='trash', add=['delete-pending'], delete=True)
+        with patch.object(keyword_tool, 'connect', return_value=conn):
+            result = keyword_tool.apply_ops([op])
+        self.assertEqual(result['failed'], {'trash'})
+        self.assertFalse(result['applied'])
+        self.assertEqual(conn.uid.call_args_list[-1].args, ('STORE', '1', '-FLAGS', '(\\Deleted)'))
+        self.assertFalse(any('delete-pending' in call.args[-1] and call.args[2] == '-FLAGS' for call in conn.uid.call_args_list if call.args[0] == 'STORE'))
+
     def test_invalid_keyword_cannot_inject_imap_flags(self):
         conn = Mock()
         with self.assertRaises(ValueError):
@@ -47,8 +75,9 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(len(ops), 3)
             self.assertEqual(mapping, {'0': '0', '1': '1', '2': '2'})
             self.assertEqual({op['uid'] for op in ops}, {'10', '11', '12'})
-            self.assertEqual(sum('retention-transient' in op['add'] for op in ops), 2)
-            self.assertEqual(sum('retention-forever' in op['add'] for op in ops), 1)
+            self.assertEqual(sum('retention-transient' in op['add'] for op in ops), 3)
+            self.assertTrue(all(op['delete'] and 'delete-pending' in op['add'] for op in ops))
+            self.assertFalse(any('retention-forever' in op['add'] for op in ops))
             with patch.object(sys, 'argv', ['process_batch.py', prefix, 'INBOX']), patch.object(process_batch.tahor_db, 'get_sender_rule', return_value=None), patch.object(process_batch.tahor_db, 'has_sender_sample', return_value=True):
                 process_batch.main()
             later_ops = json.loads(Path(prefix + '_ops.json').read_text())

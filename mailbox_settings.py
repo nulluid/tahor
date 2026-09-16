@@ -377,3 +377,28 @@ def decide_backend_split(remaining_count, recent_free_rate_msgs_per_sec, batch_s
     paid_count = max(0, min(batch_size, round(batch_size * paid_fraction)))
     free_count = batch_size - paid_count
     return free_count, paid_count
+
+
+def get_inbox_grace_days():
+    settings = load_settings()
+    result = {}
+    for status, default in (("read", 3), ("unread", 7)):
+        value = settings.get(f"inbox_{status}_days", os.environ.get(f"FILING_{status.upper()}_MIN_AGE_DAYS", default))
+        try:
+            days = int(value)
+        except (TypeError, ValueError):
+            days = default
+        result[status] = days if 0 <= days <= 3650 else default
+    return result
+
+
+@locked_update
+def set_inbox_grace_days(read_days, unread_days):
+    values = {}
+    for status, raw in (("read", read_days), ("unread", unread_days)):
+        if not str(raw).isascii() or not str(raw).isdigit() or not 0 <= int(raw) <= 3650:
+            raise ValueError("Enter a whole number of days between 0 and 3650.")
+        values[f"inbox_{status}_days"] = int(raw)
+    settings = load_settings()
+    settings.update(values)
+    save_settings(settings)

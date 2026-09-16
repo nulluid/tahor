@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Delete mail whose retention window has passed, but only once it's been
-read. Unread mail is never touched regardless of age or tier.
+Delete expired mail regardless of read status. Filing grace does not
+delay retention or deletion of messages explicitly classified as trash.
 
 Usage:
   python3 retention_sweep.py [--dry-run]
@@ -50,15 +50,29 @@ def sweep_mailbox(conn, path, keyword, cutoff_days, dry_run):
     if typ != "OK":
         raise RuntimeError("Retention could not select a mailbox")
 
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=cutoff_days)).strftime("%d-%b-%Y")
-    typ, data = conn.uid("SEARCH", None, "SEEN", "BEFORE", cutoff, "KEYWORD", keyword, "UNKEYWORD", "retention-forever", "UNKEYWORD", "retention-pending-review", "UNKEYWORD", "needs-attention")
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=cutoff_days)).strftime("%d-%b-%Y")
+    typ, data = conn.uid("SEARCH", None, "BEFORE", cutoff, "KEYWORD", keyword, "UNKEYWORD", "retention-forever", "UNKEYWORD", "retention-pending-review", "UNKEYWORD", "needs-attention")
     if typ != "OK":
         raise RuntimeError("Retention search failed; no messages changed in this pass")
     if not data or not data[0]:
         return 0, 0
 
-    uids = data[0].split()
-    if dry_run:
+    return delete_uids(conn, data[0].split(), dry_run)
+
+
+def sweep_trash(conn, path, dry_run=False):
+    typ, _ = conn.select('"' + path.replace('\\', '\\\\').replace('"', '\\"') + '"', readonly=dry_run)
+    if typ != "OK":
+        raise RuntimeError("Trash cleanup could not select a mailbox")
+    typ, data = conn.uid("SEARCH", None, "KEYWORD", "delete-pending", "UNKEYWORD", "retention-forever", "UNKEYWORD", "retention-pending-review", "UNKEYWORD", "needs-attention")
+    if typ != "OK":
+        raise RuntimeError("Trash cleanup search failed")
+    return delete_uids(conn, data[0].split() if data and data[0] else [], dry_run)
+
+
+def delete_uids(conn, uids, dry_run):
+    if dry_run or not uids:
         return len(uids), 0
 
     capabilities = {c.decode().upper() if isinstance(c, bytes) else c.upper() for c in conn.capabilities}
@@ -87,7 +101,7 @@ def main():
             found, deleted = sweep_mailbox(conn, path, keyword, days, dry_run)
             if found:
                 verb = "would delete" if dry_run else "deleted"
-                print(f"{path}: {found} matched '{keyword}' (>{days}d, read) — {verb} {deleted if not dry_run else found}")
+                print(f"{path}: {found} matched '{keyword}' (>{days}d) — {verb} {deleted if not dry_run else found}")
                 grand_found += found
                 grand_deleted += deleted
 

@@ -84,7 +84,8 @@ so it can resume. It discovers all selectable folders, including archives, impor
 mail, Sent, Drafts, Spam, and Trash, with no folder-size ceiling. Each folder gets
 one bounded batch per pass, with INBOX checked between folders. Folder discovery
 repeats every pass so newly created folders join automatically. Classification
-adds tags; filing and retention remain separate scheduled operations.
+adds tags immediately and deletes explicit trash; filing and age-based retention
+remain separate scheduled operations.
 
 Each batch combines recent arrivals with a rotating portion of older unclassified
 mail. Failed messages remain eligible for retry without blocking older messages.
@@ -182,15 +183,19 @@ venv/bin/python run.py retention --dry-run
 ```
 
 Filing moves eligible receipts, statements, and tax messages into vendor folders.
-Read messages have a seven-day grace period; unread messages have thirty days.
+The default filing delays are three days for read mail and seven for unread mail.
+Change either under **Settings → Time in the inbox**. Classification happens
+immediately, regardless of those delays.
 Unmapped vendors go under `Filed/_Unsorted` and get a routing decision in the app.
 Saving a routing rule affects future filing; it does not silently relocate older
 messages already filed elsewhere.
 
-Retention permanently deletes eligible **read** messages. It protects forever,
+Retention permanently deletes expired messages, whether read or unread. Filing
+delays do not postpone deletion. The worker deletes explicit trash immediately.
+Retention protects forever,
 pending-review, and needs-attention messages, and skips the folders listed in
 [operations](operations.md#retention-and-filing). Its age is based on the mailbox’s
-internal delivery date, not the date Tahor classified the message. Old read mail
+internal delivery date, not the date Tahor classified the message. Old mail, read or unread,
 can therefore be eligible on the first sweep.
 
 When the previews match your intent:

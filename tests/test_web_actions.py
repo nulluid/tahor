@@ -4,6 +4,20 @@ from test_web_security import AppTestCase
 
 
 class WebActionTests(AppTestCase):
+    def test_inbox_timing_saves_both_values_and_rejects_invalid_updates(self):
+        settings = self.module.mailbox_settings
+        original = settings.load_settings()
+        self.addCleanup(settings.save_settings, original)
+        self.assertEqual(self.post('/settings', inbox_grace='1', inbox_read_days='3', inbox_unread_days='7').status_code, 302)
+        self.assertEqual(settings.get_inbox_grace_days(), {'read': 3, 'unread': 7})
+        page = self.client.get('/settings').get_data(as_text=True)
+        self.assertIn('Save inbox timing', page)
+        for invalid in ('-1', '1.5', 'abc', '3651', ''):
+            self.assertEqual(self.post('/settings', inbox_grace='1', inbox_read_days='12', inbox_unread_days=invalid).status_code, 400)
+            self.assertEqual(settings.get_inbox_grace_days(), {'read': 3, 'unread': 7})
+        settings.record_free_batch(10, 5)
+        self.assertEqual(settings.get_inbox_grace_days(), {'read': 3, 'unread': 7})
+
     def test_successful_unsubscribe_records_request_time(self):
         self.module.tahor_db.upsert_unsubscribe_candidate('example.com', '', '', 'https://example.com/unsubscribe', None, True)
         row = self.module.tahor_db.get_unsubscribe_candidate('example.com')
@@ -156,6 +170,7 @@ class WebActionTests(AppTestCase):
                 self.assertEqual(self.post(f'/resolve/{id}', action=action).status_code, 302)
             operation = apply.call_args.args[0][0]
             self.assertIn(keyword, operation['add'])
+            self.assertEqual(operation['delete'], action == 'trash')
             self.assertIn('retention-pending-review', operation['remove'])
 
     def test_sieve_dismissal_does_not_resolve_unrelated_decision(self):

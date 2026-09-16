@@ -248,11 +248,11 @@ def apply_one(decision_id):
                 action = resolution.get("action")
                 if action not in ("keep", "trash"):
                     raise ValueError("Choose Keep or Trash for this message")
-                add = ["retention-standard"] if action == "keep" else ["retention-transient", "category-marketing"]
-                result = keyword_tool.apply_ops([{"mailbox": context["mailbox"], "message_id": context["message_id"], "uid": context.get("uid"), "uidvalidity": context.get("uidvalidity"), "add": add, "remove": ["retention-pending-review", "needs-attention"]}])
+                add = ["retention-standard"] if action == "keep" else ["retention-transient", "category-marketing", "delete-pending"]
+                result = keyword_tool.apply_ops([{"mailbox": context["mailbox"], "message_id": context["message_id"], "uid": context.get("uid"), "uidvalidity": context.get("uidvalidity"), "add": add, "delete": action == "trash", "remove": ["retention-pending-review", "needs-attention"] + (["delete-pending"] if action == "keep" else [])}])
                 if context["message_id"] not in result["applied"]:
-                    raise RuntimeError("Message could not be tagged; it remains available for retry")
-                outcome = "Message kept" if action == "keep" else "Message marked for retention cleanup once read"
+                    raise RuntimeError("Message operation could not be completed; it remains available for retry")
+                outcome = "Message kept" if action == "keep" else "Message deleted"
             else:
                 raise ValueError("This decision needs manual review; no mailbox action was applied")
             commit_and_push_data("apply mailbox decision")

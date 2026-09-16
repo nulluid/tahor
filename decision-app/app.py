@@ -298,7 +298,8 @@ STYLE_BLOCK = """
   .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
   .fields select { grid-column: 1 / -1; }
   .actions { display: flex; flex-wrap: wrap; gap: 8px; }
-  select, input[type=text], textarea {
+  .fields label { display: grid; gap: 8px; }
+  select, input[type=text], input[type=number], textarea {
     width: 100%;
     background: var(--well);
     color: var(--ink);
@@ -423,6 +424,18 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
     {mode_cards}
   </div>
 </form>
+<section>
+<h2>Time in the inbox</h2>
+<p class="hint">Keep read and unread messages in the inbox before filing them into folders. These delays run from delivery and do not delay classification, trash deletion, or retention cleanup.</p>
+<form method="post" action="/settings">
+  <input type="hidden" name="inbox_grace" value="1">
+  <div class="fields">
+    <label>Read mail (days)<input type="number" name="inbox_read_days" min="0" max="3650" value="{inbox_read_days}" required></label>
+    <label>Unread mail (days)<input type="number" name="inbox_unread_days" min="0" max="3650" value="{inbox_unread_days}" required></label>
+  </div>
+  <button type="submit" class="primary">Save inbox timing</button>
+</form>
+</section>
 <section>
 <h2>Rule drafting model</h2>
 <p class="hint">Used when you submit a free-text rule below on the main page. This runs rarely, so it's worth spending on quality over cost.</p>
@@ -761,7 +774,12 @@ def _settings_status_line(current_mode):
 @login_required
 def settings_page():
     if request.method == "POST":
-        if "classify_mode" in request.form:
+        if "inbox_grace" in request.form:
+            try:
+                mailbox_settings.set_inbox_grace_days(request.form.get("inbox_read_days", ""), request.form.get("inbox_unread_days", ""))
+            except ValueError as exc:
+                abort(400, str(exc))
+        elif "classify_mode" in request.form:
             mode = request.form.get("classify_mode", "")
             if mode in mailbox_settings.MODES:
                 mailbox_settings.set_classify_mode(mode)
@@ -842,6 +860,8 @@ def settings_page():
         icon=TAHOR_ICON,
         style=STYLE_BLOCK,
         header=tahor_header("settings"),
+        inbox_read_days=mailbox_settings.get_inbox_grace_days()["read"],
+        inbox_unread_days=mailbox_settings.get_inbox_grace_days()["unread"],
         status_line=_settings_status_line(current_mode),
         mode_cards=mode_cards,
         rule_model_cards=rule_model_cards,
