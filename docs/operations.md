@@ -100,6 +100,7 @@ No shell `source` command is required.
 | `TAHOR_NOTIFY_DRAFTS` | `1` to send yourself a summary after new drafts; disabled by default |
 | `WORKER_BATCH_SIZE` | Messages per classification batch; default 50 |
 | `WORKER_SLEEP_BETWEEN_BATCHES` | Optional delay override; defaults to 0 seconds after fully applied paid-only batches, 45 seconds otherwise |
+| `TAHOR_PAID_CONCURRENCY` | Concurrent paid classifications; default 40, configurable from 1 to 64; effective concurrency also depends on batch size |
 
 Speed and model selections live in `settings.json` and are changed through the
 web app. `CLASSIFY_BACKEND` is for the standalone `classify.py` utility; it does

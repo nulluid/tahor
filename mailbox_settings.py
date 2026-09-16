@@ -117,7 +117,7 @@ DEFAULT_FREE_RATE = 50 / (4 * 60)  # ~0.208 msg/sec
 BACKLOG_REFRESH_SECONDS = 15 * 60
 
 # Initial throughput estimate, measured end-to-end at concurrency 20.
-PAID_CONCURRENCY = 20
+PAID_CONCURRENCY = 40
 PAID_MSG_LATENCY_SECONDS = 2.06
 PAID_RATE_MSGS_PER_SEC = 1 / PAID_MSG_LATENCY_SECONDS  # measured aggregate seconds per message
 

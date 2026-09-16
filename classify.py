@@ -62,6 +62,13 @@ def _openrouter_key():
     return key
 
 
+def paid_concurrency():
+    value = int(os.environ.get("TAHOR_PAID_CONCURRENCY", "40"))
+    if not 1 <= value <= 64:
+        raise ValueError("TAHOR_PAID_CONCURRENCY must be between 1 and 64")
+    return value
+
+
 # Gemini exposes an OpenAI-compatible endpoint, so the same request/response
 # shape works for both backends — only the URL, model, and auth differ.
 BACKENDS = {
@@ -99,20 +106,11 @@ BACKENDS = {
         "auth_header": lambda: f"Bearer {_openrouter_key()}",
     },
     "openrouter-paid": {
-        # Same model/weights as "openrouter-free", no daily cap -- $0.08/M
-        # input, $0.45/M output tokens. For clearing a large backlog fast:
-        # no reason to hold concurrency down for this model specifically,
-        # only the account's actual rate limit and this box's own capacity
-        # should bound it. Concurrency is deliberately high; watch for 429s
-        # and dial back if OpenRouter's real limit turns out lower. (This
-        # value was measured, not guessed: on a 2-vCPU/1GB box, concurrency
-        # 20 sustained ~2.06s/message with zero errors, and doubling it to
-        # 40 gave zero additional throughput -- the ceiling here is
-        # OpenRouter's own rate limit or shared inference capacity, not the
-        # box. Test your own setup before assuming 20 is right for you.)
+        # Repeated 20/40 comparisons favored 40 on the small production host.
+        # Provider capacity varies; this is a tested default, not a hard limit.
         "url": "https://openrouter.ai/api/v1/chat/completions",
         "default_model": "nvidia/nemotron-3-super-120b-a12b",
-        "default_concurrency": 20,
+        "default_concurrency": paid_concurrency(),
         "auth_header": lambda: f"Bearer {_openrouter_key()}",
     },
 }

@@ -116,6 +116,8 @@ key is needed.
 Fully successful paid-only batches continue immediately, without the free-tier
 pause. Model, prompt, message context, and classification checks stay the same.
 The worker logs fetch, classification, and application timings for tuning.
+Paid classification defaults to 40 concurrent requests, configurable for your
+host and provider. Free-tier concurrency remains separate.
 
 In Paid or Auto mode, failed paid classifications retry on the free tier.
 Widespread failures start a five-minute cooldown, followed by a single-message

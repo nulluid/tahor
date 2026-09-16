@@ -151,6 +151,17 @@ class RecoveryTests(unittest.TestCase):
 
 
 class ClassifierTests(unittest.TestCase):
+    def test_paid_concurrency_has_bounded_operator_override(self):
+        with patch.dict(classifier.os.environ, {}, clear=True):
+            self.assertEqual(classifier.paid_concurrency(), 40)
+        for value in ('1', '20', '40', '64'):
+            with patch.dict(classifier.os.environ, {'TAHOR_PAID_CONCURRENCY': value}):
+                self.assertEqual(classifier.paid_concurrency(), int(value))
+        for value in ('0', '-1', '65', 'many'):
+            with patch.dict(classifier.os.environ, {'TAHOR_PAID_CONCURRENCY': value}):
+                with self.assertRaises(ValueError):
+                    classifier.paid_concurrency()
+
     def test_402_returns_status_without_repeating_request(self):
         error = urllib.error.HTTPError('https://example.invalid', 402, 'Payment Required', {}, io.BytesIO(b''))
         with patch.object(classifier.urllib.request, 'urlopen', side_effect=error) as request:

@@ -56,12 +56,7 @@ LOG_PATH = STATE_DIR / "logs" / "backlog_worker.log"
 
 RETENTION_KEYWORDS = {"retention-forever", "retention-standard", "retention-transient", "retention-pending-review"}
 BATCH_SIZE = int(os.environ.get("WORKER_BATCH_SIZE", 50))
-# Concurrency is no longer a single flat setting here -- each backend runs at
-# its own classify.BACKENDS[...]["default_concurrency"] (see classify.py):
-# 2 for the free tiers, 20 for openrouter-paid (there's no daily cap to be
-# gentle with there, only the account's real rate limit and your box's own
-# capacity should bound it -- see mailbox_settings.py's comment on how that
-# 20 was actually measured, not guessed).
+# Free and paid backends have independent concurrency limits in classify.py.
 SLEEP_BETWEEN_BATCHES = int(os.environ.get("WORKER_SLEEP_BETWEEN_BATCHES", 45))
 PAID_BATCH_DELAY = int(os.environ.get("WORKER_SLEEP_BETWEEN_BATCHES", 0))
 SLEEP_WHEN_IDLE = 600  # 10 minutes -- steady-state polling once backlog is clear
