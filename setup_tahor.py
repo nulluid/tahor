@@ -31,6 +31,13 @@ def unit_quote(value):
     return json.dumps(str(value).replace('%', '%%'))
 
 
+def working_directory(value):
+    text = str(value)
+    if any(char in text for char in '\r\n\0') or text != text.strip():
+        raise ValueError('Service directory cannot contain line breaks or surrounding whitespace')
+    return text.replace('%', '%%')
+
+
 def write_units(directory, config, python):
     directory.mkdir(parents=True, exist_ok=True)
     commands = {
@@ -50,7 +57,7 @@ Wants=network-online.target
 
 [Service]
 Type={"oneshot" if oneshot else "simple"}
-WorkingDirectory={unit_quote(ROOT)}
+WorkingDirectory={working_directory(ROOT)}
 ExecStart={unit_quote(python)} {unit_quote(ROOT / "run.py")} --env {unit_quote(config)} {command} {suffix}
 UMask=0077
 NoNewPrivileges=true

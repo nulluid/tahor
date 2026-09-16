@@ -2,6 +2,7 @@ import argparse
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -20,6 +21,14 @@ import mailbox_settings
 
 
 class SetupTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('systemd-analyze'), 'systemd parser is available on Linux')
+    def test_generated_units_pass_the_systemd_parser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            setup_tahor.write_units(root, root / 'config.env', Path(sys.executable))
+            result = subprocess.run(['systemd-analyze', 'verify', *map(str, root.iterdir())], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_doctor_accepts_imaplib_capabilities_and_custom_data_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
