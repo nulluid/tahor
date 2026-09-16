@@ -46,28 +46,31 @@ def list_all_paths(conn):
 
 
 def sweep_mailbox(conn, path, keyword, cutoff_days, dry_run):
-    typ, _ = conn.select(f'"{path}"')
+    typ, _ = conn.select('"' + path.replace('\\', '\\\\').replace('"', '\\"') + '"', readonly=dry_run)
     if typ != "OK":
         return 0, 0
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=cutoff_days)).strftime("%d-%b-%Y")
-    typ, data = conn.uid("SEARCH", None, "SEEN", "BEFORE", cutoff, "KEYWORD", keyword)
+    typ, data = conn.uid("SEARCH", None, "SEEN", "BEFORE", cutoff, "KEYWORD", keyword, "UNKEYWORD", "retention-forever", "UNKEYWORD", "retention-pending-review", "UNKEYWORD", "needs-attention")
     if typ != "OK" or not data or not data[0]:
-        conn.close()
         return 0, 0
 
     uids = data[0].split()
     if dry_run:
-        conn.close()
         return len(uids), 0
 
+    capabilities = {c.decode().upper() if isinstance(c, bytes) else c.upper() for c in conn.capabilities}
+    if "UIDPLUS" not in capabilities:
+        raise RuntimeError("Retention requires UIDPLUS for targeted deletion; no messages changed")
     deleted = 0
     for uid in uids:
         typ, _ = conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
         if typ == "OK":
+            typ, _ = conn.uid("EXPUNGE", uid)
+            if typ != "OK":
+                conn.uid("STORE", uid, "-FLAGS", "(\\Deleted)")
+                raise RuntimeError("Targeted retention deletion failed")
             deleted += 1
-    conn.expunge()
-    conn.close()
     return len(uids), deleted
 
 

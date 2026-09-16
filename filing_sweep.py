@@ -50,7 +50,9 @@ def ensure_folder(conn, path, created):
     # session out of the selected state, breaking whatever comes after it.
     typ, data = conn.list('""', f'"{path}"')
     if typ != "OK" or not data or not data[0]:
-        conn.create(f'"{path}"')
+        typ, _ = conn.create(f'"{path}"')
+        if typ != "OK":
+            raise RuntimeError(f"Could not create filing destination {path!r}")
     created.add(path)
 
 
@@ -62,7 +64,7 @@ def main():
     unread_min_age = config.filing_min_age_days("unread", 30)
 
     conn = connect()
-    typ, _ = conn.select('"INBOX"')
+    typ, _ = conn.select('"INBOX"', readonly=dry_run)
     if typ != "OK":
         sys.exit("Could not select INBOX.")
 
@@ -94,6 +96,9 @@ def main():
             unsorted_labels.add(vendor)
         by_dest[f"{root}/{bucket}/{vendor}"].append(uid)
 
+    capabilities = {c.decode().upper() if isinstance(c, bytes) else c.upper() for c in conn.capabilities}
+    if not dry_run and "MOVE" not in capabilities:
+        raise RuntimeError("Filing requires IMAP MOVE to avoid copying or deleting unrelated mail")
     created, total_moved = set(), 0
     for dest, uids in sorted(by_dest.items()):
         verb = "would move" if dry_run else "moving"
@@ -102,14 +107,11 @@ def main():
             continue
         ensure_folder(conn, dest, created)
         for uid in uids:
-            typ, _ = conn.uid("COPY", uid, f'"{dest}"')
+            typ, _ = conn.uid("MOVE", uid, f'"{dest}"')
             if typ == "OK":
-                conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
                 total_moved += 1
             else:
-                print(f"  FAILED to copy uid {uid.decode()} to {dest}")
-    if not dry_run:
-        conn.expunge()
+                print(f"  FAILED to move uid {uid.decode()} to {dest}")
     conn.logout()
 
     if unsorted_labels:
