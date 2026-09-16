@@ -193,10 +193,11 @@ def apply_free_text_rule(row, resolution):
     if kind == "needs_code_change" or result.get("needs_code_change"):
         flag_path = DATA_DIR / "needs_code_change.md"
         existing = flag_path.read_text() if flag_path.exists() else "# Rules needing a code change\n\n"
-        atomic_write(flag_path,
-            existing + f"## #{row['id']}: {text}\n\n{result.get('explanation')}\n\n"
-        )
-        return f"flagged for manual review (needs code change): {result.get('explanation')}"
+        heading = f"## #{row['id']}:"
+        if heading not in existing:
+            atomic_write(flag_path, existing + f"{heading} {text}\n\n{result.get('explanation')}\n\n")
+        commit_and_push_data("record rule requiring implementation")
+        raise ValueError(f"This rule requires a code change and has not been applied: {result.get('explanation')}")
 
     if kind != "file_edit":
         raise ValueError("The model did not return an actionable rule")
@@ -248,7 +249,7 @@ def apply_one(decision_id):
                 if action not in ("keep", "trash"):
                     raise ValueError("Choose Keep or Trash for this message")
                 add = ["retention-standard"] if action == "keep" else ["retention-transient", "category-marketing"]
-                result = keyword_tool.apply_ops([{"mailbox": context["mailbox"], "message_id": context["message_id"], "add": add, "remove": ["retention-pending-review", "needs-attention"]}])
+                result = keyword_tool.apply_ops([{"mailbox": context["mailbox"], "message_id": context["message_id"], "uid": context.get("uid"), "uidvalidity": context.get("uidvalidity"), "add": add, "remove": ["retention-pending-review", "needs-attention"]}])
                 if context["message_id"] not in result["applied"]:
                     raise RuntimeError("Message could not be tagged; it remains available for retry")
                 outcome = "Message kept" if action == "keep" else "Message marked for retention cleanup once read"

@@ -16,6 +16,7 @@ Usage:
   python3 fetch_batch.py <mailbox> <prefix> [--limit N] [--processed-ids PATH]
 """
 import email
+import hashlib
 import imaplib
 import json
 import re
@@ -33,6 +34,19 @@ def connect():
     conn = imaplib.IMAP4_SSL(config.IMAP_HOST, config.IMAP_PORT, timeout=60)
     conn.login(config.email_address(), config.app_password())
     return conn
+
+
+def mailbox_uidvalidity(conn):
+    _, values = conn.response('UIDVALIDITY')
+    value = values[0].decode() if values and isinstance(values[0], bytes) else str(values[0]) if values else ''
+    if not value.isdigit():
+        raise RuntimeError('Mailbox did not report UIDVALIDITY')
+    return value
+
+
+def local_message_id(mailbox, uidvalidity, uid):
+    identity = '\n'.join((config.email_address().lower(), mailbox, uidvalidity, uid))
+    return '<tahor-uid-' + hashlib.sha256(identity.encode()).hexdigest() + '@localhost>'
 
 
 def decode_str(s):
@@ -130,8 +144,9 @@ def main():
     typ, _ = conn.select(f'"{mailbox}"', readonly=True)
     if typ != "OK":
         sys.exit(f"Could not select mailbox {mailbox!r}")
+    uidvalidity = mailbox_uidvalidity(conn)
 
-    typ, data = conn.search(None, "ALL")
+    typ, data = conn.uid("SEARCH", None, "ALL")
     if typ != "OK":
         sys.exit("SEARCH failed")
     uids = data[0].split()
@@ -144,8 +159,8 @@ def main():
             break
         batch = uids[i : i + chunk]
         idset = b",".join(batch).decode()
-        typ, fdata = conn.fetch(
-            idset,
+        typ, fdata = conn.uid(
+            "FETCH", idset,
             "(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID SUBJECT FROM DATE)] BODY.PEEK[])",
         )
         if typ != "OK":
@@ -168,6 +183,8 @@ def main():
 
             header_msg = email.message_from_bytes(header_bytes)
             message_id = (header_msg.get("Message-ID") or "").strip()
+            if not message_id and uid:
+                message_id = local_message_id(mailbox, uidvalidity, uid)
             if not message_id or message_id in processed:
                 continue
 
@@ -184,6 +201,7 @@ def main():
             env_records.append(
                 {
                     "uid": uid,
+                    "uidvalidity": uidvalidity,
                     "internaldate": internaldate,
                     "subject": subject,
                     "from_email": from_email,

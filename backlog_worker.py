@@ -92,6 +92,7 @@ def fetch(mailbox, prefix):
     typ, _ = conn.select(f'"{mailbox}"', readonly=True)
     if typ != "OK":
         raise RuntimeError(f"Could not select mailbox {mailbox!r}")
+    uidvalidity = fetch_batch.mailbox_uidvalidity(conn)
     criteria = ["ALL"]
     for keyword in sorted(RETENTION_KEYWORDS):
         criteria.extend(["UNKEYWORD", keyword])
@@ -134,7 +135,9 @@ def fetch(mailbox, prefix):
             header_msg = email.message_from_bytes(header_bytes)
             message_id = (header_msg.get("Message-ID") or "").strip()
             if not message_id:
-                continue
+                if not uid:
+                    raise RuntimeError("Message did not report a UID")
+                message_id = fetch_batch.local_message_id(mailbox, uidvalidity, uid)
 
             from email.utils import parseaddr, parsedate_to_datetime
             subject = fetch_batch.decode_str(header_msg.get("Subject", ""))
@@ -158,6 +161,7 @@ def fetch(mailbox, prefix):
             env_records.append(
                 {
                     "uid": uid,
+                    "uidvalidity": uidvalidity,
                     "internaldate": internaldate,
                     "subject": subject,
                     "from_email": from_email,

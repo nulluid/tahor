@@ -394,6 +394,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <h2>Current recommended Sieve filter</h2>
 <p class="hint">Paste this into Fastmail: Settings &rarr; Filters &amp; Rules &rarr; Edit custom Sieve code (third box).</p>
 <pre>{sieve_content}</pre>
+<form method="post" action="/refresh-sieve"><button type="submit">Refresh proposal</button></form>
 </section>
 </main>
 </body>
@@ -560,8 +561,8 @@ UNSUBSCRIBE_PAGE_TEMPLATE = """<!doctype html>
 
 NON_COMPLIANT_SECTION = """
 <section>
-<h2>Didn't honor your unsubscribe</h2>
-<p class="hint">You unsubscribed from these, but they sent marketing mail again anyway. Worth blocking.</p>
+<h2>Mail after an unsubscribe request</h2>
+<p class="hint">Tahor classified these newer messages as marketing. Delivery can overlap with an unsubscribe request; review before blocking.</p>
 {cards}
 </section>
 """
@@ -764,14 +765,22 @@ def settings_page():
             mode = request.form.get("classify_mode", "")
             if mode in mailbox_settings.MODES:
                 mailbox_settings.set_classify_mode(mode)
+            else:
+                abort(400, "Choose Free, Paid, or Auto.")
         elif "rule_model" in request.form:
             key = request.form.get("rule_model", "")
             if key in mailbox_settings.RULE_MODELS:
                 mailbox_settings.set_rule_model(key)
+            else:
+                abort(400, "Choose an available rule model.")
         elif "reply_model" in request.form:
             key = request.form.get("reply_model", "")
             if key in mailbox_settings.REPLY_MODELS:
                 mailbox_settings.set_reply_model(key)
+            else:
+                abort(400, "Choose an available reply model.")
+        else:
+            abort(400, "No setting was selected.")
         return redirect("/settings")
 
     current_mode = mailbox_settings.get_classify_mode()
@@ -851,6 +860,8 @@ def add_reply_trigger():
             mailbox_settings.add_reply_trigger(trigger_type, value)
         except ValueError as exc:
             abort(400, str(exc))
+    else:
+        abort(400, "Choose a trigger type and enter a sender.")
     return redirect("/settings")
 
 
@@ -859,6 +870,17 @@ def add_reply_trigger():
 def remove_reply_trigger():
     mailbox_settings.remove_reply_trigger(request.form.get("trigger_type", ""), request.form.get("value", ""))
     return redirect("/settings")
+
+
+@app.route("/refresh-sieve", methods=["POST"])
+@login_required
+def refresh_sieve():
+    try:
+        changed = generate_sieve.refresh_sieve()
+        session["flash"] = "Sieve proposal updated. Review it before installing." if changed else "Sieve proposal is current."
+    except Exception as exc:
+        session["flash"] = f"Could not refresh the Sieve proposal: {exc}. You can retry."
+    return redirect("/")
 
 
 @app.route("/dismiss-sieve/<int:decision_id>", methods=["POST"])
@@ -1037,7 +1059,7 @@ def unsubscribe_action(candidate_id):
             outcome += " Sieve proposal updated on the decisions page."
         except Exception as exc:
             outcome += f" Sieve proposal could not be updated: {exc}. The worker block is active."
-    db.execute("UPDATE unsubscribe_candidates SET status = ?, non_compliant = 0 WHERE id = ?", (new_status, candidate_id))
+    db.execute("UPDATE unsubscribe_candidates SET status=?,non_compliant=0,unsubscribed_at=CASE WHEN ?='unsubscribed' THEN ? ELSE unsubscribed_at END WHERE id=?", (new_status,new_status,datetime.now(timezone.utc).isoformat(),candidate_id))
     db.commit()
     session["flash"] = outcome
     return redirect("/unsubscribe")

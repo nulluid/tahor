@@ -1,5 +1,6 @@
 """Write mailbox configuration atomically and optionally version it privately."""
 import os
+import fcntl
 from pathlib import Path
 import subprocess
 import tempfile
@@ -33,13 +34,15 @@ def commit_data(data_dir, message, paths):
         return False
     def git(*args):
         return subprocess.run(['git', '-C', str(data_dir), *args], check=True, capture_output=True, text=True, timeout=30)
-    git('add', '--', *existing)
-    changed = subprocess.run(['git', '-C', str(data_dir), 'diff', '--cached', '--quiet', '--', *existing], timeout=30)
-    if changed.returncode not in (0, 1):
-        raise RuntimeError('Could not inspect data changes')
-    if changed.returncode == 1:
-        git('commit', '-m', message, '--', *existing)
-    # Local commits are the default; publishing private data is an explicit opt-in.
-    if os.environ.get('TAHOR_DATA_PUSH') == '1':
-        git('push', 'origin', 'HEAD')
-    return changed.returncode == 1
+    git_dir = Path(git('rev-parse', '--absolute-git-dir').stdout.strip())
+    with (git_dir / 'tahor-data.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        git('add', '--', *existing)
+        changed = subprocess.run(['git', '-C', str(data_dir), 'diff', '--cached', '--quiet', '--', *existing], timeout=30)
+        if changed.returncode not in (0, 1):
+            raise RuntimeError('Could not inspect data changes')
+        if changed.returncode == 1:
+            git('commit', '-m', message, '--', *existing)
+        if os.environ.get('TAHOR_DATA_PUSH') == '1':
+            git('push', 'origin', 'HEAD')
+        return changed.returncode == 1

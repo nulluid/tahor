@@ -4,6 +4,39 @@ from test_web_security import AppTestCase
 
 
 class WebActionTests(AppTestCase):
+    def test_leaving_vendor_unsorted_does_not_recreate_the_same_question(self):
+        self.module.tahor_db.queue_vendor_mapping('example.com')
+        db = self.module.tahor_db.get_db()
+        id = db.execute("SELECT id FROM decisions WHERE kind='vendor_mapping'").fetchone()['id']
+        db.close()
+        self.post(f'/resolve/{id}', action='skip')
+        self.module.tahor_db.queue_vendor_mapping('example.com')
+        db = self.module.tahor_db.get_db()
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM decisions WHERE kind='vendor_mapping'").fetchone()[0], 1)
+        db.close()
+
+    def test_failed_sieve_refresh_can_be_retried_from_the_app(self):
+        with patch.object(self.module.generate_sieve, 'refresh_sieve', side_effect=RuntimeError('temporary failure')):
+            self.assertEqual(self.post('/refresh-sieve').status_code, 302)
+        self.assertIn('Could not refresh', self.client.get('/').get_data(as_text=True))
+        self.post('/refresh-sieve')
+        self.assertTrue((self.root / 'sieve.txt').is_file())
+
+    def test_invalid_settings_and_triggers_are_reported(self):
+        for data in ({'classify_mode': 'unknown'}, {'rule_model': 'unknown'}, {'reply_model': 'unknown'}, {}):
+            self.assertEqual(self.post('/settings', **data).status_code, 400)
+        self.assertEqual(self.post('/add-reply-trigger', trigger_type='unknown', value='person@example.com').status_code, 400)
+
+    def test_code_change_rule_is_not_reported_as_applied(self):
+        with patch.object(self.module.apply_decisions, 'rule_model_call', return_value={'kind': 'needs_code_change', 'explanation': 'A new integration is required.'}):
+            self.post('/add-rule', rule_text='Add a new integration')
+        page = self.client.get('/').get_data(as_text=True)
+        self.assertIn('has not been applied', page)
+        self.assertIn('Retry rule', page)
+        db = self.module.tahor_db.get_db()
+        self.assertEqual(db.execute("SELECT status FROM decisions WHERE kind='free_text_rule'").fetchone()['status'], 'pending')
+        db.close()
+
     def post(self, path, **data):
         return self.client.post(path, data=dict(data, csrf_token=self.token()))
 

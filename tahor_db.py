@@ -24,6 +24,7 @@ def get_db():
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.execute("BEGIN IMMEDIATE")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS decisions (
@@ -59,6 +60,9 @@ def init_db():
     existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(unsubscribe_candidates)")}
     if "non_compliant" not in existing_cols:
         conn.execute("ALTER TABLE unsubscribe_candidates ADD COLUMN non_compliant INTEGER NOT NULL DEFAULT 0")
+    if "unsubscribed_at" not in existing_cols:
+        conn.execute("ALTER TABLE unsubscribe_candidates ADD COLUMN unsubscribed_at TEXT")
+    conn.execute("CREATE TABLE IF NOT EXISTS unsubscribe_seen (sender_domain TEXT NOT NULL, message_id TEXT NOT NULL, PRIMARY KEY(sender_domain,message_id))")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS sender_rules (
@@ -92,38 +96,41 @@ def init_db():
     conn.close()
 
 
-def upsert_unsubscribe_candidate(sender_domain, sender_email, display_name, unsubscribe_url, unsubscribe_mailto, one_click):
+def upsert_unsubscribe_candidate(sender_domain, sender_email, display_name, unsubscribe_url, unsubscribe_mailto, one_click, message_id=None, received_at=None, is_marketing=False):
     if not sender_domain:
         return
+    sender_domain = sender_domain.lower()
     now = datetime.now(timezone.utc).isoformat()
     conn = get_db()
-    existing = conn.execute(
-        "SELECT id, message_count, status FROM unsubscribe_candidates WHERE sender_domain = ?", (sender_domain,)
-    ).fetchone()
-    if existing:
-        # A sender that mails again after status='unsubscribed' (set only by the
-        # plain "Unsubscribe" action, see app.py) didn't honor it -- resurface as
-        # pending and flag non_compliant so the unsubscribe page can call it out.
-        resend_after_unsubscribe = existing["status"] == "unsubscribed"
-        new_status = "pending" if resend_after_unsubscribe else existing["status"]
-        conn.execute(
-            "UPDATE unsubscribe_candidates SET message_count = ?, last_seen_at = ?, "
-            "unsubscribe_url = COALESCE(?, unsubscribe_url), unsubscribe_mailto = COALESCE(?, unsubscribe_mailto), "
-            "one_click = MAX(one_click, ?), status = ?, non_compliant = non_compliant OR ? WHERE id = ?",
-            (
-                existing["message_count"] + 1, now, unsubscribe_url, unsubscribe_mailto, int(one_click),
-                new_status, int(resend_after_unsubscribe), existing["id"],
-            ),
-        )
-    else:
-        conn.execute(
-            "INSERT INTO unsubscribe_candidates "
-            "(sender_domain, sender_email, display_name, unsubscribe_url, unsubscribe_mailto, one_click, "
-            "message_count, status, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, 1, 'pending', ?, ?)",
-            (sender_domain, sender_email, display_name, unsubscribe_url, unsubscribe_mailto, int(one_click), now, now),
-        )
-    conn.commit()
-    conn.close()
+    try:
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if message_id:
+                inserted = conn.execute("INSERT OR IGNORE INTO unsubscribe_seen(sender_domain,message_id) VALUES (?,?)", (sender_domain, message_id))
+                if not inserted.rowcount:
+                    return
+            existing = conn.execute("SELECT * FROM unsubscribe_candidates WHERE sender_domain=?", (sender_domain,)).fetchone()
+            if existing:
+                resend = False
+                if existing["status"] == "unsubscribed" and existing["unsubscribed_at"] and received_at and is_marketing:
+                    try:
+                        resend = datetime.fromisoformat(received_at) > datetime.fromisoformat(existing["unsubscribed_at"])
+                    except (TypeError, ValueError):
+                        pass
+                conn.execute(
+                    "UPDATE unsubscribe_candidates SET message_count=message_count+1,last_seen_at=?,"
+                    "unsubscribe_url=COALESCE(?,unsubscribe_url),unsubscribe_mailto=COALESCE(?,unsubscribe_mailto),"
+                    "one_click=?,status=?,non_compliant=non_compliant OR ? WHERE id=?",
+                    (now, unsubscribe_url, unsubscribe_mailto, int(one_click) if unsubscribe_url else existing["one_click"],
+                     "pending" if resend else existing["status"], int(resend), existing["id"]),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO unsubscribe_candidates(sender_domain,sender_email,display_name,unsubscribe_url,unsubscribe_mailto,one_click,first_seen_at,last_seen_at) VALUES (?,?,?,?,?,?,?,?)",
+                    (sender_domain,sender_email,display_name,unsubscribe_url,unsubscribe_mailto,int(one_click),now,now),
+                )
+    finally:
+        conn.close()
 
 
 def get_sender_rule(sender_domain):
@@ -185,8 +192,11 @@ def execute_unsubscribe(candidate, from_addr, app_password, smtp_host="smtp.fast
     return execute(candidate, from_addr, app_password, smtp_host, smtp_port)
 
 
-def queue_message_review(mailbox, message_id, subject):
-    context = json.dumps({"mailbox": mailbox, "message_id": message_id})
+def queue_message_review(mailbox, message_id, subject, uid=None, uidvalidity=None):
+    values = {"mailbox": mailbox, "message_id": message_id}
+    if uid and uidvalidity:
+        values.update(uid=uid, uidvalidity=uidvalidity)
+    context = json.dumps(values)
     conn = get_db()
     try:
         with conn:
@@ -230,9 +240,14 @@ def queue_vendor_mapping(sender_domain):
     try:
         with conn:
             conn.execute("BEGIN IMMEDIATE")
-            exists = conn.execute("SELECT 1 FROM decisions WHERE kind='vendor_mapping' AND context=?", (context,)).fetchone()
-            if exists is None:
-                conn.execute("INSERT INTO decisions(kind,summary,context,status,created_at) VALUES ('vendor_mapping',?,?, 'pending',?)", (f"Choose a filing folder for {sender_domain}", context, datetime.now(timezone.utc).isoformat()))
+            for row in conn.execute("SELECT context FROM decisions WHERE kind='vendor_mapping'"):
+                try:
+                    previous = json.loads(row['context'] or '{}')
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(previous, dict) and previous.get('sender_label') == sender_domain:
+                    return
+            conn.execute("INSERT INTO decisions(kind,summary,context,status,created_at) VALUES ('vendor_mapping',?,?, 'pending',?)", (f"Choose a filing folder for {sender_domain}", context, datetime.now(timezone.utc).isoformat()))
     finally:
         conn.close()
 

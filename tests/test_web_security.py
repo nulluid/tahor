@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -58,6 +59,20 @@ class AppTestCase(unittest.TestCase):
 
 
 class WebSecurityTests(AppTestCase):
+    def test_every_mutation_requires_login_and_a_form_token(self):
+        anonymous = self.module.app.test_client()
+        with anonymous.session_transaction() as session:
+            session['csrf_token'] = 'valid-test-token'
+        for rule in self.module.app.url_map.iter_rules():
+            if 'POST' not in rule.methods:
+                continue
+            path = re.sub(r'<[^>]+>', '1', rule.rule)
+            with self.subTest(path=path):
+                self.assertEqual(self.client.post(path).status_code, 400)
+                response = anonymous.post(path, data={'csrf_token': 'valid-test-token'})
+                self.assertEqual(response.status_code, 302)
+                self.assertTrue(response.location.endswith('/login'))
+
     def test_post_requires_csrf(self):
         with patch.object(self.module.mailbox_settings, 'set_classify_mode') as setter:
             self.assertEqual(self.client.post('/settings', data={'classify_mode': 'paid'}).status_code, 400)

@@ -22,6 +22,7 @@ import sys
 from collections import defaultdict
 
 import config
+import fetch_batch
 
 
 def connect():
@@ -71,9 +72,13 @@ def apply_ops(ops):
             if typ != "OK":
                 outcome["failed"].update(op["message_id"] for op in mailbox_ops)
                 continue
+            uidvalidity = fetch_batch.mailbox_uidvalidity(conn) if any(op.get("uidvalidity") for op in mailbox_ops) else None
             for op in mailbox_ops:
                 message_id = op["message_id"]
                 try:
+                    if op.get("uidvalidity") and str(op["uidvalidity"]) != uidvalidity:
+                        outcome["failed"].add(message_id)
+                        continue
                     uid = op.get("uid") or find_uid(conn, message_id)
                     if uid is None:
                         outcome["missing"].add(message_id)

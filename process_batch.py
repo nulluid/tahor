@@ -62,11 +62,18 @@ def main():
             r["action"] = "trash"
             r["reason"] = f"sender rule: {rule}"
 
+    classifications = {row["id"]: row for row in outrecs}
     for e in envs:
+        if classifications.get(e.get("message_id"), {}).get("action") == "error":
+            continue
         if not (e.get("unsubscribe_url") or e.get("unsubscribe_mailto")):
             continue
         domain = sender_domain_of(e["from_email"])
         if domain and tahor_db.get_sender_rule(domain) is None:
+            try:
+                received_at = parse_internaldate(e.get("internaldate", "")).isoformat()
+            except (ValueError, TypeError):
+                received_at = None
             tahor_db.upsert_unsubscribe_candidate(
                 sender_domain=domain,
                 sender_email=e["from_email"],
@@ -74,6 +81,9 @@ def main():
                 unsubscribe_url=e.get("unsubscribe_url"),
                 unsubscribe_mailto=e.get("unsubscribe_mailto"),
                 one_click=e.get("one_click", False),
+                message_id=e.get("message_id"),
+                received_at=received_at,
+                is_marketing=classifications.get(e.get("message_id"), {}).get("category") == "marketing",
             )
 
     by_sender = defaultdict(list)
@@ -96,6 +106,7 @@ def main():
     needs_attn = sum(1 for r in keep_mixed if r.get("needs_attention") is True)
 
     msgid_to_uid = {e["message_id"]: e["uid"] for e in envs}
+    envelopes_by_id = {e["message_id"]: e for e in envs}
 
     idx, subj_idx = defaultdict(list), defaultdict(list)
     for e in envs:
@@ -126,7 +137,8 @@ def main():
         if r.get("action") == "mixed":
             r["retention"] = "pending-review"
         if r.get("retention") == "pending-review" and r["id"] not in unmatched:
-            tahor_db.queue_message_review(mailbox, msgids[r["id"]], inrecs[r["id"]]["subject"])
+            envelope = envelopes_by_id[msgids[r["id"]]]
+            tahor_db.queue_message_review(mailbox, msgids[r["id"]], inrecs[r["id"]]["subject"], envelope.get("uid"), envelope.get("uidvalidity"))
         if r["id"] in unmatched:
             continue
         add = [f"category-{r.get('category', 'marketing')}", f"retention-{r.get('retention', 'pending-review')}"]
@@ -150,6 +162,10 @@ def main():
                 "add": ["retention-forever", f"category-{r.get('category', 'marketing')}"],
             })
 
+    for op in ops:
+        validity = envelopes_by_id[op["message_id"]].get("uidvalidity")
+        if validity:
+            op["uidvalidity"] = validity
     Path(f"{prefix}_trash_ids.json").write_text(json.dumps([r["id"] for r in trash_final]))
     Path(f"{prefix}_ops.json").write_text(json.dumps(ops, indent=1))
 
