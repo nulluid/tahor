@@ -9,13 +9,16 @@ from the settings page) and backlog_worker.py (reads it every batch) so
 there's a single source of truth for the file format and defaults.
 """
 import json
+import copy
+import fcntl
+import tempfile
+from functools import wraps
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 # Fixed path, not Path(__file__).parent -- worker and web app run from different directories.
 SETTINGS_PATH = Path(os.environ.get("TAHOR_SETTINGS_PATH", Path.home() / ".config" / "tahor" / "settings.json"))
-SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 MODES = ("free", "paid", "auto")
 
@@ -132,12 +135,14 @@ DISPLAY_BATCH_SIZE = 50
 
 def load_settings():
     if not SETTINGS_PATH.exists():
-        return dict(DEFAULT_SETTINGS)
+        return copy.deepcopy(DEFAULT_SETTINGS)
     try:
         data = json.loads(SETTINGS_PATH.read_text())
     except (json.JSONDecodeError, OSError):
-        return dict(DEFAULT_SETTINGS)
-    merged = dict(DEFAULT_SETTINGS)
+        return copy.deepcopy(DEFAULT_SETTINGS)
+    merged = copy.deepcopy(DEFAULT_SETTINGS)
+    if not isinstance(data, dict):
+        data = {}
     merged.update(data)
     if merged.get("classify_mode") not in MODES:
         merged["classify_mode"] = "free"
@@ -148,16 +153,39 @@ def load_settings():
     return merged
 
 
+def locked_update(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with SETTINGS_PATH.with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                return function(*args, **kwargs)
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+    return wrapped
+
+
 def save_settings(settings):
-    tmp = SETTINGS_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(settings, indent=1))
-    tmp.replace(SETTINGS_PATH)
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=SETTINGS_PATH.parent, prefix=".settings-", delete=False) as stream:
+            tmp = Path(stream.name)
+            json.dump(settings, stream, indent=1)
+            stream.flush()
+            os.fsync(stream.fileno())
+        tmp.replace(SETTINGS_PATH)
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
 
 def get_classify_mode():
     return load_settings().get("classify_mode", "free")
 
 
+@locked_update
 def set_classify_mode(mode):
     if mode not in MODES:
         raise ValueError(f"Unknown classify_mode {mode!r}, choose from {MODES}")
@@ -170,6 +198,7 @@ def get_rule_model():
     return load_settings().get("rule_model", DEFAULT_RULE_MODEL)
 
 
+@locked_update
 def set_rule_model(key):
     if key not in RULE_MODELS:
         raise ValueError(f"Unknown rule_model {key!r}, choose from {tuple(RULE_MODELS)}")
@@ -182,6 +211,7 @@ def get_reply_model():
     return load_settings().get("reply_model", DEFAULT_REPLY_MODEL)
 
 
+@locked_update
 def set_reply_model(key):
     if key not in REPLY_MODELS:
         raise ValueError(f"Unknown reply_model {key!r}, choose from {tuple(REPLY_MODELS)}")
@@ -197,12 +227,19 @@ def get_reply_triggers():
     return load_settings().get("reply_triggers", [])
 
 
+@locked_update
 def add_reply_trigger(trigger_type, value):
     if trigger_type not in TRIGGER_TYPES:
         raise ValueError(f"Unknown trigger type {trigger_type!r}, choose from {TRIGGER_TYPES}")
     value = value.strip().lower()
-    if not value:
-        return
+    import re
+    domain = value.rsplit("@", 1)[-1]
+    labels = domain.split(".")
+    if (len(labels) < 2 or len(domain) > 253
+            or any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels)
+            or (trigger_type == "sender_email" and not re.fullmatch(r"[^\s<>@\"\\]+@[^@]+", value))
+            or (trigger_type == "sender_domain" and "@" in value)):
+        raise ValueError("Enter a valid email address or domain.")
     settings = load_settings()
     triggers = settings.get("reply_triggers", [])
     if not any(t["type"] == trigger_type and t["value"] == value for t in triggers):
@@ -211,6 +248,7 @@ def add_reply_trigger(trigger_type, value):
         save_settings(settings)
 
 
+@locked_update
 def remove_reply_trigger(trigger_type, value):
     settings = load_settings()
     triggers = settings.get("reply_triggers", [])
@@ -229,6 +267,7 @@ def matches_reply_trigger(sender_email):
     return False
 
 
+@locked_update
 def record_free_batch(messages, seconds):
     """Append one completed openrouter-free batch's (messages, wall_clock_seconds)
     to the rolling log, trimmed to the last FREE_RATE_LOG_MAX entries."""
@@ -265,11 +304,12 @@ def get_cached_backlog(max_age_seconds):
         return None, False
     try:
         age = (datetime.now(timezone.utc) - datetime.fromisoformat(at)).total_seconds()
-    except ValueError:
+    except (ValueError, TypeError):
         return None, False
     return estimate, age <= max_age_seconds
 
 
+@locked_update
 def set_backlog_estimate(count):
     settings = load_settings()
     settings["backlog_estimate"] = count
@@ -277,6 +317,7 @@ def set_backlog_estimate(count):
     save_settings(settings)
 
 
+@locked_update
 def decrement_backlog_estimate(processed_count):
     if processed_count <= 0:
         return
