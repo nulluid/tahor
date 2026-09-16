@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,6 +59,21 @@ class AppTestCase(unittest.TestCase):
 
 
 class WebSecurityTests(AppTestCase):
+    def test_oauth_requires_verified_owner_and_consumes_state(self):
+        for email, verified, expected in [('other@example.com', True, 403), ('owner@example.com', False, 403), ('owner@example.com', True, 302)]:
+            client = self.module.app.test_client()
+            with client.session_transaction() as session:
+                session['oauth_state'] = 'one-use-state'
+            token = Mock()
+            token.json.return_value = {'access_token': 'synthetic-token'}
+            user = Mock()
+            user.json.return_value = {'email': email, 'email_verified': verified}
+            with patch.object(self.module.requests, 'post', return_value=token), patch.object(self.module.requests, 'get', return_value=user):
+                self.assertEqual(client.get('/auth/google/callback?state=one-use-state&code=test').status_code, expected)
+                self.assertEqual(client.get('/auth/google/callback?state=one-use-state&code=test').status_code, 400)
+            with client.session_transaction() as session:
+                self.assertEqual(session.get('email'), 'owner@example.com' if expected == 302 else None)
+
     def test_every_mutation_requires_login_and_a_form_token(self):
         anonymous = self.module.app.test_client()
         with anonymous.session_transaction() as session:

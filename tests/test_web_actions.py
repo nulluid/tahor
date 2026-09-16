@@ -4,6 +4,30 @@ from test_web_security import AppTestCase
 
 
 class WebActionTests(AppTestCase):
+    def test_successful_unsubscribe_records_request_time(self):
+        self.module.tahor_db.upsert_unsubscribe_candidate('example.com', '', '', 'https://example.com/unsubscribe', None, True)
+        row = self.module.tahor_db.get_unsubscribe_candidate('example.com')
+        with patch.object(self.module.tahor_db, 'execute_unsubscribe', return_value='Unsubscribe requested'):
+            self.post(f'/unsubscribe/{row["id"]}', action='unsubscribe')
+        result = self.module.tahor_db.get_unsubscribe_candidate('example.com')
+        self.assertEqual(result['status'], 'unsubscribed')
+        self.assertIsNotNone(result['unsubscribed_at'])
+
+    def test_marketing_block_preserves_provider_receipts(self):
+        self.module.tahor_db.upsert_unsubscribe_candidate('example.com', '', '', 'https://example.com/unsubscribe', None, True)
+        row = self.module.tahor_db.get_unsubscribe_candidate('example.com')
+        with patch.object(self.module.tahor_db, 'execute_unsubscribe', return_value='Unsubscribe requested'):
+            self.post(f'/unsubscribe/{row["id"]}', action='unsubscribe_block_marketing')
+        self.assertEqual(self.module.tahor_db.get_sender_rule('example.com'), 'block_marketing')
+        self.assertNotIn('discard;', (self.root / 'sieve.txt').read_text())
+
+    def test_confirming_sieve_proposal_resolves_its_banner(self):
+        id = self.decision('sieve_update')
+        self.post(f'/dismiss-sieve/{id}')
+        db = self.module.tahor_db.get_db()
+        self.assertEqual(db.execute('SELECT status FROM decisions WHERE id=?', (id,)).fetchone()['status'], 'resolved')
+        db.close()
+
     def test_leaving_vendor_unsorted_does_not_recreate_the_same_question(self):
         self.module.tahor_db.queue_vendor_mapping('example.com')
         db = self.module.tahor_db.get_db()
