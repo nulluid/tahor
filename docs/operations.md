@@ -99,7 +99,7 @@ No shell `source` command is required.
 | `TAHOR_DATA_PUSH` | `1` to enable private configuration pushes; default is local commits only |
 | `TAHOR_NOTIFY_DRAFTS` | `1` to send yourself a summary after new drafts; disabled by default |
 | `WORKER_BATCH_SIZE` | Messages per classification batch; default 50 |
-| `WORKER_SLEEP_BETWEEN_BATCHES` | Delay between successful batches; default 45 seconds |
+| `WORKER_SLEEP_BETWEEN_BATCHES` | Optional delay override; defaults to 0 seconds after fully applied paid-only batches, 45 seconds otherwise |
 
 Speed and model selections live in `settings.json` and are changed through the
 web app. `CLASSIFY_BACKEND` is for the standalone `classify.py` utility; it does

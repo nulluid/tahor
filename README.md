@@ -113,6 +113,10 @@ key is needed.
 | **Paid** | Uses paid capacity to work through a large backlog faster | Provider usage charges |
 | **Auto** | Estimates a free/paid split from backlog size and observed free throughput | Variable paid usage |
 
+Fully successful paid-only batches continue immediately, without the free-tier
+pause. Model, prompt, message context, and classification checks stay the same.
+The worker logs fetch, classification, and application timings for tuning.
+
 In Paid or Auto mode, failed paid classifications retry on the free tier.
 Widespread failures start a five-minute cooldown, followed by a single-message
 paid recovery probe at the next batch. If both tiers fail, messages stay pending

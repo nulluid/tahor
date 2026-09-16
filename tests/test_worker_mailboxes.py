@@ -121,3 +121,11 @@ class MailboxTests(unittest.TestCase):
             with self.assertRaises(StopLoop):
                 worker.main()
             self.assertEqual([call.args[0] for call in process.call_args_list], ['INBOX', 'Archive', 'INBOX'])
+
+    def test_paid_success_skips_free_tier_pause_but_outage_still_backs_off(self):
+        class StopLoop(Exception):
+            pass
+        with tempfile.TemporaryDirectory() as directory, patch.object(worker, 'PROCESSED_IDS_PATH', Path(directory) / 'processed'), patch.object(worker.process_batch.tahor_db, 'init_db'), patch.object(worker, 'discover_mailboxes', return_value=['INBOX', 'Archive']), patch.object(worker, 'process_one_batch', side_effect=['processed_paid', 'backend_unavailable', 'empty']), patch.object(worker, 'PAID_BATCH_DELAY', 0), patch.object(worker, 'log'), patch.object(worker.runtime_status, 'write_status'), patch.object(worker.time, 'sleep', side_effect=[None, StopLoop]) as sleep:
+            with self.assertRaises(StopLoop):
+                worker.main()
+            self.assertEqual([call.args[0] for call in sleep.call_args_list], [0, worker.BACKEND_RETRY_SECONDS])

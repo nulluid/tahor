@@ -62,7 +62,8 @@ BATCH_SIZE = int(os.environ.get("WORKER_BATCH_SIZE", 50))
 # gentle with there, only the account's real rate limit and your box's own
 # capacity should bound it -- see mailbox_settings.py's comment on how that
 # 20 was actually measured, not guessed).
-SLEEP_BETWEEN_BATCHES = int(os.environ.get("WORKER_SLEEP_BETWEEN_BATCHES", 45))  # was tuned for a free-tier's RPM limit
+SLEEP_BETWEEN_BATCHES = int(os.environ.get("WORKER_SLEEP_BETWEEN_BATCHES", 45))
+PAID_BATCH_DELAY = int(os.environ.get("WORKER_SLEEP_BETWEEN_BATCHES", 0))
 SLEEP_WHEN_IDLE = 600  # 10 minutes -- steady-state polling once backlog is clear
 
 
@@ -422,6 +423,7 @@ def delete_pending_trash(mailbox):
 
 
 def process_one_batch(mailbox):
+    started = time.monotonic()
     prefix = str(STATE_DIR / "current_batch")
     runtime_status.write_status("fetching", mailbox=mailbox)
     trash_error = None
@@ -432,6 +434,7 @@ def process_one_batch(mailbox):
         log(f"{mailbox}: trash cleanup failed; will retry: {exc!r}")
         runtime_status.write_status("error", error=trash_error[:200])
     records = fetch(mailbox, prefix)
+    fetched = time.monotonic()
     if not records:
         return "error" if trash_error else "empty"
 
@@ -439,6 +442,7 @@ def process_one_batch(mailbox):
     log(f"{mailbox}: classify_mode={mode}, classifying {len(records)} message(s)")
     runtime_status.write_status("classifying", mode=mode, batch_size=len(records))
     free_results, paid_results = classify_batch(records, mode)
+    classified = time.monotonic()
     results = free_results + paid_results
     Path(f"{prefix}_out.json").write_text(json.dumps(results, indent=1))
     counts = {}
@@ -479,12 +483,19 @@ def process_one_batch(mailbox):
     if applied_ids:
         fields["last_success_at"] = datetime.now(timezone.utc).isoformat()
     runtime_status.write_status("processed" if applied_ids else "error", **fields)
+    finished = time.monotonic()
+    log(f"batch timing: fetch={fetched-started:.2f}s classify={classified-fetched:.2f}s "
+        f"apply={finished-classified:.2f}s total={finished-started:.2f}s "
+        f"applied={len(applied_ids)} pending={len(records)-len(applied_ids)}")
 
     # Judge final outcomes after fallback, including batches smaller than ten.
     # Any successful work keeps the normal cadence; a total outage gets a
     # bounded retry instead of the old two-hour sleep.
     if not applied_ids and any(r["action"] != "error" for r in results):
         return "error"
+    if (paid_results and not free_results and not errored_ids and not trash_error
+            and len(applied_ids) == len(records)):
+        return "processed_paid"
     return batch_status(results)
 
 
@@ -528,6 +539,8 @@ def main():
 
             if status == "processed":
                 time.sleep(SLEEP_BETWEEN_BATCHES)
+            elif status == "processed_paid":
+                time.sleep(PAID_BATCH_DELAY)
             elif status == "backend_unavailable":
                 log(f"{mailbox}: no classifications succeeded -- retrying in {BACKEND_RETRY_SECONDS}s")
                 runtime_status.write_status("retrying", retry_seconds=BACKEND_RETRY_SECONDS)

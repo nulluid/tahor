@@ -124,6 +124,22 @@ class RecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(worker, 'STATE_DIR', Path(directory)), patch.object(worker, 'delete_pending_trash', side_effect=RuntimeError('temporary delete failure')), patch.object(worker, 'fetch', return_value=[]):
             self.assertEqual(worker.process_one_batch('INBOX'), 'error')
 
+    def test_fast_cadence_requires_paid_success_and_confirmed_writes(self):
+        for use_free, pending, trash_failure, expected in (
+                (False, False, False, 'processed_paid'),
+                (True, False, False, 'processed'),
+                (False, True, False, 'processed'),
+                (False, False, True, 'processed')):
+            with self.subTest(free=use_free, pending=pending, trash=trash_failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'current_batch_ops.json').write_text('[]')
+                worker.process_batch.main.return_value = {r['id']: r['id'] for r in self.records}
+                worker.keyword_tool.apply_ops.return_value = {
+                    'applied': {'0'} if pending else {'0', '1', '2'}, 'failed': set(), 'missing': set()}
+                results = (ok(self.records), []) if use_free else ([], ok(self.records))
+                with patch.object(worker, 'STATE_DIR', root), patch.object(worker, 'PROCESSED_IDS_PATH', root / 'processed.txt'), patch.object(worker, 'fetch', return_value=self.records), patch.object(worker, 'classify_batch', return_value=results), patch.object(worker, 'delete_pending_trash', side_effect=RuntimeError('retry') if trash_failure else None):
+                    self.assertEqual(worker.process_one_batch('INBOX'), expected)
+
     def test_transport_exception_becomes_retryable_error(self):
         worker.classify.BACKENDS = {'test': {'auth_header': lambda: 'fake', 'default_concurrency': 1, 'url': 'https://example.invalid', 'default_model': 'test'}}
         with patch.object(worker, 'PROMPT_PATH') as prompt, patch.object(worker.classify, 'classify_one', side_effect=RuntimeError('transport failed')):
