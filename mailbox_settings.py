@@ -93,6 +93,22 @@ REPLY_MODELS = {
         "model": "sao10k/l3.3-euryale-70b",
         "auth_env": "OPENROUTER_API_KEY",
     },
+    "ling-free": {
+        "label": "Ling 3.0 Flash VL (via OpenRouter, free Novita ZDR route)",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "model": "inclusionai/ling-3.0-flash-vl:free",
+        "auth_env": "OPENROUTER_API_KEY",
+        "request_options": {
+            "reasoning": {"enabled": False},
+            "provider": {
+                "only": ["novita"],
+                "allow_fallbacks": False,
+                "zdr": True,
+                "data_collection": "deny",
+                "max_price": {"prompt": 0, "completion": 0},
+            },
+        },
+    },
     "claude-opus": {
         "label": "Claude Opus 5 (via OpenRouter) — best writing, highest cost",
         "url": "https://openrouter.ai/api/v1/chat/completions",

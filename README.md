@@ -127,6 +127,11 @@ free backup writer in Settings: provider or credit failures switch both writing
 and verification to that free model, then retry your primary on later work after
 a five-minute cooldown. A failed quality check still leaves the reply pending. Choose
 **Disabled — keep replies pending** if no free provider has suitable data terms.
+**Ling 3.0 Flash VL** is an optional free writer and backup, restricted to Novita
+with zero data retention, data collection denied, and zero input/output pricing.
+If it is your backup and that route becomes unavailable, replies remain pending. These
+[routing controls](https://openrouter.ai/docs/guides/features/zdr) protect provider
+selection; they do not guarantee the accuracy of a draft.
 The [Nemotron free endpoint](https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free)
 warns against confidential or personal data and may log requests for provider
 improvement; free pricing is not a privacy guarantee. A reply
