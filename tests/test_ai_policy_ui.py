@@ -97,3 +97,12 @@ class AIPolicyUITests(AppTestCase):
         self.post(reply_backup_model='ling-free')
         self.assertEqual(settings.get_ai_policy('reply'),'free')
         self.assertEqual(self.routed_models('reply'),['ling-free'])
+
+    def test_legacy_backup_changes_preserve_explicit_always_free_policy(self):
+        settings=self.module.mailbox_settings
+        original=settings.load_settings();self.addCleanup(settings.save_settings,original)
+        for backup in ('none','ling-free'):
+            self.post(ai_task='reply',ai_policy='free',paid_model='grok-4.6',free_model='ling-free')
+            self.assertEqual(self.post(reply_backup_model=backup).status_code,302)
+            self.assertEqual(settings.get_ai_policy('reply'),'free')
+            self.assertEqual(self.routed_models('reply'),['ling-free'])
