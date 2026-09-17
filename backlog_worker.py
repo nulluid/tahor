@@ -200,9 +200,14 @@ def _fetch(conn, mailbox, prefix):
                 from datetime import datetime as _dt
                 date = _dt.strptime(internaldate, "%d-%b-%Y %H:%M:%S %z").isoformat()
             snippet = fetch_batch.extract_snippet(body_bytes)
+            import coupon_expiry
+            coupon_source = {}
+            if coupon_expiry.policy_for(from_email):
+                full_source = fetch_batch.extract_body_text(body_bytes)
+                coupon_source['coupon_source'] = full_source if len(full_source) <= 131072 else ''
 
             in_records.append(
-                {"id": message_id, "subject": subject, "from": from_email, "date": date, "snippet": snippet}
+                {"id": message_id, "subject": subject, "from": from_email, "date": date, "snippet": snippet, **coupon_source}
             )
             env_records.append(
                 {

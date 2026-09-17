@@ -15,7 +15,7 @@ class RetentionSafetyTests(unittest.TestCase):
 
     def test_partial_deletion_fails_the_scheduled_command(self):
         conn = self.connection()
-        with patch.object(retention_sweep, 'sweep_short_lived', return_value=(0, 0)), patch.object(retention_sweep.digest_retention, 'known_digests', return_value={}), patch.object(retention_sweep, 'connect', return_value=conn), patch.object(retention_sweep, 'list_all_paths', return_value=['INBOX']), patch.object(retention_sweep, 'sweep_mailbox', return_value=(2, 1)), patch.object(sys, 'argv', ['retention_sweep.py']):
+        with patch.object(retention_sweep.coupon_expiry, 'sweep', return_value=(0, 0)), patch.object(retention_sweep, 'sweep_short_lived', return_value=(0, 0)), patch.object(retention_sweep.digest_retention, 'known_digests', return_value={}), patch.object(retention_sweep, 'connect', return_value=conn), patch.object(retention_sweep, 'list_all_paths', return_value=['INBOX']), patch.object(retention_sweep, 'sweep_mailbox', return_value=(2, 1)), patch.object(sys, 'argv', ['retention_sweep.py']):
             with self.assertRaisesRegex(RuntimeError, 'incomplete'):
                 retention_sweep.main()
         conn.logout.assert_called_once()

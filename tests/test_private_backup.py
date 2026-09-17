@@ -24,6 +24,7 @@ class PrivateBackupTests(unittest.TestCase):
         self.sources = {name: self.state / name for name in module.NAMES}
         self.sources['settings.json'].write_text(json.dumps({'reply_rules': [{'instructions': 'Private directions', 'signature': 'Private Name', 'excluded_senders': ['skip@example.org']}]}))
         self.sources['vendor_buckets.json'].write_text('{"example.org":"Filed/Example"}')
+        self.sources['coupon_policies.json'].write_text('{"offers@example.com": {"folder": "Coupons/Example"}}')
         self.sources['prompt.txt'].write_text('Private prompt')
         self.sources['free_classifier_guidance.txt'].write_text('Private model guidance')
         self.sources['sieve.txt'].write_text('# Private rules')

@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tahor_db
 import reply_rules
+import coupon_expiry
 
 
 def sender_domain_of(email_addr):
@@ -52,6 +53,7 @@ def main():
     outrecs = json.loads(Path(f"{prefix}_out.json").read_text())
     envs = json.loads(Path(f"{prefix}_env.json").read_text())
 
+    coupon_policies = coupon_expiry.policies()
     active_reply_rules = {r["id"]: r for r in reply_rules.get_rules()}
     for r in outrecs:
         rec = inrecs.get(r["id"])
@@ -67,6 +69,9 @@ def main():
         if rule == "block_all" or (rule == "block_marketing" and r.get("category") == "marketing"):
             r["action"] = "trash"
             r["reason"] = f"sender rule: {rule}"
+
+        if rule not in ('block_all', 'block_marketing'):
+            coupon_expiry.protect_result(r, rec.get('from'), rec.get('coupon_source', ''), coupon_policies)
 
         matches = [key for key in r.get('reply_rule_matches', []) if key in active_reply_rules]
         uncertain = [key for key in r.get('reply_rule_uncertain', []) if key in active_reply_rules]
@@ -151,6 +156,7 @@ def main():
         if r.get('retention') == 'brief':
             # Standard remains the classifier-complete marker; expiry is separate.
             add = [f"category-{r.get('category', 'marketing')}", 'retention-standard', 'retention-short-lived']
+        add.extend(r.get('coupon_keywords', []))
         if r.get("expense_type") and r["expense_type"] != "n/a":
             add.append(f"expense-{r['expense_type']}")
         if r.get("needs_attention") is True:

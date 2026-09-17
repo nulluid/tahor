@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import config
 import digest_retention
+import coupon_expiry
 import mailbox_settings
 from mailbox_paths import quote_mailbox
 from message_expiry import metadata, expired
@@ -57,7 +58,7 @@ def sweep_mailbox(conn, path, keyword, cutoff_days, dry_run):
 
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=cutoff_days)).strftime("%d-%b-%Y")
-    typ, data = search_uids(conn, "BEFORE", cutoff, "KEYWORD", keyword, "UNKEYWORD", digest_retention.KEYWORD, "UNKEYWORD", "retention-short-lived", "UNKEYWORD", "retention-forever", "UNKEYWORD", "retention-pending-review", "UNKEYWORD", "needs-attention", "OR", "SEEN", "UNKEYWORD", "reply-protected")
+    typ, data = search_uids(conn, "BEFORE", cutoff, "KEYWORD", keyword, "UNKEYWORD", digest_retention.KEYWORD, "UNKEYWORD", "retention-short-lived", "UNKEYWORD", coupon_expiry.KEYWORD, "UNKEYWORD", "retention-forever", "UNKEYWORD", "retention-pending-review", "UNKEYWORD", "needs-attention", "OR", "SEEN", "UNKEYWORD", "reply-protected")
     if typ != "OK":
         raise RuntimeError("Retention search failed; no messages changed in this pass")
     if not data or not data[0]:
@@ -70,7 +71,7 @@ def sweep_trash(conn, path, dry_run=False):
     typ, _ = conn.select('"' + path.replace('\\', '\\\\').replace('"', '\\"') + '"', readonly=dry_run)
     if typ != "OK":
         raise RuntimeError("Trash cleanup could not select a mailbox")
-    typ, data = search_uids(conn, "KEYWORD", "delete-pending", "UNKEYWORD", "retention-forever", "UNKEYWORD", "retention-pending-review", "UNKEYWORD", "needs-attention", "OR", "SEEN", "UNKEYWORD", "reply-protected")
+    typ, data = search_uids(conn, "KEYWORD", "delete-pending", "UNKEYWORD", coupon_expiry.KEYWORD, "UNKEYWORD", "retention-forever", "UNKEYWORD", "retention-pending-review", "UNKEYWORD", "needs-attention", "OR", "SEEN", "UNKEYWORD", "reply-protected")
     if typ != "OK":
         raise RuntimeError("Trash cleanup search failed")
     return delete_uids(conn, data[0].split() if data and data[0] else [], dry_run)
@@ -81,7 +82,7 @@ def sweep_short_lived(conn, path, dry_run=False, now=None):
     if conn.select(quote_mailbox(path), readonly=dry_run)[0] != 'OK':
         raise RuntimeError('Brief retention could not select a mailbox')
     status, rows = search_uids(conn, 'KEYWORD', 'retention-short-lived', 'UNFLAGGED',
-                               'UNKEYWORD', 'retention-forever', 'UNKEYWORD', 'retention-pending-review',
+                               'UNKEYWORD', coupon_expiry.KEYWORD, 'UNKEYWORD', 'retention-forever', 'UNKEYWORD', 'retention-pending-review',
                                'UNKEYWORD', 'needs-attention', 'UNKEYWORD', 'reply-protected')
     if status != 'OK':
         raise RuntimeError('Brief retention search failed')
@@ -139,6 +140,11 @@ def main():
         grand_deleted += deleted
         if found:
             print(f"{path}: {found} expired Tahor digest(s), {deleted} permanently deleted")
+        found, deleted = coupon_expiry.sweep(conn, path, dry_run, delete_uids)
+        grand_found += found
+        grand_deleted += deleted
+        if found:
+            print(f"{path}: {found} expired coupon(s), {deleted} permanently deleted")
         found, deleted = sweep_short_lived(conn, path, dry_run)
         grand_found += found
         grand_deleted += deleted

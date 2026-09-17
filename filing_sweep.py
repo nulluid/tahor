@@ -27,6 +27,7 @@ from mailbox_search import search_uids
 import tahor_db
 import mailbox_settings
 import reply_rules
+import coupon_expiry
 from mailbox_paths import list_mailboxes, quote_mailbox
 
 CATEGORY_KEYWORDS = ["category-receipt", "category-statement", "category-government-tax"]
@@ -77,8 +78,9 @@ SPECIAL_FLAGS = {"\\drafts", "\\sent", "\\trash", "\\junk", "\\all"}
 
 def eligible_uids(conn, criteria):
     candidates = set()
-    for keyword in CATEGORY_KEYWORDS:
-        typ, data = search_uids(conn, *criteria, "KEYWORD", keyword, *PROTECTED, *CLASSIFIED)
+    for keyword in CATEGORY_KEYWORDS + [coupon_expiry.KEYWORD]:
+        coupon_guards = ('KEYWORD', 'category-marketing', 'UNKEYWORD', 'reply-protected') if keyword == coupon_expiry.KEYWORD else ()
+        typ, data = search_uids(conn, *criteria, "KEYWORD", keyword, *coupon_guards, *PROTECTED, *CLASSIFIED)
         if typ != "OK":
             raise RuntimeError("Filing search failed; retry the sweep")
         if data and data[0]:
@@ -188,12 +190,22 @@ def main():
         if uid in reply_destinations:
             by_dest[reply_destinations[uid]].append(uid)
             continue
-        typ, msg_data = conn.uid("FETCH", uid, "(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)])")
+        typ, msg_data = conn.uid("FETCH", uid, "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)])")
         if typ != "OK" or not msg_data or not msg_data[0]:
             failures += 1
             continue
         message = email.message_from_bytes(msg_data[0][1], policy=email.policy.default)
         from_header = message.get('From', '')
+        flags_match = re.search(rb'FLAGS \(([^)]*)\)', msg_data[0][0])
+        flags = set(flags_match[1].lower().split()) if flags_match else set()
+        if coupon_expiry.KEYWORD.encode() in flags and b'category-marketing' in flags:
+            policy = coupon_expiry.policy_for(str(from_header))
+            if any(flag.startswith(b'category-') and flag != b'category-marketing' for flag in flags):
+                continue
+            if policy is None or flags.intersection({b'needs-attention', b'reply-protected', b'\\flagged', b'retention-pending-review'}):
+                continue
+            by_dest[f"{root}/{policy['folder']}"].append(uid)
+            continue
         bucket, vendor = vendor_for(from_header, buckets)
         if bucket == "_Unsorted":
             unsorted_labels.add(vendor)

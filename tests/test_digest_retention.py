@@ -170,6 +170,7 @@ class DigestRetentionTests(unittest.TestCase):
              patch.object(retention_sweep, 'list_all_paths', return_value=['INBOX', 'Archive', 'Trash']), \
              patch.object(digests, 'known_digests', return_value=self.records), \
              patch.object(digests, 'sweep', return_value=(0, 0)) as sweep, \
+             patch.object(retention_sweep.coupon_expiry, 'sweep', return_value=(0, 0)), \
              patch.object(retention_sweep, 'sweep_short_lived', return_value=(0, 0)), \
              patch.object(retention_sweep, 'sweep_mailbox', return_value=(0, 0)) as ordinary, \
              patch.object(retention_sweep.sys, 'argv', ['retention_sweep.py']):
