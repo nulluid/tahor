@@ -70,6 +70,8 @@ class PublicHTTPSHandler(urllib.request.HTTPSHandler):
 
 class PublicRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urlsplit(req.full_url).scheme == 'https' and urlsplit(newurl).scheme != 'https':
+            raise ValueError('Unsubscribe requests cannot downgrade from HTTPS')
         validate_url(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
@@ -160,19 +162,38 @@ def _send_mailto(mailto, from_addr, app_password, smtp_host, smtp_port):
     return 'Unsubscribe email submitted; the sender may take time to process it'
 
 
+def secure_one_click_url(url):
+    """Try the advertised HTTP endpoint over TLS, without changing its identity.
+
+    Only the ordinary HTTP port can be upgraded. Custom ports may identify a
+    different service and are left for manual review or the advertised mailto.
+    """
+    parsed = urlsplit(url)
+    if parsed.scheme == 'https':
+        return url
+    if (parsed.scheme != 'http' or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None):
+        raise ValueError('Invalid one-click unsubscribe URL')
+    if parsed.port not in (None, 80):
+        return None
+    authority = parsed.netloc
+    if parsed.port == 80:
+        authority = authority.rsplit(':', 1)[0]
+    return parsed._replace(scheme='https', netloc=authority).geturl()
+
+
 def execute(candidate, from_addr, app_password, smtp_host, smtp_port):
     url = candidate['unsubscribe_url']
     mailto = candidate['unsubscribe_mailto']
     try:
         if candidate['one_click'] and url:
-            scheme = urlsplit(url).scheme
-            if scheme == 'http':
+            secured = secure_one_click_url(url)
+            if secured is None:
                 if mailto:
                     return _send_mailto(mailto, from_addr, app_password, smtp_host, smtp_port)
                 validate_url(url)
-                raise UnsubscribeError('manual_confirmation', 'This sender advertises an insecure HTTP one-click link. Tahor will not submit it automatically. Open the unsubscribe page in your browser to review it, or block marketing in Tahor.')
-            if scheme != 'https':
-                raise ValueError('One-click unsubscribe requires HTTPS')
+                raise UnsubscribeError('manual_confirmation', 'This sender’s HTTP unsubscribe link uses a custom port. Tahor will not change the service or submit it insecurely. Open its unsubscribe page to review it, or block marketing in Tahor.')
+            url = secured
             request = urllib.request.Request(url, data=b'List-Unsubscribe=One-Click', headers={'Content-Type': 'application/x-www-form-urlencoded'}, method='POST')
             try:
                 with open_public(request) as response:
@@ -185,13 +206,13 @@ def execute(candidate, from_addr, app_password, smtp_host, smtp_port):
                 # Only a definite rejection permits this alternate submission.
                 # Timeout/connection loss may mean the POST succeeded: do not
                 # silently send another request over a second transport.
-                if status != 403 or not mailto:
+                if status not in (400, 401, 403, 404, 405, 410, 422) or not mailto:
                     raise UnsubscribeError('http_rejected', describe_failure(error)) from None
                 try:
                     result = _send_mailto(mailto, from_addr, app_password, smtp_host, smtp_port)
                 except Exception as fallback_error:
-                    raise UnsubscribeError('email_fallback', 'The one-click request was rejected (HTTP 403). ' + describe_failure(fallback_error)) from None
-                return result + ' (the advertised email method was used after HTTP 403)'
+                    raise UnsubscribeError('email_fallback', f'The HTTPS one-click request was rejected (HTTP {status}). ' + describe_failure(fallback_error)) from None
+                return result + f' (the advertised email method was used after HTTP {status})'
         if mailto:
             return _send_mailto(mailto, from_addr, app_password, smtp_host, smtp_port)
         if url:
