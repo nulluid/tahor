@@ -111,8 +111,9 @@ classification, reply writing and rule writing. Always free never calls paid;
 always paid never calls free. Auto starts free and may use paid for a queue
 estimated to exceed four hours or a temporary free-provider failure. Cooldowns
 last five minutes before another recovery probe; estimates are not guarantees.
-A running classification batch retains its starting policy. Writing rechecks
-policy before changing tiers; an HTTP call already sent cannot be recalled.
+Classification rechecks policy before each new backend stage, including fallback
+and recovery probes; its cooldown deadlines survive worker restarts. Writing also
+rechecks policy before changing tiers. An HTTP call already sent cannot be recalled.
 Writing starts disabled until a model is selected. Its paid/free model choices
 are independent of classifier models, and writer/verifier share one model per attempt.
 
