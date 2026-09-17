@@ -177,7 +177,7 @@ class ReviewActionTests(AppTestCase):
         self.assertEqual(json.loads(row['resolution'])['action'], 'keep')
         self.assertEqual(json.loads(row['context'])['review_search']['next_index'], 2)
         self.assertIn('will retry automatically', self.client.get('/').get_data(as_text=True))
-        with patch.object(self.module.apply_decisions, 'apply_one') as apply, patch('ai_routing.reconcile_pending'):
+        with patch.object(self.module.apply_decisions, 'apply_one') as apply, patch('ai_routing.reconcile_pending'), patch('message_reviews.hydrate_pending'):
             self.module.apply_decisions.main()
         apply.assert_called_once_with(identifier)
         self.post(f'/resolve/{identifier}', action='skip')

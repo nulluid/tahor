@@ -32,8 +32,16 @@ SNIPPET_MAX_CHARS = 500
 
 
 def connect(timeout=60):
+    username, password = config.email_address(), config.app_password()
     conn = imaplib.IMAP4_SSL(config.IMAP_HOST, config.IMAP_PORT, timeout=timeout)
-    conn.login(config.email_address(), config.app_password())
+    try:
+        conn.login(username, password)
+    except BaseException:
+        try:
+            conn.shutdown()
+        except Exception:
+            pass
+        raise
     return conn
 
 
