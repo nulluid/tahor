@@ -40,28 +40,61 @@ across all settings and state. Backups do not include mailbox contents: those
 remain with your email provider. Logs, transient batches, and provider sessions
 are deliberately excluded.
 
-## Keep an off-host copy
+## Automate an off-host recovery copy
 
-A backup on the same disk does not cover server loss. Copy the complete snapshot
-directory to a separate trusted machine or encrypted backup store, preserving
-private permissions. Use SSH/SFTP or your established encrypted backup system;
-do not upload snapshots to a public Git repository, issue, or artifact store.
-
-The snapshot itself is **not encrypted**. For off-site storage, use a maintained
-tool such as age or your backup provider’s encryption, keeping the decryption
-key independently of the Tahor server. Check that you can decrypt and verify a
-copy on another machine. Host-bound credential encryption alone does not provide
-portable disaster recovery.
-
-Verify the copied or decrypted directory without loading any account credentials:
+For the hardened Linux deployment, run the receiver on a **separate trusted
+computer** with Python and OpenSSH. The server never needs a key to that computer.
+Use a dedicated SSH identity where possible; the remote account must be allowed
+to run the installed recovery exporter through `sudo -n`. Verify the server's SSH
+host key independently before the first run. Unknown or changed host keys fail
+closed.
 
 ```bash
-python3 scripts/private_backup.py --verify /private/backups/backup-TIMESTAMP
+python3 scripts/offhost_backup.py \
+  --host admin@mail.example.com \
+  --identity ~/.ssh/tahor_backup \
+  --destination ~/.local/share/tahor-recovery \
+  --keep 28
 ```
 
-A recurring scheduler can invoke the backup command, but it still needs a
-separate off-host copy and retention policy. Check scheduler failures and verify
-periodic copies; a configured timer alone is not evidence of a usable backup.
+The receiver asks `/opt/tahor/scripts/recovery_export.py` for a new snapshot,
+downloads it over SSH, verifies all checksums and SQLite integrity, and atomically
+publishes the completed copy. Only then does it acknowledge success to the server.
+It retains the newest 28 verified copies; failed transfers or acknowledgements do
+not prune existing copies. Snapshot creation and SSH transfers have time limits;
+overlapping export or receiver runs fail without starting a second copy. Logs contain fixed status messages, not mailbox data or secrets.
+
+Schedule this command every six hours with your computer's scheduler—for example,
+a user systemd timer on Linux or a LaunchAgent on macOS. Use absolute paths to the
+Python interpreter, script, identity and destination. A macOS calendar schedule
+runs a missed job when the computer wakes; a powered-off or disconnected receiver
+cannot back up the server. Keep its logs private and test the scheduled invocation,
+not just the interactive command.
+
+To receive an alert if no receiver has acknowledged a verified copy for 36 hours,
+add this to the server's private configuration and enable health notifications:
+
+```dotenv
+TAHOR_OFFHOST_BACKUP_MAX_AGE_HOURS=36
+```
+
+A recovery directory contains `app/` with the normal private snapshot and, when
+the optional connector is installed, `provider-ownership.json`. That file preserves
+the connector's installation identity, account binding, owned rule IDs and any
+uncertain creation intent. It contains **no password, TOTP seed, cookie or token**.
+The outer `bundle.json` verifies both parts. You can verify a completed copy locally:
+
+```bash
+python3 -c 'import sys; sys.path.insert(0, "scripts"); from recovery_bundle import validate_completed; validate_completed(sys.argv[1]); print("Recovery copy verified")' \
+  ~/.local/share/tahor-recovery/recovery-TIMESTAMP
+```
+
+Storage directories are mode `0700` and files `0600`, outside Git checkouts. The
+copies are **not encrypted by this tool**. Use an encrypted disk or backup store
+and protect the receiving computer as carefully as the private data it holds.
+Checksums detect corruption; they are not a signature against a malicious party
+that can replace the entire backup. The server retains three downloadable export
+archives. Its ordinary local snapshots have a separate retention policy.
 
 ## Restore
 
@@ -102,9 +135,28 @@ recovering an old snapshot.
 ## Credentials need a separate recovery plan
 
 The tool does not copy or overwrite `config.env`, IMAP app passwords, API keys,
-OAuth secrets, browser sessions, Fastmail passwords, TOTP seeds, or connector
-ownership journals. Keep necessary account recovery information in a trusted
+OAuth secrets, browser sessions, Fastmail passwords, or TOTP seeds. Keep necessary account recovery information in a trusted
 password manager. Re-enroll the [Fastmail connector](fastmail-connector.md) using
-its documented procedure after server loss. Existing provider rules may remain
-installed: inspect them before enabling a new connector, since this backup does
-not reconstruct its private rule-ownership journal.
+its documented procedure after server loss. If you use the off-host recovery
+bundle, restore the app from its `app/` subdirectory, then recover provider ownership:
+
+1. Keep automatic provider synchronization disabled. Enroll and verify the same
+   Fastmail account on the replacement host.
+2. Place a validated copy of the recovery directory in root-owned private storage
+   outside any Git checkout; directories must be `0700`, files `0600`. Ownership
+   checks deliberately reject an unreviewed upload owned by another user.
+3. Stop `tahor-provider.service` and `tahor-provider-check.service`, then run:
+
+```bash
+sudo /opt/tahor/venv/bin/python /opt/tahor/scripts/restore_provider_ownership.py \
+  /root/tahor-recovery/recovery-TIMESTAMP --connector-stopped
+```
+
+The command requires the newly enrolled account identity to match the backup and
+refuses to overwrite conflicting ownership records. It restores only installation
+identity and rule ownership, preserving the new credentials and session. Services
+must remain stopped if interrupted; retry the same validated restore. Review
+existing provider rules before restarting and enabling synchronization. Rules
+created or edited after the snapshot may need manual reconciliation; uncertain
+ownership stops instead of silently creating duplicates. An app-only snapshot
+cannot reconstruct this journal.

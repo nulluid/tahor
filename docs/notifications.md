@@ -105,3 +105,12 @@ journalctl --user -u tahor-notifications.service -n 30 --no-pager
 when notifications are enabled and due. Notification delivery itself depends on
 the host, network, and IMAP credentials. Use external monitoring if you need alerts
 when the whole server or its email connection is unavailable.
+
+## Off-host recovery monitoring
+
+Set `TAHOR_OFFHOST_BACKUP_MAX_AGE_HOURS=36` after configuring the off-host receiver.
+Tahor then treats a missing or overdue receiver acknowledgement as a health
+problem. The timestamp is updated only after the receiver validates its copy,
+not merely when the server creates an archive. Normal health-alert persistence
+and deduplication apply. Check the receiving computer's scheduler, connectivity
+and private status file if an alert arrives.

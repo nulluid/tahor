@@ -33,6 +33,7 @@ PROBLEM_LABELS = {
     'worker_stalled': 'The email worker has not completed a batch for over an hour.',
     'connector_auth': 'The optional Fastmail connector needs administrator enrollment or sign-in.',
     'connector_stopped': 'The optional Fastmail connector needs administrator review.',
+    'backup_stale': 'A verified off-host recovery copy is overdue. Check the backup computer and its scheduled SSH transfer.',
 }
 
 
@@ -72,6 +73,17 @@ def inspect_health(state, now):
             problems.append('connector_stopped')
     import ai_routing
     problems.extend(ai_routing.persistent_problems(now))
+    if os.environ.get('TAHOR_OFFHOST_BACKUP_MAX_AGE_HOURS'):
+        try:
+            hours = float(os.environ['TAHOR_OFFHOST_BACKUP_MAX_AGE_HOURS'])
+            if not 1 <= hours <= 8760:
+                raise ValueError()
+            path = Path(os.environ.get('TAHOR_OFFHOST_BACKUP_STATUS', '/var/lib/tahor/runtime/state/offhost_backup.json'))
+            verified = json.loads(path.read_text()).get('verified_at')
+            if type(verified) not in (int, float) or not now - hours * 3600 <= verified <= now + 300:
+                raise ValueError()
+        except (OSError, ValueError, TypeError, AttributeError):
+            problems.append('backup_stale')
     healthy = 'Caught up; watching for new mail.' if snapshot.get('state') == 'idle' and not problems else ('Processing mail normally.' if not problems else 'Administrator attention may be needed.')
     return problems, healthy
 
