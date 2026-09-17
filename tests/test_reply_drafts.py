@@ -156,6 +156,17 @@ class DraftTests(unittest.TestCase):
         verifier_input = json.loads(completion.call_args_list[-1].args[2]['messages'][1]['content'])
         self.assertEqual(verifier_input['candidate_reply'], '[Please add your availability].')
         self.assertNotIn('Example Owner', verifier_input['candidate_reply'])
+        for call in completion.call_args_list:
+            source = json.loads(call.args[2]['messages'][1]['content'])
+            self.assertEqual(source['mailbox_owner'], 'owner@example.com')
+            self.assertEqual(source['from'], 'person@example.com')
+            self.assertEqual(source['owner_signature'], self.rule['signature'])
+
+    def test_owner_placeholder_requires_attention_even_if_verifier_misses_it(self):
+        verification = {}
+        self.prose_test([{'sentences': ['[Please add your availability].']},
+                         {'approved': True, 'issues': [], 'needs_attention': False}], verification)
+        self.assertTrue(verification['needs_attention'])
 
     def test_second_prose_rejection_fails_closed(self):
         responses = [{'sentences': ['I will attend.']}, {'approved': False, 'issues': ['Unsupported commitment.'], 'needs_attention': True}]*2
@@ -175,7 +186,9 @@ class DraftTests(unittest.TestCase):
         with patch.object(draft_replies, 'draft_reply_body', side_effect=ValueError('Reply failed verification')):
             self.assertEqual(draft_replies.process_new_mail(self.conn), [])
         self.conn.append.assert_not_called()
-        self.assertIsNone(draft_replies.tahor_db.get_reply_draft_for_thread('<one@example.com>'))
+        saved = draft_replies.tahor_db.get_reply_draft_for_thread('<one@example.com>')
+        self.assertEqual(saved['status'], 'preparing')
+        self.assertEqual(saved['draft_body'], '')
         self.assertFalse(any(c.args[0] == 'STORE' and 'draft-created' in c.args[-1] for c in self.conn.uid.call_args_list))
 
     def test_personal_question_attention_survives_append_retry_without_blanket_newsletter_hold(self):
@@ -244,7 +257,7 @@ class DraftTests(unittest.TestCase):
                 response = MagicMock()
                 response.__enter__.return_value.read1.side_effect = responses
                 with patch.dict(draft_replies.os.environ, {'OPENROUTER_API_KEY': 'test-only'}), patch.object(draft_replies.mailbox_settings, 'get_reply_model', return_value='gpt5-flex'), patch.object(draft_replies.urllib.request, 'urlopen', return_value=response), self.assertRaisesRegex(ValueError, 'required service tier'):
-                    draft_replies.draft_reply_body('Update', 'person@example.com', 'An update.', self.rule)
+                    draft_replies._draft_reply_body('Update', 'person@example.com', 'An update.', self.rule)
 
     def test_read_and_unread_windows_use_server_delivery_date(self):
         now = datetime(2026, 9, 16, 12, tzinfo=timezone.utc)
@@ -263,6 +276,21 @@ class DraftTests(unittest.TestCase):
         self.conn.append.assert_not_called()
         self.assertFalse(any(call.args[0] == 'STORE' and call.args[2] == '-FLAGS.SILENT' for call in self.conn.uid.call_args_list))
         self.assertEqual(draft_replies.tahor_db.get_reply_draft_for_thread('<one@example.com>')['status'], 'pending')
+
+    def test_unavailable_models_leave_durable_preparation_then_recover(self):
+        with patch.object(draft_replies, 'draft_reply_body', side_effect=draft_replies.ReplyBackendError('Both providers unavailable')):
+            self.assertEqual(draft_replies.process_new_mail(self.conn), [])
+        saved = draft_replies.tahor_db.get_reply_draft_for_thread('<one@example.com>')
+        self.assertEqual(saved['status'], 'preparing')
+        self.assertEqual(saved['draft_body'], '')
+        self.assertNotIn('verified_reply', json.loads(saved['trigger_reason']))
+        self.conn.append.assert_not_called()
+        self.conn.append.return_value = ('OK', [])
+        with patch.object(draft_replies, 'draft_exists', return_value=None), patch.object(draft_replies, 'draft_reply_body', return_value='Verified after recovery.'):
+            self.assertEqual(len(draft_replies.process_new_mail(self.conn)), 1)
+        saved = draft_replies.tahor_db.get_reply_draft_for_thread('<one@example.com>')
+        self.assertEqual(saved['status'], 'pending')
+        self.assertEqual(saved['draft_body'], 'Verified after recovery.')
 
     def test_already_sent_personal_reply_is_not_held_for_attention_again(self):
         context = json.dumps({'verified_reply': 1, 'needs_attention': True})

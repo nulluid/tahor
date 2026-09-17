@@ -112,6 +112,7 @@ DEFAULT_SETTINGS = {
     "classify_mode": "free",
     "rule_model": DEFAULT_RULE_MODEL,
     "reply_model": DEFAULT_REPLY_MODEL,
+    "reply_backup_model": "nemotron-free",
     "free_rate_log": [],  # rolling [{"messages": N, "seconds": S}, ...], see record_free_batch
     "backlog_estimate": None,
     "backlog_estimate_at": None,
@@ -223,6 +224,26 @@ def set_rule_model(key):
 
 def get_reply_model():
     return load_settings().get("reply_model", DEFAULT_REPLY_MODEL)
+
+
+def free_reply_models():
+    # Explicit free model IDs only: a provider's promotional free quota is not a guarantee.
+    return {key: backend for key, backend in REPLY_MODELS.items()
+            if backend['model'].endswith(':free') and backend['url'] == 'https://openrouter.ai/api/v1/chat/completions'}
+
+
+def get_reply_backup_model():
+    key = load_settings().get('reply_backup_model', 'nemotron-free')
+    return key if key in free_reply_models() else 'nemotron-free'
+
+
+@locked_update
+def set_reply_backup_model(key):
+    if key not in free_reply_models():
+        raise ValueError('Choose an explicitly free reply model for fallback.')
+    settings = load_settings()
+    settings['reply_backup_model'] = key
+    save_settings(settings)
 
 
 @locked_update

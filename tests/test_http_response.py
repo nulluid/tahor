@@ -46,7 +46,7 @@ class ResponseBoundTests(unittest.TestCase):
 
     def test_draft_timeout_closes_response_without_inventing_a_body(self):
         response = MagicMock()
-        with patch.dict(draft_replies.os.environ, {'OPENROUTER_API_KEY': 'synthetic'}), patch.object(draft_replies.mailbox_settings, 'get_reply_model', return_value='nemotron-free'), patch.object(draft_replies.urllib.request, 'urlopen', return_value=response), patch.object(draft_replies, 'read_bounded', side_effect=TimeoutError('Model response deadline exceeded')):
+        with patch.dict(draft_replies.os.environ, {'OPENROUTER_API_KEY': 'synthetic', 'FASTMAIL_EMAIL': 'owner@example.com'}), patch.object(draft_replies.mailbox_settings, 'get_reply_model', return_value='nemotron-free'), patch.object(draft_replies.urllib.request, 'urlopen', return_value=response), patch.object(draft_replies, 'read_bounded', side_effect=TimeoutError('Model response deadline exceeded')):
             with self.assertRaises(TimeoutError):
-                draft_replies.draft_reply_body('Update', 'sender@example.org', 'Private input')
+                draft_replies._draft_reply_body('Update', 'sender@example.org', 'Private input')
         response.__exit__.assert_called_once()

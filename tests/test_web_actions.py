@@ -18,6 +18,18 @@ class WebActionTests(AppTestCase):
         settings.record_free_batch(10, 5)
         self.assertEqual(settings.get_inbox_grace_days(), {'read': 3, 'unread': 7})
 
+    def test_reply_backup_is_visible_and_only_accepts_free_models(self):
+        settings = self.module.mailbox_settings
+        original = settings.load_settings()
+        self.addCleanup(settings.save_settings, original)
+        self.assertEqual(self.post('/settings', reply_backup_model='nemotron-free').status_code, 302)
+        self.assertEqual(settings.get_reply_backup_model(), 'nemotron-free')
+        self.assertEqual(self.post('/settings', reply_backup_model='gpt5').status_code, 400)
+        self.assertEqual(settings.get_reply_backup_model(), 'nemotron-free')
+        page = self.client.get('/settings').get_data(as_text=True)
+        self.assertIn('Free backup for reply writing', page)
+        self.assertIn('name="reply_backup_model"', page)
+
     def test_successful_unsubscribe_records_request_time(self):
         self.module.tahor_db.upsert_unsubscribe_candidate('example.com', '', '', 'https://example.com/unsubscribe', None, True)
         row = self.module.tahor_db.get_unsubscribe_candidate('example.com')

@@ -471,11 +471,17 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
   <button type="submit" class="primary">Save reply rule</button>
 </form>
 </details>
-<p class="hint">Model used to draft these replies. This runs once per matching email, so quality of the writing matters more than for rule drafting &mdash; pick a model known for natural English prose.</p>
+<p class="hint">Model used to write and verify these replies. Choose a model known for natural English prose; each reply requires multiple model calls.</p>
 <form method="post" action="/settings">
   <div class="mode-options">
     {reply_model_cards}
   </div>
+</form>
+<h3>Free backup for reply writing</h3>
+<p class="hint">If the primary writer is unavailable, use this free model for both writing and verification. Retry the primary on new drafting work after a five-minute cooldown. A rejected reply stays pending; Tahor never substitutes another paid model.</p>
+<form method="post" action="/settings">
+  <label>Free backup model <select name="reply_backup_model">{reply_backup_options}</select></label>
+  <button type="submit">Save free backup</button>
 </form>
 </section>
 </main>
@@ -773,6 +779,11 @@ def settings_page():
                 mailbox_settings.set_rule_model(key)
             else:
                 abort(400, "Choose an available rule model.")
+        elif "reply_backup_model" in request.form:
+            try:
+                mailbox_settings.set_reply_backup_model(request.form.get("reply_backup_model", ""))
+            except ValueError:
+                abort(400, "Choose an explicitly free reply model.")
         elif "reply_model" in request.form:
             key = request.form.get("reply_model", "")
             if key in mailbox_settings.REPLY_MODELS:
@@ -836,6 +847,7 @@ def settings_page():
         mode_cards=mode_cards,
         rule_model_cards=rule_model_cards,
         reply_model_cards=reply_model_cards,
+        reply_backup_options="".join(f'<option value="{html(key)}"{" selected" if key == mailbox_settings.get_reply_backup_model() else ""}>{html(backend["label"])}</option>' for key, backend in mailbox_settings.free_reply_models().items()),
         reply_rules_list=render_reply_rules(),
         provider_status=html(provider['label']),
         provider_next_value='0' if provider['enabled'] else '1',
