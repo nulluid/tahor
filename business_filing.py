@@ -202,6 +202,8 @@ def _run_sweep(conn, *, backfill=False, limit=100, budget_seconds=45, dry_run=Fa
     if state.get('rules')!=fingerprint:
         state=dict(rules=fingerprint,folders={},next_folder='')
     paths=sorted(name for name,flags in list_mailboxes(conn) if '\\drafts' not in flags and name.lower()!='drafts')
+    visited = set(state.get('visited', []))
+    paths = [name for name in paths if name not in visited]
     start=state.get('next_folder','')
     paths=[name for name in paths if name>=start]+[name for name in paths if name<start]
     counts=dict(examined=0,moved=0,receipts=0,deferred=0,complete=False)
@@ -287,8 +289,12 @@ def _run_sweep(conn, *, backfill=False, limit=100, budget_seconds=45, dry_run=Fa
             state['folders'][source]=dict(uidvalidity=validity,after=after,deferred=sorted(deferred))
             if not dry_run:atomic_write(path,json.dumps(state)+'\n')
         if finished:
+            visited.add(source)
+            state['visited'] = sorted(visited)
             state['next_folder']=paths[index+1] if index+1<len(paths) else ''
-            if index+1==len(paths):counts['complete']=True
+            if index+1==len(paths):
+                counts['complete']=True
+                state['visited'] = []
         if not dry_run:atomic_write(path,json.dumps(state)+'\n')
     return counts
 
