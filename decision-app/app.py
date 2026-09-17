@@ -1387,7 +1387,7 @@ def retry_rule(decision_id):
     return redirect("/")
 
 
-def _unsubscribe_card(row, non_compliant=False, suggestion=None):
+def _unsubscribe_card(row, non_compliant=False, suggestion=None, related_handled=None):
     mechanism = "one-click unsubscribe" if row["one_click"] else ("unsubscribe link" if row["unsubscribe_url"] else ("email unsubscribe" if row["unsubscribe_mailto"] else "no unsubscribe mechanism found"))
     template = NON_COMPLIANT_CARD if non_compliant else UNSUBSCRIBE_CARD
     rendered = template.format(
@@ -1399,6 +1399,8 @@ def _unsubscribe_card(row, non_compliant=False, suggestion=None):
         manual_link=(f'<p><a href="/subscription-messages/{row["id"]}">View emails</a></p>' + (f'<p><a href="/unsubscribe-link/{row["id"]}" target="_blank" rel="noopener noreferrer">Open sender’s unsubscribe page</a> <span class="hint">Complete any confirmation there.</span></p>' if row['unsubscribe_url'] else '')),
         result=html(session.pop("subscription_result_" + str(row["id"]), "")),
     )
+    if related_handled:
+        rendered = rendered.replace('</fieldset>', '</fieldset><p class="hint">Same display name as a handled sender: ' + ', '.join(html(domain) for domain in related_handled[:3]) + '. This is a different sending domain: ' + html(row['sender_domain']) + '. Its choice is separate.</p>')
     if suggestion and suggestion.get('action') in ('unsubscribe_block_marketing', 'unsubscribe', 'block_all', 'dismiss'):
         rendered = rendered.replace('value="" checked', 'value=""').replace('value="' + suggestion['action'] + '"', 'value="' + suggestion['action'] + '" checked')
         rendered = rendered.replace('</fieldset>', '</fieldset><p class="ai-suggestion">AI suggestion: ' + html(suggestion.get('reason', '')) + '</p>')
@@ -1418,12 +1420,16 @@ def unsubscribe_page():
         "SELECT * FROM unsubscribe_candidates WHERE status = 'pending' AND non_compliant = 0 ORDER BY last_seen_at DESC"
     ).fetchall()
 
+    handled_names = {}
+    for handled in db.execute("SELECT display_name,sender_domain FROM unsubscribe_candidates WHERE status IN ('resolved','unsubscribed') AND display_name IS NOT NULL"):
+        if handled['display_name'].strip():
+            handled_names.setdefault(handled['display_name'].strip().casefold(), []).append(handled['sender_domain'])
     non_compliant_banner = ""
     if non_compliant_rows:
         non_compliant_banner = NON_COMPLIANT_SECTION.format(
             cards="".join(_unsubscribe_card(r, non_compliant=True, suggestion=suggestions.get(r["id"])) for r in non_compliant_rows)
         )
-    body = "".join(_unsubscribe_card(r, suggestion=suggestions.get(r["id"])) for r in pending_rows) if pending_rows else '<p class="empty">No unsubscribe candidates pending.</p>'
+    body = "".join(_unsubscribe_card(r, suggestion=suggestions.get(r["id"]), related_handled=handled_names.get((r["display_name"] or "").strip().casefold())) for r in pending_rows) if pending_rows else '<p class="empty">No unsubscribe candidates pending.</p>'
     return UNSUBSCRIBE_PAGE_TEMPLATE.format(
         icon=TAHOR_ICON,
         style=STYLE_BLOCK,

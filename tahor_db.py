@@ -105,8 +105,15 @@ def init_db():
     if "thread_root" not in reply_cols:
         conn.execute("ALTER TABLE reply_drafts ADD COLUMN thread_root TEXT NOT NULL DEFAULT ''")
     conn.execute("CREATE TABLE IF NOT EXISTS sender_samples (sender_email TEXT PRIMARY KEY, message_id TEXT NOT NULL, created_at TEXT NOT NULL)")
+    # A saved exact-domain block already settles the subscription decision,
+    # including blocks created through natural-language rules or prior releases.
+    _reconcile_blocked_subscriptions(conn)
     conn.commit()
     conn.close()
+
+
+def _reconcile_blocked_subscriptions(conn):
+    conn.execute("UPDATE unsubscribe_candidates SET status='resolved',non_compliant=0 WHERE status IN ('pending','unsubscribed') AND EXISTS (SELECT 1 FROM sender_rules s WHERE s.sender_domain=unsubscribe_candidates.sender_domain AND s.rule IN ('block_marketing','block_all'))")
 
 
 def upsert_unsubscribe_candidate(sender_domain, sender_email, display_name, unsubscribe_url, unsubscribe_mailto, one_click, message_id=None, received_at=None, is_marketing=False, metadata=None):
@@ -146,6 +153,7 @@ def upsert_unsubscribe_candidate(sender_domain, sender_email, display_name, unsu
                     (sender_domain,sender_email,display_name,unsubscribe_url,unsubscribe_mailto,int(one_click),now,now),
                 )
             candidate_id = existing['id'] if existing else conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+            _reconcile_blocked_subscriptions(conn)
             if metadata:
                 sample = dict(metadata, message_id=message_id or metadata.get('message_id'), sender_email=sender_email, display_name=display_name, received_at=received_at or metadata.get('received_at', ''))
                 _record_subscription_sample(conn, candidate_id, sample)
@@ -256,6 +264,7 @@ def set_sender_rule(sender_domain, rule):
         "ON CONFLICT(sender_domain) DO UPDATE SET rule = excluded.rule, created_at = excluded.created_at",
         (sender_domain, rule, datetime.now(timezone.utc).isoformat()),
     )
+    _reconcile_blocked_subscriptions(conn)
     conn.commit()
     conn.close()
 

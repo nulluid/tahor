@@ -30,7 +30,7 @@ const settle=()=>new Promise(resolve=>setImmediate(resolve));const respond=(call
  const payload=JSON.parse(calls[2].options.body.get('selections'));assert.deepEqual(payload,[{candidate_id:1,action:'dismiss'},{candidate_id:2,action:'unsubscribe'}]);assert.equal(calls[2].options.body.get('csrf_token'),'csrf');
  respond(calls[2],{job_id:'batch',status:'complete',items:[{candidate_id:1,status:'done',message:'Kept'},{candidate_id:2,status:'attention',message:'Needs attention'}]});await settle();
  assert.equal(w.document.querySelector('[data-selected-count]').textContent,'0');
- assert.match(w.document.querySelector('[data-subscription-id="2"] .subscription-result').textContent,/Needs attention/);
+ assert.match(w.document.querySelector('[data-subscription-id="2"] .subscription-result').textContent,/Needs attention/);assert.match(w.document.querySelector('[data-subscription-id="1"] .subscription-result').textContent,/Completed: Kept/);
  assert.equal(w.location.pathname,'/unsubscribe');w.close();
 })().catch(error=>{console.error(error);process.exitCode=1;});
 '''
