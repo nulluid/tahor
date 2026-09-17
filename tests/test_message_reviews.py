@@ -254,6 +254,15 @@ class ReviewActionTests(AppTestCase):
         operation = apply.call_args.args[0][0]
         self.assertIn('retention-standard', operation['add'])
         self.assertIn('retention-short-lived', operation['add'])
+        self.assertTrue({'retention-forever', 'retention-coupon'} <= set(operation['remove']))
+        self.assertNotIn('reply-protected', operation['remove'])
+        from message_expiry import expired
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        flags = {b'retention-forever', b'retention-coupon'}
+        flags.difference_update(flag.encode() for flag in operation['remove'])
+        flags.update(flag.encode() for flag in operation['add'])
+        self.assertTrue(expired(flags, now - timedelta(days=8), now, {'read': 3, 'unread': 7}))
         self.assertIn('retention-pending-review', operation['remove'])
         self.assertFalse(operation['delete'])
         self.assertEqual(self.row(identifier)['status'], 'resolved')

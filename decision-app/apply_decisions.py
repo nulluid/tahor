@@ -474,7 +474,7 @@ def apply_one(decision_id):
                 add = ["retention-standard"] if action in ("keep", "keep_brief") else ["retention-transient", "category-marketing", "delete-pending"]
                 if action == "keep_brief":
                     add.append("retention-short-lived")
-                result = keyword_tool.apply_ops([{"mailbox": context["mailbox"], "message_id": context["message_id"], "uid": context.get("uid"), "uidvalidity": context.get("uidvalidity"), "add": add, "delete": action == "trash", "remove": ["retention-pending-review", "needs-attention"] + (["delete-pending", "retention-transient"] if action in ("keep", "keep_brief") else []) + (["retention-short-lived"] if action != "keep_brief" else [])}])
+                result = keyword_tool.apply_ops([{"mailbox": context["mailbox"], "message_id": context["message_id"], "uid": context.get("uid"), "uidvalidity": context.get("uidvalidity"), "add": add, "delete": action == "trash", "remove": ["retention-pending-review", "needs-attention"] + (["delete-pending", "retention-transient"] if action in ("keep", "keep_brief") else []) + (["retention-short-lived"] if action != "keep_brief" else ["retention-forever", "retention-coupon"])}])
                 if context["message_id"] not in result["applied"]:
                     raise RuntimeError("Message operation could not be completed; it remains available for retry")
                 outcome = "Message kept with short-lived retention" if action == "keep_brief" else ("Message kept with normal retention" if action == "keep" else "Message deleted")
