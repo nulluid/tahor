@@ -347,10 +347,14 @@ def apply_free_text_rule(row, resolution):
         context = {}
     if context.get('rule_clarification'):
         raise RuleClarificationRequired(RULE_CLARIFICATION_QUESTION)
+    import card_instructions
+    card_instructions.validate_proposal(context, {})
     proposal = context.get('rule_proposal')
     if proposal:
         result = proposal['result']
         validate_rule_proposal(result)
+        import card_instructions
+        card_instructions.validate_proposal(context, result)
         if proposal.get('base_hash') != rule_base_hash(current_buckets, current_prompt, text):
             original = proposal.get('base_files', {})
             approved = resolution.get('approved_proposal') == proposal.get('token')
@@ -369,9 +373,13 @@ def apply_free_text_rule(row, resolution):
             queued = len(pending_ai_rule_ids(database))
         finally:
             database.close()
+        def validate_contextual_proposal(proposal):
+            import card_instructions
+            card_instructions.validate_proposal(context, proposal)
+            if proposal.get('kind') == 'sender_rule':
+                validate_explicit_sender_target(text, proposal['sender_rule'])
         result = rule_model_call(user_content, queue_size=max(1, queued), work_id=row["id"],
-            validate=lambda proposal: validate_explicit_sender_target(text, proposal['sender_rule'])
-                if proposal.get('kind') == 'sender_rule' else None)
+            validate=validate_contextual_proposal)
         validate_rule_proposal(result)
     kind = result.get("kind")
     if kind == "needs_clarification":

@@ -26,6 +26,8 @@ def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.execute("BEGIN IMMEDIATE")
+    import card_instructions
+    conn.execute(card_instructions.SCHEMA)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS decisions (

@@ -162,6 +162,7 @@ def _explicit_choice_feedback(conn):
 
 def _preferences(conn):
     settings = mailbox_settings.load_settings()
+    import card_instructions
     from coupon_expiry import policies
     policy_path = Path(os.environ.get('PROMPT_PATH', Path(os.environ.get('DATA_DIR', Path(__file__).resolve().parent)) / 'prompt.txt'))
     try:
@@ -169,7 +170,7 @@ def _preferences(conn):
             policy = stream.read(16000)
     except FileNotFoundError:
         policy = ''
-    return dict(explicit_choice_feedback=_explicit_choice_feedback(conn), owner_policy=policy, subscription_guidance=str(settings.get('subscription_guidance', ''))[:12000],
+    return dict(card_guidance_revision=card_instructions.revision(conn), explicit_choice_feedback=_explicit_choice_feedback(conn), owner_policy=policy, subscription_guidance=str(settings.get('subscription_guidance', ''))[:12000],
                 reply_rules=[{key: rule.get(key) for key in ('name','match_type','match','excluded_senders')} for rule in settings.get('reply_rules', []) if isinstance(rule, dict) and rule.get('enabled', True)][:10],
                 coupon_senders=list(policies())[:200],
                 prior_subscription_choices=[dict(row) for row in conn.execute("SELECT sender_domain,status FROM unsubscribe_candidates WHERE status!='pending' ORDER BY last_seen_at DESC LIMIT 100")],
@@ -238,6 +239,8 @@ def _excerpts(samples):
 
 def build_context(conn, rows, include_excerpts=True):
     preferences = _preferences(conn)
+    import card_instructions
+    preferences['exact_sender_guidance'] = card_instructions.for_senders(conn, [row['sender_email'] for row in rows])
     candidates, samples = [], []
     for row in rows:
         metadata = tahor_db.get_subscription_samples(row['id'])
