@@ -41,6 +41,8 @@ import provider_bridge
 import mailbox_settings
 import message_preview
 import subscription_bulk_ui
+import card_instructions
+import card_instructions_ui
 import settings_autosave
 import vendor_review_state
 import decision_interactions
@@ -721,6 +723,7 @@ def index():
     automatic_ids = set(vendor_suggestions.pending_work_ids(db)) if mailbox_settings.is_ai_enabled('rule') else set()
     automatic_count = 0
     cards = []
+    saved_instructions = card_instructions.get_all_card_instructions('decision')
     for row in pending:
         ctx = decision_context(row)
         if row["kind"] == "free_text_rule":
@@ -802,6 +805,9 @@ def index():
             cards.append(CARD_GENERIC.format(id=row["id"], summary=html(row["summary"] or '(No subject)'), context=html(ctx), details=details))
 
         if cards:
+            instruction_form = card_instructions_ui.render('decision', row['id'], saved_instructions.get(row['id'], ''))
+            end = cards[-1].rfind('</div>')
+            cards[-1] = cards[-1][:end] + instruction_form + cards[-1][end:]
             cards[-1] = cards[-1].replace('<div class="card"', f'<div class="card" data-decision-id="{row["id"]}" data-decision-kind="{row["kind"]}"', 1)
 
     review_count = len(cards)
@@ -835,7 +841,7 @@ def index():
         sieve_banner=sieve_banner,
         cards=body,
         sieve_content=html(sieve_content),
-    ) + decision_interactions.SCRIPT
+    ) + decision_interactions.SCRIPT + card_instructions_ui.SCRIPT
 
 
 def _settings_status_line(current_mode):
@@ -1235,6 +1241,21 @@ def resolve(decision_id):
     return redirect("/")
 
 
+@app.route("/card-instructions/<kind>/<int:identifier>", methods=["POST"])
+@login_required
+def save_card_guidance(kind, identifier):
+    action = request.form.get('submit_action', 'guidance')
+    if action not in ('guidance', 'propose_rule'):
+        return jsonify(error='Choose whether to save guidance or propose a rule.'), 400
+    try:
+        result = card_instructions.save_card_instructions(kind, identifier, request.form.get('instructions', ''), propose_rule=action == 'propose_rule')
+    except LookupError:
+        return jsonify(error='This review item no longer exists. Refresh the page.'), 404
+    except ValueError as error:
+        return jsonify(error=str(error)), 400
+    return jsonify(result)
+
+
 @app.route("/add-rule", methods=["POST"])
 @login_required
 def add_rule():
@@ -1387,7 +1408,7 @@ def retry_rule(decision_id):
     return redirect("/")
 
 
-def _unsubscribe_card(row, non_compliant=False, suggestion=None, related_handled=None):
+def _unsubscribe_card(row, non_compliant=False, suggestion=None, related_handled=None, instructions=None):
     mechanism = "one-click unsubscribe" if row["one_click"] else ("unsubscribe link" if row["unsubscribe_url"] else ("email unsubscribe" if row["unsubscribe_mailto"] else "no unsubscribe mechanism found"))
     template = NON_COMPLIANT_CARD if non_compliant else UNSUBSCRIBE_CARD
     rendered = template.format(
@@ -1405,6 +1426,8 @@ def _unsubscribe_card(row, non_compliant=False, suggestion=None, related_handled
         rendered = rendered.replace('data-subscription-id=', 'data-recommended="true" data-subscription-id=', 1)
         rendered = rendered.replace('value="" checked', 'value=""').replace('value="' + suggestion['action'] + '"', 'value="' + suggestion['action'] + '" checked')
         rendered = rendered.replace('</fieldset>', '</fieldset><p class="ai-suggestion">AI suggestion: ' + html(suggestion.get('reason', '')) + '</p>')
+    end = rendered.rfind('</div>')
+    rendered = rendered[:end] + card_instructions_ui.render('subscription', row['id'], (card_instructions.get_card_instructions('subscription', row['id']) if instructions is None else instructions)) + rendered[end:]
     return rendered
 
 
@@ -1428,13 +1451,14 @@ def unsubscribe_page():
     non_compliant_banner = ""
     if non_compliant_rows:
         non_compliant_banner = NON_COMPLIANT_SECTION.format(cards='')
+    saved_instructions = card_instructions.get_all_card_instructions('subscription')
     ordered_rows = sorted(list(non_compliant_rows) + list(pending_rows), key=lambda row: row['id'] not in suggestions)
-    body = "".join(_unsubscribe_card(r, non_compliant=bool(r['non_compliant']), suggestion=suggestions.get(r["id"]), related_handled=handled_names.get((r["display_name"] or "").strip().casefold())) for r in ordered_rows) if ordered_rows else '<p class="empty">No unsubscribe candidates pending.</p>'
+    body = "".join(_unsubscribe_card(r, non_compliant=bool(r['non_compliant']), suggestion=suggestions.get(r["id"]), instructions=saved_instructions.get(r['id'], ''), related_handled=handled_names.get((r["display_name"] or "").strip().casefold())) for r in ordered_rows) if ordered_rows else '<p class="empty">No unsubscribe candidates pending.</p>'
     return UNSUBSCRIBE_PAGE_TEMPLATE.format(
         icon=TAHOR_ICON,
         style=STYLE_BLOCK,
         header=tahor_header("unsubscribe"),
-        interaction_script=subscription_bulk_ui.SCRIPT,
+        interaction_script=subscription_bulk_ui.SCRIPT + card_instructions_ui.SCRIPT,
         flash=FLASH_BANNER.format(message=html(session.pop("flash", ""))) if session.get("flash") else "",
         count=len(non_compliant_rows) + len(pending_rows),
         bulk_controls=subscription_bulk_ui.BAR,

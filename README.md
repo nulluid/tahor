@@ -179,7 +179,9 @@ The action bar stays visible as you scroll, and each sender shows its own result
 **Generate AI suggestions** selects recommendations for your review using past
 decisions and your private guidance; it never applies them. Each batch covers
 50 senders by default, configurable in Settings. Submitted choices guide later
-recommendations. Recommended and selected items appear above undecided ones. Free recommendations can miss
+recommendations. **Tell Tahor what you want** on a subscription or decision card
+lets you add written guidance, or request a rule proposal to review before it
+changes mailbox policy. Recommended and selected items appear above undecided ones. Free recommendations can miss
 preferences for wanted coupons; review the selected actions before applying them. Some senders require confirmation on their website;
 email-based requests require an app password with SMTP sending access.
 

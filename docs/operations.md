@@ -579,3 +579,12 @@ Recommended and selected subscriptions appear before untouched items, both when
 the page opens and as recommendations arrive. Reordering preserves the visible
 card and manual selections. Browser storage restores manual choices only; stale
 AI selections do not survive a change in recommendation context.
+
+
+Each subscription and pending decision card includes **Tell Tahor what you want**.
+Use **Save AI guidance** to explain a sender relationship or correct a recommendation;
+use **Propose a rule** when you want a mailbox policy change. Proposals enter the
+existing Pending decisions review flow and require approval. Saving a note does not
+apply an unsubscribe choice, delete mail, or send a reply. Notes stay in the private
+database and recovery backups. Sender context comes from the stored review item;
+email contents and unsubscribe links are not treated as owner instructions.
