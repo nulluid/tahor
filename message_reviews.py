@@ -32,7 +32,7 @@ def _folder_matches(client, mailbox, identifier, saved=None):
     for uid in candidates:
         if not uid.isdigit():
             raise RuntimeError('The mailbox returned an invalid message identity')
-        status, rows = client.uid('FETCH', uid, '(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID SUBJECT FROM DATE)])')
+        status, rows = client.uid('FETCH', uid, '(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID SUBJECT FROM DATE)]<0.65537>)')
         items = [row for row in (rows or []) if isinstance(row, tuple)]
         if status != 'OK':
             raise RuntimeError('Message details could not be read; the decision remains pending')
@@ -60,7 +60,35 @@ def _folder_matches(client, mailbox, identifier, saved=None):
     return matches
 
 
-def locate(context, budget_seconds=20):
+class _DeadlineMailbox:
+    """Apply one lookup deadline to every network command, including folder scans."""
+    def __init__(self, client, deadline):
+        self.client, self.deadline = client, deadline
+
+    def __getattr__(self, name):
+        value = getattr(self.client, name)
+        if not callable(value):
+            return value
+        def bounded(*args, **kwargs):
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0:
+                raise LookupPending('Message details will continue loading in the next background pass.')
+            self.client.sock.settimeout(max(.1, min(5, remaining)))
+            return value(*args, **kwargs)
+        return bounded
+
+    def logout(self):
+        try:
+            self.client.sock.settimeout(.5)
+            self.client.logout()
+        except Exception:
+            try:
+                self.client.shutdown()
+            except Exception:
+                pass
+
+
+def locate(context, budget_seconds=20, bounded=False):
     """Verify the original location, then resume a bounded exact-ID folder search.
 
     Search progress lives in the private review context; no partial search can
@@ -69,8 +97,10 @@ def locate(context, budget_seconds=20):
     mailbox, identifier = context['mailbox'], context['message_id']
     if not isinstance(identifier, str) or not identifier or any(ord(c) < 32 for c in identifier):
         raise ValueError('Message identity needs repair before this decision can be applied')
-    client = fetch_batch.connect()
     deadline = time.monotonic() + budget_seconds
+    client = fetch_batch.connect(timeout=max(.1, min(5, budget_seconds / 2))) if bounded else fetch_batch.connect()
+    if bounded:
+        client = _DeadlineMailbox(client, deadline)
     try:
         original = _folder_matches(client, mailbox, identifier, context)
         if not original and context.get('uid'):
@@ -107,19 +137,20 @@ def locate(context, budget_seconds=20):
         client.logout()
 
 
-def refresh(decision_id, database):
+def refresh(decision_id, database, budget_seconds=None):
     """Enrich a pending card only if its context has not changed during the lookup."""
     row = database.execute("SELECT * FROM decisions WHERE id=? AND kind='message_review' AND status='pending'", (decision_id,)).fetchone()
     if row is None:
         raise ValueError('This message no longer needs review')
     context = json.loads(row['context'] or '{}')
     try:
-        details = locate(context)
-    except LookupPending:
+        details = locate(context) if budget_seconds is None else locate(context, budget_seconds=budget_seconds, bounded=True)
+    except Exception:
         with database:
             database.execute("UPDATE decisions SET context=? WHERE id=? AND context=? AND status='pending'", (json.dumps(context), decision_id, row['context']))
         raise
     updated = dict(context, **details)
+    updated["details_loaded"] = True
     with database:
         changed = database.execute("UPDATE decisions SET summary=?, context=? WHERE id=? AND context=? AND status='pending'", (details['subject'], json.dumps(updated), decision_id, row['context']))
     if changed.rowcount != 1:
@@ -156,3 +187,37 @@ def read_message(context, max_bytes=1024 * 1024):
         return details, fetch_batch.extract_body_text(raw) or 'No readable text body. Open this message in your mail client to review its attachments.'
     finally:
         client.logout()
+
+
+def hydrate_pending(database, limit=3, budget_seconds=30):
+    """Fair, bounded background enrichment; missing mail never blocks later cards."""
+    with database:
+        database.execute('CREATE TABLE IF NOT EXISTS message_review_refresh (decision_id INTEGER PRIMARY KEY, attempted_at REAL NOT NULL, retry_after REAL NOT NULL)')
+    now = time.time()
+    candidates = database.execute("SELECT d.* FROM decisions d LEFT JOIN message_review_refresh r ON r.decision_id=d.id WHERE d.kind='message_review' AND d.status='pending' AND (r.retry_after IS NULL OR r.retry_after<=?) ORDER BY COALESCE(r.attempted_at,0),d.id", (now,)).fetchall()
+    deadline = time.monotonic() + max(1, budget_seconds)
+    attempted = updated = 0
+    for row in candidates:
+        if attempted >= max(1, min(int(limit), 20)) or time.monotonic() >= deadline:
+            break
+        try:
+            context = json.loads(row['context'] or '{}')
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(context, dict) or not context.get('mailbox') or not context.get('message_id'):
+            continue
+        if context.get('details_loaded') or (context.get('subject') and context.get('sender') and (context.get('received_at') or context.get('date'))):
+            continue
+        # Claim before network I/O; competing workers cannot start the same lookup.
+        with database:
+            claim = database.execute('INSERT INTO message_review_refresh(decision_id,attempted_at,retry_after) VALUES(?,?,?) ON CONFLICT(decision_id) DO UPDATE SET attempted_at=excluded.attempted_at,retry_after=excluded.retry_after WHERE message_review_refresh.retry_after<=?', (row['id'], now, now + 300, now))
+        if claim.rowcount != 1:
+            continue
+        attempted += 1
+        try:
+            refresh(row['id'], database, budget_seconds=max(.1, min(10, deadline - time.monotonic())))
+            updated += 1
+        except Exception:
+            # Search cursors are saved by refresh. The next card still gets a turn.
+            pass
+    return {'attempted': attempted, 'updated': updated}

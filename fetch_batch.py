@@ -31,8 +31,8 @@ DEFAULT_LIMIT = 100
 SNIPPET_MAX_CHARS = 500
 
 
-def connect():
-    conn = imaplib.IMAP4_SSL(config.IMAP_HOST, config.IMAP_PORT, timeout=60)
+def connect(timeout=60):
+    conn = imaplib.IMAP4_SSL(config.IMAP_HOST, config.IMAP_PORT, timeout=timeout)
     conn.login(config.email_address(), config.app_password())
     return conn
 
