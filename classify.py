@@ -1,42 +1,23 @@
 #!/usr/bin/env python3
-"""
-Classify a batch of emails through an LLM. Five backends (CLASSIFY_BACKEND):
+"""Classify email through a local model or privacy-constrained OpenRouter route.
 
-  local             (default) LM Studio/Ollama's OpenAI-compatible API at
-                    http://localhost:1234 — free, private, requires the
-                    machine running the model to be on.
-  gemini            Google's Gemini API (needs GEMINI_API_KEY) — works
-                    anywhere, including a headless cron box with no local
-                    LLM. Uses Gemini's own free tier.
-  openrouter        OpenRouter (needs OPENROUTER_API_KEY) — same model as
-                    the "local" backend, hosted. Paid but cheap.
-  openrouter-free   OpenRouter's free tier (needs OPENROUTER_API_KEY, no
-                    spend) — a hosted fallback for when you want zero local
-                    setup and don't want to burn Gemini's daily cap. Capped
-                    at OpenRouter's own account-wide daily quota.
-  openrouter-paid   The same model as openrouter-free, no daily cap, real
-                    (small) cost per request — for clearing a large backlog
-                    fast instead of waiting out a daily quota. See
-                    backlog_worker.py's mailbox_settings.py for a worked
-                    example of blending this with openrouter-free based on
-                    backlog size.
+CLASSIFY_BACKEND selects local, openrouter, openrouter-free, or openrouter-paid
+for this standalone utility. The legacy direct Gemini route is disabled until
+its account-specific privacy terms can be verified. Hosted inference always
+requires zero-data-retention endpoints with provider data collection denied.
+A compliant endpoint must be available; privacy filters are never relaxed.
 
-A machine you leave on and a free hosted API both cost nothing — the
-tradeoff is privacy and control (local) versus not needing a machine
-online 24/7 (gemini/openrouter/openrouter-free/openrouter-paid). A
-genuinely headless, always-on server should set CLASSIFY_BACKEND
-explicitly; "local" is the default here because it's the friendlier
-zero-config choice for someone just trying this out on their own machine.
+TAHOR_CLASSIFY_FREE_ENABLED=0 blocks free requests, including paid fallback.
+The continuous worker selects its tiers through Settings, independently of
+CLASSIFY_BACKEND. Provider availability and rate limits can affect every tier.
+Local inference needs a running OpenAI-compatible server and local resources.
 
 Usage:
   python3 classify.py <input.json> <output.json> <system_prompt.txt> [--concurrency N] [--model NAME]
 
-Input record: {"id": "...", "subject": "...", "from": "...", "date": "...", "snippet": "..."}
-plus any optional hint_* fields your prompt wants surfaced as weak priors.
-
-Output fields beyond id/action/reason are passed through verbatim from
-whatever the model returns — the system prompt owns that schema, not this
-script. See prompt.example.txt for the schema this project was built around.
+Inputs contain id, subject, from, date and snippet, plus optional hint_* fields.
+The classifier validates actions and core fields before returning a decision;
+invalid responses remain errors for retry rather than mailbox instructions.
 """
 import json
 from http_response import read_bounded, MODEL_RESPONSE_SECONDS
@@ -70,8 +51,7 @@ def paid_concurrency():
     return value
 
 
-# Gemini exposes an OpenAI-compatible endpoint, so the same request/response
-# shape works for both backends — only the URL, model, and auth differ.
+# Hosted and local models share the OpenAI-compatible request shape.
 BACKENDS = {
     "local": {
         "url": "http://localhost:1234/v1/chat/completions",

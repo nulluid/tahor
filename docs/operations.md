@@ -122,7 +122,7 @@ age limits.
 
 | Symptom | Behavior and next step |
 | :--- | :--- |
-| Paid API returns 402 | Failed requests try free; paid is probed after its five-minute cooldown. Check account credit and per-key limits. |
+| Paid API returns 402 | Failed requests try free if enabled; paid is probed after its five-minute cooldown. Check account credit and per-key limits. |
 | Free capacity is exhausted | Failed messages stay pending. Free-only mode never escalates to paid. |
 | Both tiers fail | The worker waits five minutes and retries; it does not mark failed classifications complete. |
 | IMAP tagging fails | Only confirmed writes are recorded. Other messages remain unclassified and are fetched again. |
@@ -187,23 +187,25 @@ No shell `source` command is required.
 | `TAHOR_DATA_PUSH` | `1` to enable private configuration pushes; default is local commits only |
 | `WORKER_BATCH_SIZE` | Messages per classification batch; default 50 |
 | `WORKER_SLEEP_BETWEEN_BATCHES` | Optional delay override; defaults to 0 seconds after fully applied paid-only batches, 45 seconds otherwise |
+| `TAHOR_CLASSIFY_FREE_ENABLED` | `0` disables all free classification and paid-to-free fallback; messages remain retryable. Default `1` |
 | `TAHOR_PAID_CONCURRENCY` | Concurrent paid classifications; default 40, configurable from 1 to 64; effective concurrency also depends on batch size |
 
 Speed and model selections live in `settings.json` and are changed through the
 web app. `CLASSIFY_BACKEND` is for the standalone `classify.py` utility; it does
 not override the continuous worker’s Free/Paid/Auto setting.
 
-The standalone classifier also supports a local OpenAI-compatible endpoint and
-Gemini. The integrated continuous worker currently uses the two OpenRouter tiers.
+The standalone classifier also supports a local OpenAI-compatible endpoint.
+Direct Google requests are disabled pending account-specific privacy verification.
+The integrated continuous worker uses the two OpenRouter tiers.
 Model availability changes: check your provider’s catalog if a selected model
 stops responding. Paid estimates are not spending limits. Configure a provider
 budget separately if you need one.
 
-Paid OpenRouter classification requests require zero data retention and deny
+All OpenRouter classification requests require zero data retention and deny
 provider data collection. These routing filters preserve the selected model and
 classification prompt; an unavailable compliant endpoint returns an error rather
-than relaxing the paid request's privacy policy. Free routes have separate terms
-and are not covered by this paid-route restriction. See
+than relaxing privacy requirements. This applies equally to paid and free
+routes. See
 [OpenRouter's endpoint privacy controls](https://openrouter.ai/docs/guides/features/zdr).
 
 ## Retention and filing

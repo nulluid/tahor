@@ -163,7 +163,8 @@ switching to a more expensive writing route. Classification settings are separat
 | **Auto** | Estimates a free/paid split from backlog size and observed free throughput | Variable paid usage |
 
 Fully successful paid-only batches continue immediately, without the free-tier
-pause. Model, prompt, message context, and classification checks stay the same.
+pause. Speed mode controls routing and concurrency; it does not change your
+classification instructions or mailbox safety checks.
 The worker logs fetch, classification, and application timings for tuning.
 Paid classification defaults to 40 concurrent requests, configurable for your
 host and provider. Free-tier concurrency remains separate.
@@ -171,7 +172,9 @@ host and provider. Free-tier concurrency remains separate.
 For an internet-facing server, use the [dedicated service-account setup](docs/service-isolation.md)
 to keep application code read-only and run without administrator privileges.
 
-In Paid or Auto mode, failed paid classifications retry on the free tier.
+In Paid or Auto mode, failed paid classifications retry on the free tier when it
+is enabled. Set `TAHOR_CLASSIFY_FREE_ENABLED=0` to disable free classification
+and fallback without silently switching Free mode to a paid model.
 Widespread failures start a five-minute cooldown, followed by a single-message
 paid recovery probe at the next batch. If both tiers fail, messages stay pending
 and the worker retries after five minutes. Your selected speed does not change.
