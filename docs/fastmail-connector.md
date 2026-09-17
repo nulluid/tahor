@@ -127,9 +127,14 @@ Tests cover RFC 6238 vectors, full-login sequencing, rejected credentials, resta
 cooldowns, settings password/TOTP challenges and expiry, rejection persistence across
 fresh logins, session expiry, endpoint restrictions, private-file permissions, rule ownership,
 uncertain writes, request validation, sanitized status, and authenticated/CSRF-protected
-Settings actions. A live disabled-rule create/read/remove test preserved all existing
-rules. Each account still needs a successful fresh-login enrollment test; mocked tests do
-not establish that an account has been enrolled or that an unpublished API will stay stable.
+Settings actions. A controlled acceptance test on an enrolled account verified reserved
+`.invalid` rule creation/readback, session refresh and ownership reconciliation after
+restarting the client, a managed domain change, and complete cleanup. All preexisting
+rule fingerprints were unchanged. Fresh password/TOTP sign-in and later settings
+reauthentication were also verified. Managed domain changes use removal/creation;
+this does not establish arbitrary rule editing or actual expired-cookie recovery.
+Each account still needs its own successful enrollment check; mocked tests do not
+establish that an account has been enrolled or that an unpublished API will stay stable.
 
 Fastmail documents [multiple verification devices and TOTP enrollment](https://www.fastmail.help/hc/en-us/articles/360058752374-Using-two-step-verification-2FA).
 Its [Sieve FAQ](https://www.fastmail.help/hc/en-us/articles/360058753814-Sieve-frequently-asked-questions)
