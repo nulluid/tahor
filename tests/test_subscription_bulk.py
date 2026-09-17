@@ -79,6 +79,9 @@ class SubscriptionBulkTests(AppTestCase):
             subscription_bulk.run_pending();send.assert_called_once()
         self.assertEqual(self.module.tahor_db.get_sender_rule('shop.example'),'block_marketing')
         self.assertEqual([item['status'] for item in subscription_bulk.get_job(job['job_id'])['items']],['attention','done'])
+        self.assertFalse(subscription_bulk.get_job(job['job_id'])['items'][0]['retry_allowed'])
+        with self.assertRaises(subscription_bulk.SelectionConflict):
+            self.enqueue(first, key='failed-marketing-retry')
 
     def test_legacy_individual_action_cannot_repeat_a_queued_batch(self):
         candidate=self.candidate();self.enqueue(candidate)
@@ -90,3 +93,45 @@ class SubscriptionBulkTests(AppTestCase):
     def test_idempotency_key_cannot_be_reused_for_changed_intent(self):
         candidate=self.candidate();self.enqueue(candidate)
         with self.assertRaises(ValueError):self.enqueue(candidate,action='block_all')
+
+    def test_conflict_lists_all_unavailable_rows_without_partial_enqueue(self):
+        queued = self.candidate('queued.example')
+        resolved = self.candidate('resolved.example')
+        available = self.candidate('available.example')
+        self.enqueue(queued)
+        db = subscription_bulk._db()
+        with db:
+            db.execute("UPDATE unsubscribe_candidates SET status='resolved' WHERE id=?", (resolved,))
+        response = self.client.post('/unsubscribe/batches', data={'csrf_token': self.token(), 'request_key':'second-batch',
+            'selections':json.dumps([{'candidate_id':identifier, 'action':'unsubscribe'} for identifier in [queued,resolved,available]])})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json['unavailable_ids'], sorted([queued,resolved]))
+        self.assertFalse(response.json['retryable'])
+        self.assertEqual(db.execute('SELECT COUNT(*) FROM subscription_batches').fetchone()[0], 1)
+        self.assertIsNone(db.execute('SELECT 1 FROM subscription_actions WHERE candidate_id=?', (available,)).fetchone())
+        db.close()
+        self.assertEqual(self.enqueue(available,key='third-batch')['items'][0]['status'], 'queued')
+
+    def test_attention_retry_requires_pending_candidate_and_no_active_request(self):
+        candidate = self.candidate()
+        job = self.enqueue(candidate)
+        db = subscription_bulk._db()
+        with db:
+            db.execute("UPDATE subscription_actions SET status='attention'")
+            db.execute("UPDATE unsubscribe_candidates SET status='resolved' WHERE id=?", (candidate,))
+        item = subscription_bulk.get_job(job['job_id'])['items'][0]
+        self.assertFalse(item['candidate_pending'])
+        self.assertFalse(item['retry_allowed'])
+        with db: db.execute("UPDATE unsubscribe_candidates SET status='pending' WHERE id=?", (candidate,))
+        self.assertTrue(subscription_bulk.get_job(job['job_id'])['items'][0]['retry_allowed'])
+        second = self.enqueue(candidate,key='second-request')
+        self.assertFalse(subscription_bulk.get_job(job['job_id'])['items'][0]['retry_allowed'])
+        with db: db.execute("UPDATE subscription_actions SET status='uncertain' WHERE batch_id=?", (second['job_id'],))
+        self.assertFalse(subscription_bulk.get_job(second['job_id'])['items'][0]['retry_allowed'])
+        db.close()
+        with self.assertRaises(subscription_bulk.SelectionConflict): self.enqueue(candidate,key='third-request')
+
+    def test_invalid_authenticated_payload_is_bad_request_not_state_conflict(self):
+        response = self.client.post('/unsubscribe/batches', data={'csrf_token':self.token(), 'request_key':'valid-key', 'selections':'not json'})
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn('unavailable_ids', response.json)

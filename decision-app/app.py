@@ -1541,8 +1541,10 @@ def unsubscribe_batches():
     try:
         selections = json.loads(request.form.get('selections', '[]'))
         return jsonify(subscription_bulk.enqueue(selections, request.form.get('request_key', ''))), 202
+    except subscription_bulk.SelectionConflict as error:
+        return jsonify(error=str(error), unavailable_ids=error.unavailable_ids, retryable=False), 409
     except (ValueError, TypeError):
-        return jsonify(error='A selected subscription changed or already has a queued request. Reload to review its current state.'), 409
+        return jsonify(error='Invalid subscription selections or request identifier. Review the selections and submit again.', retryable=False), 400
 
 
 @app.route('/unsubscribe/batches/<job_id>')

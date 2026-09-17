@@ -7,6 +7,13 @@ from datetime import datetime, timedelta, timezone
 ACTIONS = ('unsubscribe_block_marketing', 'unsubscribe', 'block_all', 'dismiss')
 
 
+class SelectionConflict(ValueError):
+    def __init__(self, unavailable_ids):
+        super().__init__('Some selected subscriptions changed or already have a queued request. Review the remaining selections and apply again.')
+        self.unavailable_ids = sorted(set(unavailable_ids))
+
+
+
 def _db():
     import tahor_db
     db = tahor_db.get_db()
@@ -43,14 +50,19 @@ def enqueue(selections, request_key):
                     raise ValueError('This request identifier already belongs to different selections')
                 return get_job(existing['id'], database=db)
             rows = []
+            unavailable = []
             for candidate_id, action in checked:
                 row = db.execute('SELECT * FROM unsubscribe_candidates WHERE id=? AND status="pending"', (candidate_id,)).fetchone()
                 if row is None:
-                    raise ValueError('A selected subscription was already handled. Reload its current state.')
+                    unavailable.append(candidate_id)
+                    continue
                 active = db.execute("SELECT 1 FROM subscription_actions WHERE candidate_id=? AND status IN ('queued','sending','applying','uncertain')", (candidate_id,)).fetchone()
                 if active:
-                    raise ValueError('A selected subscription already has a queued or unconfirmed request. Check its result first.')
+                    unavailable.append(candidate_id)
+                    continue
                 rows.append((candidate_id, action, json.dumps(dict(row))))
+            if unavailable:
+                raise SelectionConflict(unavailable)
             identifier = uuid.uuid4().hex
             db.execute('INSERT INTO subscription_batches VALUES(?,?,?)', (identifier, request_key, datetime.now(timezone.utc).isoformat()))
             db.executemany("INSERT INTO subscription_actions(batch_id,candidate_id,action,snapshot,status) VALUES(?,?,?,?,'queued')", [(identifier, *row) for row in rows])
@@ -67,7 +79,11 @@ def get_job(identifier, database=None):
         items = []
         for row in db.execute('SELECT * FROM subscription_actions WHERE batch_id=? ORDER BY id', (identifier,)):
             outcome = json.loads(row['outcome'] or '{}')
+            candidate = db.execute('SELECT status FROM unsubscribe_candidates WHERE id=?', (row['candidate_id'],)).fetchone()
+            pending = candidate is not None and candidate['status'] == 'pending'
+            active = db.execute("SELECT 1 FROM subscription_actions WHERE candidate_id=? AND status IN ('queued','sending','applying','uncertain') LIMIT 1", (row['candidate_id'],)).fetchone()
             items.append(dict(candidate_id=row['candidate_id'], action=row['action'], status=row['status'],
+                              candidate_pending=pending, retry_allowed=bool(row['status'] == 'attention' and pending and not active),
                               message=outcome.get('message', 'Queued for background processing.'), failed=outcome.get('failed', False)))
         return dict(job_id=identifier, status='running' if any(item['status'] in ('queued','sending','applying') for item in items) else 'complete', items=items)
     finally:
