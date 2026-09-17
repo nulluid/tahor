@@ -149,3 +149,13 @@ class BusinessRoutingTests(unittest.TestCase):
         client.uid.side_effect=original
         with patch('business_ledger.record_receipt'),patch('filing_sweep.ensure_folder'),patch.object(business.tahor_db,'relocate_vendor_samples'):
             self.assertEqual(business.run_sweep(client,backfill=True,state_path=path)['moved'],1)
+
+
+    def test_inventory_finishes_across_multiple_bounded_folder_runs(self):
+        client=self.client();client.list.return_value=('OK',[b'(\\HasNoChildren) "/" "Archive A"',b'(\\HasNoChildren) "/" "Archive B"'])
+        path=self.root/'state.json'
+        with patch('business_ledger.record_receipt'),patch('filing_sweep.ensure_folder'),patch.object(business.tahor_db,'relocate_vendor_samples'):
+            first=business.run_sweep(client,backfill=True,state_path=path,limit=1)
+            second=business.run_sweep(client,backfill=True,state_path=path,limit=1)
+        self.assertFalse(first['complete']);self.assertTrue(second['complete'])
+        self.assertEqual(json.loads(path.read_text())['visited'],[])
