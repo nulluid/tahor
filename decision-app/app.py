@@ -1430,7 +1430,7 @@ def _unsubscribe_card(row, non_compliant=False):
         sender_email=html(row["sender_email"] or row["sender_domain"]),
         message_count=row["message_count"],
         mechanism=mechanism,
-        manual_link=(f'<p><a href="/unsubscribe-link/{row["id"]}" target="_blank" rel="noopener noreferrer">Open sender’s unsubscribe page</a> <span class="hint">Complete any confirmation there.</span></p>' if row['unsubscribe_url'] else ''),
+        manual_link=(f'<p><a href="/subscription-messages/{row["id"]}" target="_blank" rel="noopener noreferrer">View emails</a></p>' + (f'<p><a href="/unsubscribe-link/{row["id"]}" target="_blank" rel="noopener noreferrer">Open sender’s unsubscribe page</a> <span class="hint">Complete any confirmation there.</span></p>' if row['unsubscribe_url'] else '')),
         result=html(session.pop("subscription_result_" + str(row["id"]), "")),
     )
 
@@ -1468,6 +1468,61 @@ def unsubscribe_page():
         ) or '<p class="empty">No blocked senders.</p>',
         cards=body,
     )
+
+
+@app.route('/subscription-messages/<int:candidate_id>', methods=['GET', 'POST'])
+@login_required
+def subscription_messages_page(candidate_id):
+    import subscription_messages
+    db = get_db()
+    candidate = db.execute('SELECT * FROM unsubscribe_candidates WHERE id=?', (candidate_id,)).fetchone()
+    if candidate is None:
+        abort(404)
+    notice = ''
+    samples = tahor_db.get_subscription_samples(candidate_id)
+    if request.method == 'POST' or not samples:
+        try:
+            state = subscription_messages.scan(db, candidate_id)
+            notice = ('Finished checking the available folders.' if state.get('complete') else 'Checked another small group of folders. You can continue searching below.')
+        except ValueError:
+            notice = 'An exact sender address is needed before these messages can be searched.'
+        except Exception:
+            notice = 'The mailbox is temporarily unavailable. Existing messages remain unchanged; you can retry.'
+    samples = tahor_db.get_subscription_samples(candidate_id)
+    entries = []
+    for sample in samples:
+        received = sample.get('received_at') or sample.get('date') or ''
+        age = ''
+        try:
+            age = f" · {max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(received)).days)} days ago"
+        except (ValueError, TypeError):
+            pass
+        entries.append(f'<div class="card"><h2><a href="/subscription-message/{candidate_id}/{sample["id"]}">{html(sample.get("subject") or "(No subject)")}</a></h2><p>From: {html(sample.get("display_name") or "")} &lt;{html(sample.get("sender_email") or "")}&gt;</p><p>{html(received + age)}</p><p>{html(sample.get("mailbox") or "")}</p></div>')
+    return ('<!doctype html><html><head><meta charset="utf-8"><title>Tahor — subscription emails</title>' + STYLE_BLOCK + '</head><body><main>' + tahor_header('unsubscribe') +
+        '<p><a href="/unsubscribe">Back to subscriptions</a></p><h1>Emails from ' + html(candidate['display_name'] or candidate['sender_email'] or candidate['sender_domain']) +
+        '</h1><p>Up to three recently captured messages from this subscription. Sender addresses are shown individually. Viewing leaves messages unread and does not load remote images.</p><p role="status">' + html(notice) + '</p>' +
+        (''.join(entries) or '<p>No message samples have been captured yet. Search the mailbox to find recent examples.</p>') +
+        f'<form method="post" action="/subscription-messages/{candidate_id}"><button type="submit">Find more emails</button></form><p class="hint">Search checks the inbox first, then a few folders at a time. It does not change any messages.</p></main></body></html>')
+
+
+@app.route('/subscription-message/<int:candidate_id>/<int:sample_id>')
+@login_required
+def subscription_message_view(candidate_id, sample_id):
+    import message_reviews
+    samples = tahor_db.get_subscription_samples(candidate_id)
+    sample = next((item for item in samples if item['id'] == sample_id), None)
+    if sample is None:
+        abort(404)
+    try:
+        details, body = message_reviews.read_message(sample)
+    except (ValueError, RuntimeError):
+        return 'This message moved or could not be identified safely. Return to its email list and search again, or open it in Fastmail.', 409
+    except Exception:
+        return 'The mailbox is temporarily unavailable. Your message remains unread and unchanged.', 503
+    return ('<!doctype html><html><head><meta charset="utf-8"><title>Tahor — subscription message</title>' + STYLE_BLOCK + '</head><body><main>' + tahor_header('unsubscribe') +
+        f'<p><a href="/subscription-messages/{candidate_id}">Back to this sender’s emails</a></p><h1>' + html(details.get('subject') or '(No subject)') +
+        '</h1><p>From: ' + html(details.get('sender', '')) + '</p><p>Received: ' + html(details.get('received_at', '')) +
+        '</p><p>This text view does not mark the email read. Remote images and attachments are not displayed.</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">' + html(body) + '</pre></main></body></html>')
 
 
 @app.route("/unsubscribe-link/<int:candidate_id>")
