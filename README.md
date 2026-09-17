@@ -32,7 +32,7 @@ that should not be left to a model.
 | Track unsubscribe requests and sender blocks | Keep subscriptions, block marketing, or block a domain |
 | Draft a response when your reply rule matches | Find the original unread; edit and send its draft in your mail client |
 | Recover from provider failures | See actual worker progress and retry status |
-| Place optional health alerts and daily summaries in your inbox | Choose which notifications to enable and your digest time |
+| Place optional health alerts and daily summaries in your inbox | Choose notifications and digest time; summaries link to Tahor and expire automatically |
 
 ## Inside the app
 
@@ -193,6 +193,11 @@ cooldown, and persistent problems trigger the configured health alerts. The
 four-hour threshold is an estimate based on queued work and observed free
 throughput, not a completion guarantee. `TAHOR_CLASSIFY_FREE_ENABLED=0` remains
 an optional operator override that blocks free classification requests.
+
+Daily summaries link to your Tahor instance using its configured `BASE_URL`.
+Tahor automatically deletes its own verified digests after the configured inbox
+window: three days for read summaries and seven for unread by default. Health
+alerts retain their normal retention policy. See [notifications](docs/notifications.md).
 
 AI-generated rule changes appear as proposals in the decision queue. Review the
 exact sender action or file diff before approving. Domain blocks require the exact

@@ -26,7 +26,7 @@ class NotificationTests(unittest.TestCase):
         routing = patch.object(ai_routing, 'state_path', return_value=Path(self.temp.name)/'ai-routing.json')
         routing.start()
         self.addCleanup(routing.stop)
-        self.environment = patch.dict(os.environ, {'TAHOR_NOTIFICATION_STATE': str(self.path), 'TAHOR_NOTIFY_HEALTH': '1', 'TAHOR_NOTIFY_DIGEST': '0', 'TAHOR_NOTIFY_TIMEZONE': 'UTC', 'TAHOR_NOTIFY_HOUR': '9', 'FASTMAIL_EMAIL': 'owner@example.com', 'FASTMAIL_APP_PASSWORD': 'private-app-password'})
+        self.environment = patch.dict(os.environ, {'TAHOR_NOTIFICATION_STATE': str(self.path), 'TAHOR_NOTIFY_HEALTH': '1', 'TAHOR_NOTIFY_DIGEST': '0', 'TAHOR_NOTIFY_TIMEZONE': 'UTC', 'TAHOR_NOTIFY_HOUR': '9', 'FASTMAIL_EMAIL': 'owner@example.com', 'FASTMAIL_APP_PASSWORD': 'private-app-password', 'BASE_URL': 'https://tahor.example.com'})
         self.environment.start()
         self.addCleanup(self.environment.stop)
         self.now = datetime(2026, 9, 17, 10, tzinfo=timezone.utc).timestamp()
@@ -168,6 +168,61 @@ class NotificationTests(unittest.TestCase):
             self.assertEqual(notifications.run(self.now+29*3600), 1)
         self.assertEqual(self.client.append.call_count, 2)
         self.assertIn(b'Pending decisions: 4', self.client.append.call_args.args[3])
+
+    def test_digest_links_to_tahor_and_is_tagged_for_dedicated_retention(self):
+        with patch.dict(os.environ, {'TAHOR_NOTIFY_HEALTH': '0', 'TAHOR_NOTIFY_DIGEST': '1'}), patch.object(notifications, 'digest_counts', return_value=(4, 2, 1)):
+            self.assertEqual(notifications.run(self.now), 1)
+        mailbox, flags, internaldate, raw = self.client.append.call_args.args
+        message = email.message_from_bytes(raw)
+        body = message.get_payload(decode=True).decode(message.get_content_charset())
+        self.assertIn('Open Tahor: https://tahor.example.com/', body)
+        saved = json.loads(self.path.read_text())['events']['digest:2026-09-17']
+        self.assertEqual(saved['body'], body)
+        self.assertTrue(saved['body_prepared'])
+        self.assertEqual(message['X-Tahor-Notification-Kind'], 'digest')
+        self.assertIn('category-tahor-digest', flags)
+        self.assertIn('retention-standard', flags)
+        self.assertNotIn('\\Seen', flags)
+        self.assertEqual(message['Message-ID'], notifications.notification_message_id('digest:2026-09-17'))
+
+    def test_digest_retry_keeps_journal_body_and_does_not_repeat_link(self):
+        self.client.append.side_effect = None
+        self.client.append.return_value = ('NO', [])
+        with patch.dict(os.environ, {'TAHOR_NOTIFY_HEALTH': '0', 'TAHOR_NOTIFY_DIGEST': '1'}), patch.object(notifications, 'digest_counts', return_value=(4, 2, 1)):
+            notifications.run(self.now)
+            saved = json.loads(self.path.read_text())['events']['digest:2026-09-17']['body']
+            self.assertEqual(saved.count('Open Tahor:'), 1)
+            self.client.append.side_effect = self.append
+            with patch.dict(os.environ, {'BASE_URL': 'https://changed.example.com'}):
+                self.assertEqual(notifications.run(self.now + 900), 1)
+        message = email.message_from_bytes(self.client.append.call_args.args[3])
+        self.assertEqual(message.get_payload(decode=True).decode(message.get_content_charset()), saved)
+
+    def test_health_alert_retention_and_body_are_unchanged(self):
+        self.poll_problem()
+        message = email.message_from_bytes(self.client.append.call_args.args[3])
+        self.assertIsNone(message['X-Tahor-Notification-Kind'])
+        self.assertEqual(self.client.append.call_args.args[1], '(category-notification retention-standard)')
+        self.assertNotIn(b'Open Tahor:', self.client.append.call_args.args[3])
+
+    def test_unsafe_or_missing_website_urls_are_not_exposed_in_digest(self):
+        invalid = ('', 'javascript:alert(1)', '//example.com', 'https://owner:secret@example.com',
+                   'https://example.com/?token=secret', 'https://example.com/#secret',
+                   'https://example.com/private/secret', 'https://example.com:99999',
+                   'https://example.com\n', 'https://example.com\\@other.example',
+                   'https://[broken', 'https://')
+        for url in invalid:
+            with self.subTest(url=url), patch.dict(os.environ, {'BASE_URL': url}):
+                _, message = notifications.make_message({'kind': 'digest', 'subject': 'Summary', 'body': 'Summary'}, 'digest:test')
+                self.assertEqual(message.get_content(), 'Summary\n')
+                self.assertIsNone(notifications.website_url())
+
+    def test_local_and_https_origins_are_supported_without_a_public_site(self):
+        for url, expected in [('http://localhost:8420', 'http://localhost:8420/'),
+                              ('https://tahor.example.com/', 'https://tahor.example.com/'),
+                              ('http://[::1]:8420', 'http://[::1]:8420/')]:
+            with self.subTest(url=url), patch.dict(os.environ, {'BASE_URL': url}):
+                self.assertEqual(notifications.website_url(), expected)
 
     def test_corrupt_ledger_fails_closed(self):
         self.path.write_text('{broken')

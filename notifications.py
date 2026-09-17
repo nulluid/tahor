@@ -13,6 +13,7 @@ import re
 import time
 import uuid
 from zoneinfo import ZoneInfo
+from urllib.parse import urlsplit
 
 import config
 import fetch_batch
@@ -113,6 +114,29 @@ def persist(path, state):
     path.chmod(0o600)
 
 
+def notification_message_id(event_id):
+    """Stable identity shared by delivery reconciliation and digest retention."""
+    return '<tahor-notification-' + hashlib.sha256(event_id.encode()).hexdigest() + '@localhost>'
+
+
+def website_url():
+    """Return the configured browser origin without accepting secret-bearing URLs."""
+    value = os.environ.get('BASE_URL', '')
+    if not value or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value):
+        return None
+    try:
+        parsed = urlsplit(value)
+        if (parsed.scheme not in ('http', 'https') or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None
+                or parsed.query or parsed.fragment or parsed.path not in ('', '/')
+                or '\\' in value):
+            return None
+        parsed.port  # Reject malformed or out-of-range ports before rendering.
+    except ValueError:
+        return None
+    return value.rstrip('/') + '/'
+
+
 def make_message(event, event_id):
     owner = config.email_address()
     if '\r' in owner or '\n' in owner or owner.count('@') != 1:
@@ -123,8 +147,14 @@ def make_message(event, event_id):
     message['Subject'] = event['subject']
     message['Auto-Submitted'] = 'auto-generated'
     message['X-Tahor-Notification'] = '1'
-    message['Message-ID'] = '<tahor-notification-'+hashlib.sha256(event_id.encode()).hexdigest()+'@localhost>'
-    message.set_content(event['body'])
+    message['Message-ID'] = notification_message_id(event_id)
+    body = event['body']
+    if event.get('kind') == 'digest':
+        message['X-Tahor-Notification-Kind'] = 'digest'
+        url = website_url()
+        if url and not event.get('body_prepared'):
+            body = body.rstrip() + '\n\nOpen Tahor: ' + url + '\n'
+    message.set_content(body)
     return owner, message
 
 
@@ -165,6 +195,9 @@ def deliver(path, state, event_id, now):
     if event['status'] == 'uncertain' and event.get('transport') != 'imap':
         return False
     _, message = make_message(event, event_id)
+    # Save the exact rendered plain-text body before APPEND. Retention uses the
+    # private journal to verify digest identity; retries reuse these same bytes.
+    event.update(body=message.get_content(), body_prepared=True)
     client = None
     uncertain = event['status'] == 'uncertain'
     try:
@@ -176,7 +209,10 @@ def deliver(path, state, event_id, now):
         event.update(status='uncertain', transport='imap')
         persist(path, state)  # A crash after APPEND must trigger reconciliation.
         uncertain = True
-        status, _ = client.append('INBOX', '(category-notification retention-standard)',
+        flags = '(category-notification retention-standard)'
+        if event.get('kind') == 'digest':
+            flags = '(category-notification category-tahor-digest retention-standard)'
+        status, _ = client.append('INBOX', flags,
                                  imaplib.Time2Internaldate(now), message.as_bytes())
         if status != 'OK':
             uncertain = False  # An explicit NO/BAD means APPEND was rejected.

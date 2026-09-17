@@ -143,6 +143,9 @@ mail-tools.example.com {
 }
 ```
 
+The optional daily digest links to the instance at `BASE_URL`; set an address
+you can reach from the device where you read email.
+
 Point DNS at the server, allow the proxy’s HTTPS traffic, and set `BASE_URL` and
 the Google redirect URI to the same HTTPS origin. Use your proxy’s documented
 installation and certificate workflow. Do not expose the Flask development server.

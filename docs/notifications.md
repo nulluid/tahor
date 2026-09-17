@@ -19,13 +19,22 @@ TAHOR_NOTIFY_HEALTH="1"
 TAHOR_NOTIFY_DIGEST="1"
 TAHOR_NOTIFY_TIMEZONE="America/Denver"
 TAHOR_NOTIFY_HOUR="9"
+BASE_URL="https://tahor.example.com"
 ```
 
 Use an IANA timezone name. The default is `UTC`, with a digest after 09:00 local
 time. Either notification type can be enabled independently. Both From and To
 are `FASTMAIL_EMAIL`; there is no separate recipient setting. Notices arrive
 unread, already tagged as notifications with standard retention, so they do not
-need a model classification.
+need a model classification. Digests also receive the `category-tahor-digest`
+keyword and `X-Tahor-Notification-Kind: digest` header.
+
+Set `BASE_URL` to the address you use to open your Tahor instance. Each digest
+includes an **Open Tahor** link to that address. This is your existing web app;
+no separate public website is needed. The URL must be an HTTP or HTTPS origin,
+with no embedded username, password, query, or fragment. An absent or invalid
+URL is omitted rather than copied into email. Use HTTPS for remote deployments;
+a localhost address is useful only when opening the email on that same machine.
 
 For a user-service installation, regenerate units if needed, then enable the
 optional timer:
@@ -73,6 +82,21 @@ preparations completed during the preceding 24 hours, and preparations awaiting
 retry. Draft counts come from Tahor's local journal, **not** the current contents
 of Fastmail's Drafts folder. The first check after the configured hour sends that
 day's summary; restarts do not append it again. There is no backfill of missed days.
+
+## Automatic digest cleanup
+
+Tahor deletes its own daily summaries after the inbox grace period configured
+in Settings: **three days when read and seven days when unread**, by default.
+Age is measured from the message's arrival, not from the moment you mark it read.
+The regular retention sweep performs cleanup; it does not require another model
+call. These short limits apply to digests, not health alerts or ordinary messages.
+Flagged digests and messages with protection or attention markers are preserved.
+
+Before deleting a digest, Tahor checks its exact Message-ID, owner addresses,
+notification headers, subject, and plain-text body against the private delivery
+journal. A digest keyword or copied header alone is not enough. Existing summaries
+recorded by this instance can also be cleaned up. Keep the notification journal
+in your private backups; messages that cannot be verified are retained.
 
 ## Delivery failures and private state
 
