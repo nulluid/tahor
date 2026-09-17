@@ -46,7 +46,7 @@ def main():
             conn.logout()
     if args.check_model:
         import classify
-        name = 'openrouter-paid' if mode == 'paid' else 'openrouter-free'
+        name = 'openrouter-paid' if mode in ('paid', 'paid_only') else 'openrouter-free'
         backend = classify.BACKENDS[name]
         result = classify.classify_one(backend['url'], {'Content-Type': 'application/json', 'Authorization': backend['auth_header']()}, backend['default_model'], prompt.read_text(), {'id': 'setup-check', 'subject': 'Hello', 'from': 'sample@example.com', 'snippet': 'A synthetic setup test; no mailbox data.'}, retries=0)
         if result['action'] == 'error':

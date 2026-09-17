@@ -44,6 +44,22 @@ class SetupTests(unittest.TestCase):
             conn.select.assert_called_once_with('"INBOX"', readonly=True)
             conn.logout.assert_called_once()
 
+    def test_doctor_probe_respects_paid_only_and_free_only(self):
+        import classify
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'prompt.txt').write_text('Synthetic policy')
+            (root / 'vendor_buckets.json').write_text('{}')
+            values = dict(FASTMAIL_EMAIL='owner@example.com', FASTMAIL_APP_PASSWORD='fake',
+                          OPENROUTER_API_KEY='fake', DATA_DIR=directory, TAHOR_DB_PATH=str(root/'db'))
+            for mode, backend in [('paid_only', 'openrouter-paid'), ('free', 'openrouter-free')]:
+                with self.subTest(mode=mode), patch.dict(os.environ, values, clear=True), patch.object(
+                        sys, 'argv', ['doctor.py', '--check-model']), patch.object(tahor_db, 'init_db'), patch.object(
+                        mailbox_settings, 'get_classify_mode', return_value=mode), patch.object(
+                        classify, 'classify_one', return_value={'action': 'keep'}) as call:
+                    self.assertEqual(doctor.main(), 0)
+                    self.assertEqual(call.call_args.args[2], classify.BACKENDS[backend]['default_model'])
+
     def test_setup_is_private_free_and_repeatable(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

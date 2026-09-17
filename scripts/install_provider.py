@@ -69,8 +69,8 @@ def main():
         path = Path('/etc/systemd/system')/name
         atomic_write(path, text)
         path.chmod(0o644)
-    for name in ('tahor-web', 'tahor-decision-app', 'tahor-backlog-worker', 'tahor-draft-replies'):
-        # Only the web process writes requests today. Background senders may refresh rules.
+    for name in ('tahor-web', 'tahor-decision-app', 'tahor-backlog-worker', 'tahor-draft-replies', 'tahor-decisions'):
+        # Web actions and approved background decisions may refresh managed rules.
         if not Path('/etc/systemd/system', name+'.service').exists():
             continue
         dropin = Path('/etc/systemd/system', name+'.service.d')
