@@ -192,7 +192,10 @@ def draft_reply_body(subject, sender, body_text, rule=None, verification=None):
             result = _draft_reply_body(subject, sender, body_text, rule, verification, key=primary)
         except (ReplyBackendError, urllib.error.URLError, TimeoutError, OSError) as error:
             if isinstance(error, urllib.error.HTTPError):
-                error.close()
+                try:
+                    error.close()
+                except Exception:
+                    pass
             reply_backend_recovery.record_failure(primary, primary_backend)
         else:
             reply_backend_recovery.record_success(primary, primary_backend)
@@ -208,7 +211,10 @@ def draft_reply_body(subject, sender, body_text, rule=None, verification=None):
         result = _draft_reply_body(subject, sender, body_text, rule, verification, key=backup)
     except (ReplyBackendError, urllib.error.URLError, TimeoutError, OSError) as error:
         if isinstance(error, urllib.error.HTTPError):
-            error.close()
+            try:
+                error.close()
+            except Exception:
+                pass
         reply_backend_recovery.record_failure(backup, backup_backend)
         raise ReplyBackendError('Both reply providers are unavailable; retry remains pending') from None
     reply_backend_recovery.record_success(backup, backup_backend)

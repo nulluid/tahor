@@ -1,4 +1,5 @@
 import importlib
+import io
 import json
 import os
 from pathlib import Path
@@ -36,7 +37,7 @@ class ReplyFallbackTests(unittest.TestCase):
         return draft_replies.draft_reply_body('Update', 'person@example.org', 'The project is complete.', self.rule)
 
     def test_primary_credit_failure_uses_free_writer_and_verifier(self):
-        failure = urllib.error.HTTPError('https://example.org', 402, 'private error', {}, None)
+        failure = urllib.error.HTTPError('https://example.org', 402, 'private error', {}, io.BytesIO(b'synthetic failure'))
         with patch.object(draft_replies, 'reply_completion', side_effect=[failure, self.generated, self.approved]) as complete:
             self.assertIn('Thank you', self.write())
         models = [call.args[0]['model'] for call in complete.call_args_list]
