@@ -214,22 +214,17 @@ web app. `CLASSIFY_BACKEND` is for the standalone `classify.py` utility; it does
 not override the continuous worker’s Free/Paid/Auto setting.
 
 The standalone classifier also supports a local OpenAI-compatible endpoint.
-Direct Google requests are disabled pending account-specific privacy verification.
-The integrated continuous worker uses the two OpenRouter tiers.
+The integrated continuous worker uses the two privacy-restricted OpenRouter tiers.
+Unverified direct-provider routes are disabled.
 The paid model is `google/gemini-3.8-flash`, pinned to
 `google-vertex/global` with provider fallback disabled, zero data retention,
 and data collection denied. Requests use low reasoning effort and a 2,048-token
 output budget. The endpoint does not advertise temperature support; do not
 assume it honors the requested temperature. Up to eight requests overlap, with
-starts paced three seconds apart across worker threads, including retries. The
-unpaced deployment encountered HTTP 429 responses; accuracy benchmarks do not
-establish sustained rate limits. The previous 40-request benchmark applied to
-Nemotron, not this provider/model combination.
-
-The selection was checked on 24 real messages and ten separate synthetic policy
-cases. Completed Gemini 3.8 responses made no incorrect trash decisions in those
-samples. One synthetic request timed out and passed the unchanged case on retry.
-These limited evaluations do not establish a general accuracy guarantee.
+starts paced three seconds apart across worker threads, including retries.
+Recheck throughput and provider throttling whenever you change models or routes.
+Reduce request volume if sustained throttling occurs; increasing concurrency alone
+does not increase the provider’s allowed request rate. Model output remains fallible.
 
 The free Ling classifier is available by informed choice. The original 24-message
 evaluation included five incorrect trash decisions, including important messages.

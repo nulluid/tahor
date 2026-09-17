@@ -17,8 +17,8 @@
 </p>
 
 **Tahor is a self-hosted email assistant that works inside your existing mailbox.**
-It classifies the backlog across every folder without a folder-size limit, tags
-messages, files receipts, helps you unsubscribe,
+It starts with your inbox, works through the backlog without a folder-size limit,
+tags messages, files receipts, helps you unsubscribe,
 and prepares replies for review. Your usual email client stays your email client.
 
 The name comes from **טָהוֹר**, Hebrew for “clean, pure.” The aim is practical:
@@ -37,7 +37,7 @@ that should not be left to a model.
 ## Inside the app
 
 <p align="center">
-  <img src="docs/screenshots/decisions.png" width="100%" alt="Tahor’s decision queue with a vendor routing choice, an ambiguous message, and a Sieve proposal">
+  <img src="docs/screenshots/decisions.png" width="100%" alt="Tahor’s decision queue with routing choices, rule proposals, and clarification from observed senders">
 </p>
 <p align="center"><sub>The decision queue keeps unresolved choices visible. Screenshots use synthetic data.</sub></p>
 
@@ -137,8 +137,7 @@ invent promises or details; review every draft. These
 [routing controls](https://openrouter.ai/docs/guides/features/zdr) protect provider
 selection; they do not guarantee the accuracy of a draft.
 All rule and reply writing requests require zero data retention and denied data
-collection. Retired Nemotron free and unverified direct Gemini writing routes are
-disabled; missing or obsolete selections never silently switch to a paid model. A reply
+collection. Missing or unsupported selections never silently switch to a paid model. A reply
 address must pass syntax and DNS checks. Those checks cannot prove that the
 recipient’s mailbox accepts delivery.
 
@@ -151,12 +150,10 @@ afterward. Messages needing attention or review stay protected.
 Natural-language matching shares the existing classification request, using up
 to 6,000 characters of message context when such rules are enabled. Uncertain
 matches stay pending review and do not produce a draft. Reply writing is a
-separate model request; writing starts disabled, with paid prose models
-such as Euryale available as an optional choice in Settings. **GPT-5.1 Flex**
-is another writing option: half-price input/output tokens compared with standard
-GPT-5.1, with variable latency and availability. Tahor restricts it to the Flex
-endpoint and checks the returned tier; capacity failures stay retryable without
-switching to a more expensive writing route. Classification settings are separate.
+separate model request. Choose its model and spending policy independently of
+classification: **Grok 4.6** is the recommended paid writer, and **Ling 3.0 Flash VL**
+is the free option. Additional supported choices are available in Settings.
+[Model routing and lower-cost writing options](docs/operations.md).
 
 ## Choose the pace
 
@@ -178,12 +175,12 @@ to a zero-retention endpoint with data collection denied and provider fallback
 disabled. It allows **eight concurrent requests**, with request starts spaced
 **three seconds apart**, including retries. Both settings are configurable for your
 provider limits. Concurrency overlaps slow responses; pacing limits request volume.
-The earlier 40-request setting was measured with a different model.
 
-The selected model was evaluated against 24 real messages and ten separate
-synthetic policy cases. Its completed responses made no incorrect trash
-decisions in that sample; one synthetic request timed out and passed unchanged
-on retry. This is a small validation set, not a guarantee about every email.
+**Inbox first.** While the Inbox has work, it receives three batches for every
+ordinary-folder batch. Trash waits until the Inbox is caught up. A separate,
+read-only discovery connection finds work and new folders without repeatedly
+opening processing connections to empty folders. New Inbox mail is checked between
+batches; an in-flight batch finishes before the next folder is selected.
 
 For an internet-facing server, use the [dedicated service-account setup](docs/service-isolation.md)
 to keep application code read-only and run without administrator privileges.
@@ -200,7 +197,8 @@ exact sender action or file diff before approving. Domain blocks require the exa
 domain in your instruction; a brand name or single email address cannot authorize
 a whole-domain block. If the scope is unclear, Tahor preserves your instruction
 and asks for clarification instead of guessing or repeatedly retrying. Edit the
-complete instruction in the decision queue and resubmit it for a new proposal.
+complete instruction in the decision queue, optionally choose a sender domain
+Tahor has observed in your mailbox, and resubmit it for a new proposal.
 Changed underlying rules invalidate an older proposal.
 **Grok 4.6** is the recommended rule-writing option, selected independently from
 classification and reply writing; its requests use the xAI zero-retention route.
@@ -209,15 +207,12 @@ classification and reply writing; its requests use the xAI zero-retention route.
 
 Choose **Always free** for each enabled AI task and use an existing computer for
 hosting. Rule and reply writing remain disabled until you enable them in Settings.
-The free model uses the same privacy restrictions as its paid counterparts, but
-its mistakes matter: the original 24-message classifier evaluation included five
-incorrect trash decisions, including important mail. Rule drafting chose the wrong
-folder in one of eight cases; generated rules require approval before application.
-The selected free writer can add unsupported promises or details to a reply.
-
-These are observed examples, not universal error rates. Settings exposes these
-limitations so you can choose the tradeoff. Paid and free models are tested
-separately; a good prose result does not establish safe classification behavior.
+The free model uses the same privacy restrictions as the paid routes, but has
+known accuracy limitations: it can classify important mail as trash, choose the
+wrong destination for a rule, or add unsupported promises and details to a reply.
+Since classification can trigger deletion, read the disclosures in Settings before
+enabling free processing. Generated rules require approval; replies remain drafts
+for you to review. Paying for a model does not guarantee correctness either.
 
 This does not make your email account, hardware, electricity, or hosting free.
 Free model capacity and account quotas are provider-controlled. OpenRouter can
@@ -257,14 +252,14 @@ external database, or frontend build is required.
 
 | Component | Responsibility |
 | :--- | :--- |
-| `backlog_worker.py` | Fetch, classify, recover from backend failures, and apply tags |
+| `backlog_worker.py` / `mailbox_scheduler.py` | Prioritize Inbox work, discover active folders, classify, and retry failed batches |
 | `process_batch.py` / `keyword_tool.py` | Enforce sender rules and track confirmed mailbox writes |
 | `filing_sweep.py` | Move aged receipts, statements, and tax mail with IMAP `MOVE` |
 | `retention_sweep.py` | Delete expired mail and retry pending trash deletion with targeted UID expunge |
 | `decision-app/` | Review decisions, apply rules, manage subscriptions and model settings |
 | `draft_replies.py` / `reply_rules.py` | Match owner instructions and prepare recoverable, thread-aware mailbox drafts |
 | `runtime_status.py` / `notifications.py` | Share worker progress; optionally add health alerts and daily counts to the owner’s inbox |
-| `scripts/private_backup.py` | Create and verify private snapshots; restore after stopping services |
+| `scripts/private_backup.py` / `scripts/offhost_backup.py` | Verify private snapshots, keep off-host recovery copies, and restore after stopping services |
 | `setup_tahor.py` / `run.py` | Configure a private instance and launch each component consistently |
 
 ### Engineering choices
@@ -342,7 +337,12 @@ unless you explicitly enable pushing. Credentials, message batches, databases,
 and logs do not belong in either repository. Gitignore rules help; review staged
 changes before publishing.
 
-[Private backups and restore](docs/private-backups.md) ·
+Private snapshots preserve your rules, preferences, draft journal, and pending
+decisions. A separate computer can pull and verify recovery copies over SSH,
+including the Fastmail connector’s rule-ownership records. Login credentials and
+session tokens are excluded. Enable overdue-backup alerts to detect a missed copy.
+
+[Set up backups and recovery](docs/private-backups.md) ·
 [Health alerts and daily summaries](docs/notifications.md)
 
 ## Development and verification

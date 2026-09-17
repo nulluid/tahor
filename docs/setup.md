@@ -27,8 +27,8 @@ The interactive installer asks for the mailbox email, IMAP app password, and
 OpenRouter key. Passwords are hidden while entered. Nothing starts automatically.
 The example explicitly selects always-paid classification. Omitting `--mode paid_only`
 uses always-free classification, which never incurs paid requests. Review the
-free-model disclosures before processing: the original evaluation included
-incorrect trash decisions on important messages. Settings provides four separate
+free-model disclosures before processing: the free classifier can incorrectly
+classify important messages as trash. Settings provides four separate
 policies for classification, reply writing, and rule writing.
 
 For a different mail provider:
