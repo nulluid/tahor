@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import vendor_inventory as inventory
+import vendor_suggestions
 
 QUEUE_VENDOR = inventory.tahor_db.queue_vendor_mapping
 
@@ -69,6 +70,16 @@ class VendorInventoryTests(unittest.TestCase):
         self.assertEqual(inventory.enrich_pending(), 0)
         self.assertEqual(self.client.list.call_count, 3)
         self.queue.assert_not_called(); self.client.select.assert_not_called()
+
+    def test_legacy_work_is_automatic_until_missing_folder_becomes_an_exception(self):
+        self.add()
+        with self.db() as conn:
+            self.assertEqual(vendor_suggestions.pending_work_ids(conn), ['vendor:1'])
+        self.client.list.return_value = ('OK', [None])
+        inventory.enrich_pending()
+        with self.db() as conn:
+            self.assertEqual(vendor_suggestions.pending_work_ids(conn), [])
+            self.assertEqual(json.loads(conn.execute('SELECT context FROM decisions').fetchone()[0])['inventory_status'], 'missing_folder')
 
     def test_uid_mismatch_never_publishes_wrong_sample(self):
         self.add(); self.client.uid.return_value = ('OK', [(b'1 (UID 99)', b'From: a@example.com\r\n')])

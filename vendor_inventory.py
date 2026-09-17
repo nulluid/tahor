@@ -32,7 +32,7 @@ def enrich_pending(limit=3):
             rows.append((checked if type(checked) in (int, float) else 0, row, context))
         rows.sort(key=lambda item: (item[0], item[1]['id']))
         for _, row, context in rows[:min(10, max(0, int(limit)))]:
-            updated = dict(context, inventory_checked_at=time.time())
+            updated = dict(context, inventory_checked_at=time.time(), inventory_status='checking')
             with conn:
                 claimed = conn.execute("UPDATE decisions SET context=? WHERE id=? AND context=? AND status='pending' AND resolution IS NULL",
                                        (json.dumps(updated), row['id'], row['context'])).rowcount
@@ -43,7 +43,13 @@ def enrich_pending(limit=3):
                     mailbox = fetch_batch.connect()
                 folder = config.filing_root() + '/_Unsorted/' + context['sender_label']
                 status, listing = mailbox.list('""', quote_mailbox(folder))
-                if status != 'OK' or not listing or not listing[0]:
+                if status != 'OK':
+                    raise RuntimeError('Legacy filing folder lookup failed')
+                if not listing or not listing[0]:
+                    with conn:
+                        missing = dict(updated, inventory_status='missing_folder')
+                        conn.execute("UPDATE decisions SET context=? WHERE id=? AND context=? AND status='pending' AND resolution IS NULL",
+                                     (json.dumps(missing), row['id'], json.dumps(updated)))
                     continue
                 if mailbox.select(quote_mailbox(folder), readonly=True)[0] != 'OK':
                     raise RuntimeError('Legacy filing samples are unavailable')
@@ -76,6 +82,10 @@ def enrich_pending(limit=3):
                         'excerpt': fetch_batch.extract_body_text(parts[0][1])[:500],
                         'suggested_vendor': display,
                     })
+                with conn:
+                    empty = dict(updated, inventory_status='no_samples')
+                    conn.execute("UPDATE decisions SET context=? WHERE id=? AND context=? AND status='pending' AND resolution IS NULL",
+                                 (json.dumps(empty), row['id'], json.dumps(updated)))
             except Exception:
                 failures += 1
                 if mailbox is not None:

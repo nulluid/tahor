@@ -52,7 +52,15 @@ def _context(row):
 def pending_work_ids(conn):
     active = []
     for row in conn.execute("SELECT id,context,resolution FROM decisions WHERE kind='vendor_mapping' AND status='pending'"):
-        if row['resolution'] is None and _context(row) is not None:
+        try:
+            context = json.loads(row['context'] or '{}')
+        except (TypeError, ValueError):
+            context = {}
+        legacy = (isinstance(context, dict) and not context.get('routing_key')
+                  and isinstance(context.get('sender_label'), str)
+                  and re.fullmatch(r'[a-zA-Z0-9.-]{1,253}', context['sender_label'])
+                  and context.get('inventory_status') not in ('missing_folder', 'no_samples'))
+        if row['resolution'] is None and (_context(row) is not None or legacy):
             active.append('vendor:' + str(row['id']))
         elif row['resolution']:
             try:

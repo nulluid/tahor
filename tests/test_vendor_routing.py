@@ -77,6 +77,7 @@ class VendorRoutingTests(unittest.TestCase):
              patch.object(filing_sweep, 'reply_filing_destinations', return_value={}), \
              patch.object(filing_sweep, 'mark_filed_read', return_value=1), \
              patch.object(filing_sweep, 'reconcile_filed_mail', return_value=(0, 0)), \
+             patch.object(filing_sweep, 'list_mailboxes', return_value=[]), \
              patch.object(filing_sweep.tahor_db, 'queue_vendor_mapping') as queue, \
              patch.object(filing_sweep.sys, 'argv', ['filing_sweep.py']):
             filing_sweep.main()
