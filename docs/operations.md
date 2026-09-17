@@ -574,3 +574,8 @@ A newer choice supersedes an older one for the same domain. This is private infe
 context, not model fine-tuning; tracking URLs and delivery response text are excluded.
 Submitting new choices invalidates stale AI suggestions without altering queued owner
 actions. Delivery completion alone does not invalidate another recommendation batch.
+
+Recommended and selected subscriptions appear before untouched items, both when
+the page opens and as recommendations arrive. Reordering preserves the visible
+card and manual selections. Browser storage restores manual choices only; stale
+AI selections do not survive a change in recommendation context.

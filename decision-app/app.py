@@ -591,7 +591,7 @@ UNSUBSCRIBE_PAGE_TEMPLATE = """<!doctype html>
 <p class="hint">Choose <strong>Stop marketing, keep transactions</strong> to request removal from this mailing list and have Tahor block future marketing while preserving receipts, payment notices, and other transactional messages. Unsubscribe alone requests removal without adding a block. The sender controls what its subscription covers; a confirmation page may require your attention. Block all mail also blocks transactional messages.</p>
 {bulk_controls}
 {non_compliant_banner}
-{cards}
+<div id="subscription-cards">{cards}</div>
 <section><h2>Blocked senders</h2>{blocked_senders}</section>
 </main>
 {interaction_script}
@@ -602,7 +602,7 @@ UNSUBSCRIBE_PAGE_TEMPLATE = """<!doctype html>
 NON_COMPLIANT_SECTION = """
 <section>
 <h2>Mail after an unsubscribe request</h2>
-<p class="hint">Tahor classified these newer messages as marketing. Delivery can overlap with an unsubscribe request; review before blocking.</p>
+<p class="hint">Cards outlined in red contain newer messages classified as marketing after an unsubscribe request. Delivery can overlap with a request; review before blocking.</p>
 {cards}
 </section>
 """
@@ -1402,6 +1402,7 @@ def _unsubscribe_card(row, non_compliant=False, suggestion=None, related_handled
     if related_handled:
         rendered = rendered.replace('</fieldset>', '</fieldset><p class="hint">Same display name as a handled sender: ' + ', '.join(html(domain) for domain in related_handled[:3]) + '. This is a different sending domain: ' + html(row['sender_domain']) + '. Its choice is separate.</p>')
     if suggestion and suggestion.get('action') in ('unsubscribe_block_marketing', 'unsubscribe', 'block_all', 'dismiss'):
+        rendered = rendered.replace('data-subscription-id=', 'data-recommended="true" data-subscription-id=', 1)
         rendered = rendered.replace('value="" checked', 'value=""').replace('value="' + suggestion['action'] + '"', 'value="' + suggestion['action'] + '" checked')
         rendered = rendered.replace('</fieldset>', '</fieldset><p class="ai-suggestion">AI suggestion: ' + html(suggestion.get('reason', '')) + '</p>')
     return rendered
@@ -1426,10 +1427,9 @@ def unsubscribe_page():
             handled_names.setdefault(handled['display_name'].strip().casefold(), []).append(handled['sender_domain'])
     non_compliant_banner = ""
     if non_compliant_rows:
-        non_compliant_banner = NON_COMPLIANT_SECTION.format(
-            cards="".join(_unsubscribe_card(r, non_compliant=True, suggestion=suggestions.get(r["id"])) for r in non_compliant_rows)
-        )
-    body = "".join(_unsubscribe_card(r, suggestion=suggestions.get(r["id"]), related_handled=handled_names.get((r["display_name"] or "").strip().casefold())) for r in pending_rows) if pending_rows else '<p class="empty">No unsubscribe candidates pending.</p>'
+        non_compliant_banner = NON_COMPLIANT_SECTION.format(cards='')
+    ordered_rows = sorted(list(non_compliant_rows) + list(pending_rows), key=lambda row: row['id'] not in suggestions)
+    body = "".join(_unsubscribe_card(r, non_compliant=bool(r['non_compliant']), suggestion=suggestions.get(r["id"]), related_handled=handled_names.get((r["display_name"] or "").strip().casefold())) for r in ordered_rows) if ordered_rows else '<p class="empty">No unsubscribe candidates pending.</p>'
     return UNSUBSCRIBE_PAGE_TEMPLATE.format(
         icon=TAHOR_ICON,
         style=STYLE_BLOCK,

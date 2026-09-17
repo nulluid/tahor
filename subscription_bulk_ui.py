@@ -11,9 +11,23 @@ SCRIPT = r'''<script>
  let saved={}; try{saved=JSON.parse(sessionStorage.getItem(storageKey)||'{}');}catch(_){}
  const choices=()=>cards().filter(c=>!c.dataset.queued).map(c=>({candidate_id:Number(c.dataset.subscriptionId),action:c.querySelector('input:checked')?.value})).filter(c=>c.action);
  function remember(){const state={};for(const c of cards()){const value=c.querySelector('input:checked')?.value;if(value||c.dataset.manual==='true')state[c.dataset.subscriptionId]={action:value,manual:c.dataset.manual==='true'};}try{sessionStorage.setItem(storageKey,JSON.stringify(state));}catch(_){}}
- function count(){bar.querySelector('[data-selected-count]').textContent=String(choices().length);}
+ function prioritize(preserve=true){
+  const list=document.querySelector('#subscription-cards');if(!list||document.querySelector('dialog.email-preview[open]'))return;
+  const current=[...list.querySelectorAll('[data-subscription-id]')];
+  const rank=c=>c.dataset.queued?3:(c.querySelector('input:checked')?.value?0:(c.dataset.recommended==='true'?1:2));
+  const ordered=[...current].sort((a,b)=>rank(a)-rank(b));
+  if(ordered.every((c,i)=>c===current[i]))return;
+  const edge=Math.max(0,bar.getBoundingClientRect().bottom);
+  const anchor=preserve?current.find(c=>{const r=c.getBoundingClientRect();return r.bottom>edge&&r.top<window.innerHeight;}):null;
+  const before=anchor?.getBoundingClientRect().top;const focused=document.activeElement;
+  list.style.overflowAnchor='none';for(const c of ordered)list.append(c);
+  if(anchor){const delta=anchor.getBoundingClientRect().top-before;if(delta)window.scrollBy(0,delta);}
+  if(focused?.isConnected&&list.contains(focused))focused.focus({preventScroll:true});
+ }
+ document.addEventListener('close',()=>setTimeout(()=>prioritize(),0),true);
+ function count(preserve=true){bar.querySelector('[data-selected-count]').textContent=String(choices().length);prioritize(preserve);}
  function choose(c,action,manual){const radio=[...c.querySelectorAll('input[type="radio"]')].find(r=>r.value===action);if(radio&&!c.dataset.queued){radio.checked=true;if(manual)c.dataset.manual='true';}}
- for(const c of cards()){const old=saved[c.dataset.subscriptionId];if(old)choose(c,old.action,old.manual);}
+ for(const c of cards()){const old=saved[c.dataset.subscriptionId];if(old?.manual)choose(c,old.action,true);}
  document.addEventListener('change',event=>{const c=event.target.closest('[data-subscription-id]');if(c&&event.target.type==='radio'){c.dataset.manual='true';remember();count();}});
  bar.querySelector('[data-select-all]').addEventListener('click',()=>{const action=bar.querySelector('[data-bulk-choice]').value;for(const c of cards())choose(c,action,true);remember();count();});
  async function request(url,values){const options={credentials:'same-origin',headers:{Accept:'application/json'}};if(values){options.method='POST';options.body=new URLSearchParams({csrf_token:csrf,...values});}const response=await fetch(url,options);const body=await response.json();if(!response.ok)throw new Error(body.error||'The request could not be confirmed.');return body;}
@@ -22,9 +36,9 @@ SCRIPT = r'''<script>
  async function follow(job){if(watched.has(job.job_id))return;watched.add(job.job_id);try{while(true){for(const item of job.items){const c=cardFor(item.candidate_id);if(!c)continue;c.dataset.queued='true';c.querySelectorAll('input').forEach(r=>r.disabled=true);c.querySelector('.subscription-result').textContent=item.message;if(item.status==='done'||item.status==='attention'||item.status==='uncertain'){c.dataset.finished='true';}if(item.status==='done'){c.querySelector('.subscription-result').textContent='Completed: '+item.message;const controls=c.querySelector('fieldset');if(controls)controls.hidden=true;}if(item.status==='attention'){delete c.dataset.queued;c.querySelectorAll('input').forEach(r=>r.disabled=false);choose(c,'',true);}}remember();count();if(job.status==='complete')break;await wait();job=await request('/unsubscribe/batches/'+job.job_id);} }catch(error){notice.textContent='Progress temporarily unavailable. Queued actions remain saved; reload to check them.';}finally{watched.delete(job.job_id);}}
  let sending=false;let pending=null;
  apply.addEventListener('click',async()=>{if(sending)return;const selected=choices();if(!pending&&!selected.length){notice.textContent='Choose an action for at least one sender.';return;}pending=pending||{request_key:[...crypto.getRandomValues(new Uint8Array(16))].map(value=>value.toString(16).padStart(2,'0')).join(''),selections:JSON.stringify(selected)};sending=true;apply.disabled=true;notice.textContent='Saving selected actions…';try{const job=await request('/unsubscribe/batches',pending);pending=null;notice.textContent='Selected actions are queued. You can continue reviewing other senders.';follow(job);}catch(error){notice.textContent=error.message+' Retry Apply selected actions to confirm this same request.';}finally{sending=false;apply.disabled=false;}});
- function suggestions(job){for(const suggestion of job.recommendations||[]){const c=cardFor(suggestion.candidate_id);if(!c||c.dataset.manual==='true'||c.dataset.queued)continue;choose(c,suggestion.action,false);c.querySelector('.subscription-result').textContent='AI suggestion: '+suggestion.reason;}remember();count();}
+ function suggestions(job){for(const suggestion of job.recommendations||[]){const c=cardFor(suggestion.candidate_id);if(!c||c.dataset.manual==='true'||c.dataset.queued)continue;choose(c,suggestion.action,false);c.dataset.recommended='true';c.querySelector('.subscription-result').textContent='AI suggestion: '+suggestion.reason;}remember();count();}
  generate.addEventListener('click',async()=>{if(generate.disabled)return;generate.disabled=true;notice.textContent='Generating suggestions for the next batch…';try{let job=await request('/unsubscribe/suggestions',{exclude_ids:JSON.stringify(cards().filter(c=>c.dataset.manual==='true'||c.dataset.queued).map(c=>Number(c.dataset.subscriptionId)))});suggestions(job);while(job.status!=='complete'&&job.status!=='failed'){notice.textContent=job.error||((job.status==='queued'?'Waiting for the background worker. ':'Generating suggestions. ')+(job.completed||0)+' of '+(job.total||0)+' processed. '+((job.recommendations||[]).length?(job.recommendations.length+' suggestions ready for review.'):'No suggestions are ready yet.'));await wait();job=await request('/unsubscribe/suggestions/'+job.job_id);suggestions(job);}notice.textContent=job.error||((job.recommendations||[]).length?'Suggestions are selected for review. Nothing is applied until you submit.':'No new suggestions in this batch. Your current choices are unchanged.');}catch(error){notice.textContent=error.message;}finally{generate.disabled=false;}});
- count();request('/unsubscribe/batches').then(jobs=>jobs.forEach(follow)).catch(()=>{notice.textContent='Saved progress could not be loaded. Reload before submitting existing work.';});
+ count(false);request('/unsubscribe/batches').then(jobs=>jobs.forEach(follow)).catch(()=>{notice.textContent='Saved progress could not be loaded. Reload before submitting existing work.';});
 })();
 </script>'''
 
