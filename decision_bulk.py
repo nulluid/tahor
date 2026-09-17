@@ -124,7 +124,13 @@ def get_job(identifier, database=None):
 def recent_jobs():
     db = _db()
     try:
-        return [get_job(row[0],db) for row in db.execute('SELECT id FROM decision_batches ORDER BY created_at DESC LIMIT 10')]
+        jobs=[]
+        for row in db.execute('SELECT id FROM decision_batches ORDER BY created_at DESC LIMIT 10'):
+            job=get_job(row[0],db)
+            skipped={item[0] for item in db.execute("SELECT i.decision_id FROM decision_batch_items i JOIN decisions d ON d.id=i.decision_id WHERE i.batch_id=? AND i.status='done' AND d.kind='message_review' AND i.resolution=?",(row[0],json.dumps({'action':'skip'})))}
+            job['items']=[item for item in job['items'] if item['decision_id'] not in skipped]
+            if job['items']: jobs.append(job)
+        return jobs
     finally: db.close()
 
 

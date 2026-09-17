@@ -64,6 +64,8 @@ class DecisionBatchTests(AppTestCase):
         with patch.object(self.module.apply_decisions,'apply_one') as execute:
             bulk.run_pending();execute.assert_not_called()
         self.assertEqual(job['status'],'complete')
+        self.assertEqual(bulk.get_job(job['job_id'])['items'][0]['status'],'done')
+        self.assertEqual(bulk.recent_jobs(),[])
         conn=self.module.tahor_db.get_db();row=conn.execute('SELECT * FROM decisions WHERE id=?',(identifier,)).fetchone();conn.close()
         self.assertTrue(bulk.eligible(row))
 
