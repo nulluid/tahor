@@ -18,7 +18,7 @@ const calls = [];
 function makeForm(id) {
   const result = {textContent: ''};
   const card = {dataset: {}, querySelector: () => result};
-  return {action: '/unsubscribe/'+id, dataset: {}, buttons: [{disabled:false}], result, card,
+  return {action: {shadowedByNamedButtons:true}, getAttribute: name => name === 'action' ? '/unsubscribe/'+id : null, dataset: {}, buttons: [{disabled:false}], result, card,
     addEventListener(name, callback) {this.submit = callback;},
     closest() {return card;}, querySelectorAll() {return this.buttons;},
     setAttribute() {}, removeAttribute() {}};
@@ -39,6 +39,8 @@ global.fetch = (url, options) => new Promise(resolve => calls.push({url,options,
   assert.equal(calls.length, 1, 'double clicks must not repeat requests');
   const second = forms[1].submit(event);
   assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, '/unsubscribe/1');
+  assert.equal(calls[1].url, '/unsubscribe/2');
   calls[1].resolve({ok:true,headers:{get:()=> 'application/json'},json:async()=>({message:'Second succeeded',pending:false})});
   await second;
   assert.equal(forms[1].result.textContent, 'Second succeeded');

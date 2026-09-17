@@ -40,6 +40,8 @@ import reply_rules
 import provider_bridge
 import mailbox_settings
 import settings_autosave
+import vendor_review_state
+import decision_interactions
 import tahor_db
 
 DB_PATH = tahor_db.DB_PATH
@@ -574,7 +576,7 @@ document.querySelectorAll('.subscription-form').forEach(form => {
     form.querySelectorAll('button').forEach(item => item.disabled = true);
     result.textContent = 'Working… You can continue with another sender.';
     try {
-      const response = await fetch(form.action, {method: 'POST', body: data, headers: {'Accept': 'application/json'}, credentials: 'same-origin'});
+      const response = await fetch(form.getAttribute('action'), {method: 'POST', body: data, headers: {'Accept': 'application/json'}, credentials: 'same-origin'});
       if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('session');
       const outcome = await response.json();
       result.textContent = outcome.message;
@@ -637,8 +639,8 @@ UNSUBSCRIBE_CARD = """
   <div class="context">{sender_email} &middot; {message_count} message(s) &middot; {mechanism}</div>
   <form method="post" action="/unsubscribe/{id}" class="subscription-form">
     <div class="actions">
-      <button type="submit" name="action" value="unsubscribe" class="primary">Unsubscribe</button>
-      <button type="submit" name="action" value="unsubscribe_block_marketing">Stop marketing, keep transactions</button>
+      <button type="submit" name="action" value="unsubscribe_block_marketing" class="primary">Stop marketing, keep transactions</button>
+      <button type="submit" name="action" value="unsubscribe">Unsubscribe</button>
       <button type="submit" name="action" value="block_all" class="trash">Unsubscribe + block all mail</button>
       <button type="submit" name="action" value="dismiss">Keep subscription</button>
     </div>
@@ -796,6 +798,8 @@ def index():
                 vendor_context = {}
             if not isinstance(vendor_context, dict):
                 vendor_context = {}
+            if vendor_review_state.reconcile(db, row, vendor_context):
+                continue
             if ('vendor:' + str(row['id']) in automatic_ids or (mailbox_settings.is_ai_enabled('rule') and vendor_context.get('automatic_vendor_mapping'))):
                 automatic_count += 1
                 continue
@@ -807,6 +811,12 @@ def index():
             sample_actions = []
             for sample_index, sample in enumerate(vendor_context.get('samples', [])):
                 if not isinstance(sample, dict) or not sample.get('mailbox') or not sample.get('message_id'):
+                    continue
+                completed = vendor_review_state.completed_action(db, sample)
+                if completed in ('keep_brief', 'trash'):
+                    continue
+                if completed:
+                    sample_actions.append(f'<p>This sample already has a completed message decision. <a href="/message/{row["id"]}/{sample_index}">View email</a></p>')
                     continue
                 sample_actions.append(f'<div><a href="/message/{row["id"]}/{sample_index}">View email: {html(sample.get("subject") or "(No subject)")}</a><form method="post" action="/vendor-message/{row["id"]}/{sample_index}"><button name="action" value="keep_brief">Keep this email briefly</button><button name="action" value="trash" class="trash">Trash this email</button></form></div>')
             cards.append(
@@ -829,6 +839,9 @@ def index():
                 label = {'keep': 'Keep', 'keep_brief': 'Keep briefly', 'trash': 'Trash'}[saved_action]
                 ctx += f' Your choice ({label}) is saved and will retry automatically. Skip pauses this retry.'
             cards.append(CARD_GENERIC.format(id=row["id"], summary=html(row["summary"] or '(No subject)'), context=html(ctx), details=details))
+
+        if cards:
+            cards[-1] = cards[-1].replace('<div class="card"', f'<div class="card" data-decision-id="{row["id"]}" data-decision-kind="{row["kind"]}"', 1)
 
     review_count = len(cards)
     body = "".join(cards) if cards else '<p class="empty">No decisions need your attention.</p>'
@@ -861,7 +874,7 @@ def index():
         sieve_banner=sieve_banner,
         cards=body,
         sieve_content=html(sieve_content),
-    )
+    ) + decision_interactions.SCRIPT
 
 
 def _settings_status_line(current_mode):
@@ -1163,35 +1176,39 @@ def view_message(decision_id, sample_index=None):
 def review_vendor_message(decision_id, sample_index):
     row, context = _review_context(decision_id, sample_index)
     action = request.form.get('action')
-    if row['status'] != 'pending' or action not in ('keep_brief', 'trash'):
+    if action not in ('keep_brief', 'trash'):
         abort(400)
-    # This choice concerns one sample; it never blocks the sender or saves a
-    # filing rule. Reuse the same durable per-message operation path.
-    tahor_db.queue_message_review(context['mailbox'], context['message_id'], context.get('subject', ''), context.get('uid'), context.get('uidvalidity'), metadata=context)
     db = get_db()
-    review = None
-    for candidate in db.execute("SELECT * FROM decisions WHERE kind='message_review'"):
-        try:
-            identity = json.loads(candidate['context'] or '{}')
-        except (ValueError, TypeError):
-            continue
-        if isinstance(identity, dict) and identity.get('mailbox') == context['mailbox'] and identity.get('message_id') == context['message_id']:
-            review = candidate
-            break
-    if review is None or review['status'] != 'pending':
-        abort(409, 'This message already has a completed decision. Refresh the page.')
+    review, identity = vendor_review_state.sample_review(db, context)
+    if review is not None and identity.get('applied') is True:
+        vendor_review_state.reconcile(db, row, json.loads(row['context']))
+        session['flash'] = 'This message was already handled. Its completed choice has not been changed.'
+        return redirect('/')
+    if row['status'] != 'pending':
+        session['flash'] = 'This sender decision was already handled. Refresh to see current work.'
+        return redirect('/')
+    if review is None:
+        tahor_db.queue_message_review(context['mailbox'], context['message_id'], context.get('subject', ''), context.get('uid'), context.get('uidvalidity'), metadata=context)
+        review, identity = vendor_review_state.sample_review(db, context)
+    if review is None:
+        abort(409, 'The message identity is ambiguous. No mailbox action was repeated.')
+    if review['status'] != 'pending' or review['resolution'] is not None:
+        session['flash'] = 'This message already has a saved choice being processed. No second action was started.'
+        return redirect('/')
+    review_context = dict(identity, vendor_source_identity={key: context.get(key) for key in ('mailbox', 'message_id', 'uid', 'uidvalidity')})
     with db:
-        changed = db.execute("UPDATE decisions SET status='resolved',resolution=?,resolved_at=? WHERE id=? AND status='pending'", (json.dumps({'action': action}), datetime.now(timezone.utc).isoformat(), review['id']))
+        changed = db.execute("UPDATE decisions SET status='resolved',context=?,resolution=?,resolved_at=? WHERE id=? AND status='pending' AND context=? AND resolution IS ?",
+            (json.dumps(review_context), json.dumps({'action': action}), datetime.now(timezone.utc).isoformat(), review['id'], review['context'], review['resolution']))
     if changed.rowcount != 1:
-        abort(409, 'This message changed. Refresh the page.')
+        session['flash'] = 'This message already has a saved choice being processed. No second action was started.'
+        return redirect('/')
     try:
         session['flash'] = apply_decisions.apply_one(review['id'])
     except Exception:
-        with db:
-            db.execute("UPDATE decisions SET status='pending' WHERE id=?", (review['id'],))
         session['flash'] = 'Your choice is saved and will retry automatically. No sender-wide rule was added.'
+    refreshed = db.execute('SELECT * FROM decisions WHERE id=?', (decision_id,)).fetchone()
+    vendor_review_state.reconcile(db, refreshed, json.loads(refreshed['context']))
     return redirect('/')
-
 
 @app.route('/message-details/<int:decision_id>', methods=['POST'])
 @login_required

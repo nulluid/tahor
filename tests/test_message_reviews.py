@@ -202,7 +202,7 @@ class ReviewActionTests(AppTestCase):
             self.assertEqual(self.post(f'/vendor-message/{vendor["id"]}/0', action='trash').status_code, 302)
         self.assertEqual(apply.call_args.args[0][0]['mailbox'], 'Filed/Shopping/Shop')
         self.assertTrue(apply.call_args.args[0][0]['delete'])
-        self.assertEqual(self.row(vendor['id'])['status'], 'pending')
+        self.assertEqual(self.row(vendor['id'])['status'], 'resolved')
         self.assertIsNone(module.get_sender_rule('shop.example'))
         db.close()
 
