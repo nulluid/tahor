@@ -168,6 +168,20 @@ class DraftTests(unittest.TestCase):
                          {'approved': True, 'issues': [], 'needs_attention': False}], verification)
         self.assertTrue(verification['needs_attention'])
 
+    def test_commitment_and_scope_feedback_reaches_the_one_correction_attempt(self):
+        self.rule['instructions'] = 'Mention only the clinic project. Do not promise any action on my behalf.'
+        responses = [{'sentences': ['I will forward your request to [please add contact] and support the library too.']},
+                     {'approved': False, 'issues': ['Forwarding is an owner action without authorization.', 'The extra library project violates the one-project scope.'], 'needs_attention': True},
+                     {'sentences': ['Thank you for the clinic project update.']},
+                     {'approved': True, 'issues': [], 'needs_attention': False}]
+        body, completion = self.prose_test(responses)
+        self.assertEqual(body, 'Thank you for the clinic project update.\n\nBest,\nExample Owner')
+        self.assertEqual(completion.call_count, 4)
+        feedback = json.loads(completion.call_args_list[2].args[2]['messages'][-1]['content'])
+        self.assertEqual(len(feedback['issues']), 2)
+        self.assertIn(self.rule['instructions'], completion.call_args_list[2].args[2]['messages'][0]['content'])
+        self.assertIn('candidate_reply', json.loads(completion.call_args_list[3].args[2]['messages'][1]['content']))
+
     def test_second_prose_rejection_fails_closed(self):
         responses = [{'sentences': ['I will attend.']}, {'approved': False, 'issues': ['Unsupported commitment.'], 'needs_attention': True}]*2
         with self.assertRaisesRegex(ValueError, 'verification'):
