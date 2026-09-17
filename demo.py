@@ -18,12 +18,15 @@ def main():
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='tahor-demo-') as directory:
         state = Path(directory)
-        os.environ.update(TAHOR_DB_PATH=str(state / 'decisions.db'), TAHOR_SETTINGS_PATH=str(state / 'settings.json'), TAHOR_STATUS_PATH=str(state / 'worker_status.json'), DATA_DIR=str(state), ALLOWED_EMAIL='demo@example.com', BASE_URL=f'http://localhost:{args.port}', GOOGLE_CLIENT_ID='', GOOGLE_CLIENT_SECRET='', OPENROUTER_API_KEY='', GEMINI_API_KEY='', FASTMAIL_EMAIL='', FASTMAIL_APP_PASSWORD='', TAHOR_PROVIDER_BRIDGE='', TAHOR_DATA_PUSH='0', TAHOR_NOTIFY_HEALTH='0', TAHOR_NOTIFY_DIGEST='0', TAHOR_CLASSIFY_FREE_ENABLED='1')
+        os.environ.update(TAHOR_DB_PATH=str(state / 'decisions.db'), TAHOR_SETTINGS_PATH=str(state / 'settings.json'), TAHOR_STATUS_PATH=str(state / 'worker_status.json'), DATA_DIR=str(state), ALLOWED_EMAIL='demo@example.com', BASE_URL=f'http://localhost:{args.port}', GOOGLE_CLIENT_ID='', GOOGLE_CLIENT_SECRET='', OPENROUTER_API_KEY='', GEMINI_API_KEY='', FASTMAIL_EMAIL='', FASTMAIL_APP_PASSWORD='', TAHOR_PROVIDER_BRIDGE='', TAHOR_DATA_PUSH='0', TAHOR_NOTIFY_HEALTH='0', TAHOR_NOTIFY_DIGEST='0', TAHOR_CLASSIFY_FREE_ENABLED='0')
         sys.path.insert(0, str(ROOT / 'decision-app'))
         import app as ui
         from flask import request, session, redirect
         ui.init_db()
-        ui.mailbox_settings.set_classify_mode('free')
+        ui.mailbox_settings.set_classify_mode('paid')
+        ui.mailbox_settings.set_rule_model('grok-4.6')
+        ui.mailbox_settings.set_reply_model('grok-4.6')
+        ui.mailbox_settings.set_reply_backup_model('ling-free')
         rule_id = ui.reply_rules.save_rule(
             name='Community updates', match_type='natural_language',
             match='Updates and personal messages from community volunteers; exclude generic advertising.',
@@ -47,7 +50,7 @@ def main():
             ui.tahor_db.upsert_unsubscribe_candidate(domain, 'news@' + domain, name, 'https://' + domain + '/unsubscribe', None, True)
         ui.tahor_db.set_sender_rule('brightday.example', 'block_marketing')
         ui.generate_sieve.refresh_sieve()
-        ui.runtime_status.write_status('processed', mode='free', last_batch_applied=50, last_batch_pending=0, last_success_at=now)
+        ui.runtime_status.write_status('processed', mode='paid', last_batch_applied=50, last_batch_pending=0, last_success_at=now)
 
         @ui.app.before_request
         def preview_session():

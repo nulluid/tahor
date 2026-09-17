@@ -732,7 +732,7 @@ def index():
 MODE_LABELS = {"free": "Free", "paid": "Paid", "auto": "Auto"}
 MODE_DESCRIPTIONS = {
     "free": "No paid classification requests. Speed and availability depend on the provider’s free quota.",
-    "paid": "Paid capacity for clearing a backlog faster. Provider usage charges apply; failed requests can temporarily fall back to free.",
+    "paid": "Paid capacity for clearing a backlog faster. Provider usage charges apply; failed requests can temporarily fall back to free when that route is enabled.",
     "auto": "Balances free and paid capacity using estimated backlog and throughput. The one-hour target is an estimate, not a guarantee.",
 }
 
