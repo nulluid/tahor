@@ -12,6 +12,15 @@ def results(records, action='keep', status=None):
 
 class ClassifierPolicyTests(unittest.TestCase):
     def setUp(self):
+        for target in ('_load_cooldowns', '_policy_unchanged'):
+            patcher = patch.object(worker, target, return_value=True)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = patch.object(worker.ai_routing, 'locked_state')
+        state = patcher.start()
+        state.return_value.__enter__.return_value = {}
+        self.addCleanup(patcher.stop)
+
         self.records = [{'id': str(i)} for i in range(3)]
         self.patches = [patch.dict(os.environ, {'TAHOR_CLASSIFY_FREE_ENABLED': '1'}),
                         patch.object(worker, '_paid_retry_at', 0),

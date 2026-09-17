@@ -22,6 +22,7 @@ the fork entirely.
 Run under systemd (Restart=always) for durability across reboots/crashes.
 """
 import json
+import math
 import os
 import re
 import sys
@@ -358,37 +359,120 @@ def paid_cooldown_results(records):
             for record in records]
 
 
-def _classify_auto(records):
+def _load_cooldowns():
+    """Translate durable wall-clock deadlines into this process's monotonic clock.
+
+    Expired deadlines retain a probe marker, so a restart cannot turn a recovery
+    probe into a full batch. Clamp future dates to the normal cooldown to recover
+    safely after clock correction. State contains no email or provider response.
+    """
+    global _paid_retry_at, _free_retry_at
+    with ai_routing.locked_state() as state:
+        circuits = state.get('classifier_circuits', {})
+        if not isinstance(circuits, dict):
+            circuits = {}
+        now, monotonic = time.time(), time.monotonic()
+        values = {}
+        for tier in ('paid', 'free'):
+            deadline = circuits.get(tier)
+            if type(deadline) in (int, float) and math.isfinite(deadline) and deadline > 0:
+                if deadline > now + 300:
+                    # Persist the correction once, not on every batch; otherwise
+                    # a bad future timestamp would renew its own cooldown forever.
+                    deadline = circuits[tier] = now + 300
+                values[tier] = max(0.000001, monotonic + min(300, max(0, deadline - now)))
+            else:
+                values[tier] = 0.0
+        _paid_retry_at, _free_retry_at = values['paid'], values['free']
+
+
+def _set_cooldown(tier, seconds):
+    global _paid_retry_at, _free_retry_at
+    # Persist before permitting another route or batch. A failed state write
+    # leaves this work queued rather than silently discarding the recovery guard.
+    with ai_routing.locked_state() as state:
+        circuits = state.setdefault('classifier_circuits', {})
+        if not isinstance(circuits, dict):
+            circuits = state['classifier_circuits'] = {}
+        if seconds:
+            circuits[tier] = time.time() + seconds
+        else:
+            circuits.pop(tier, None)
+    value = time.monotonic() + seconds if seconds else 0.0
+    if tier == 'paid':
+        _paid_retry_at = value
+    else:
+        _free_retry_at = value
+
+
+def _policy_unchanged(policy):
+    return mailbox_settings.get_classify_mode() == policy
+
+
+def _policy_changed_results(records):
+    return [{'id': record['id'], 'action': 'error',
+             'reason': 'Classification policy changed; retained for retry under current settings'}
+            for record in records]
+
+
+def _request_free(records, policy):
+    if not _policy_unchanged(policy):
+        return _policy_changed_results(records)
+    return _classify_free_and_time(records)
+
+
+def _request_paid(records, policy):
+    if not _policy_unchanged(policy):
+        return _policy_changed_results(records)
+    return classify_with_backend(records, 'openrouter-paid')
+
+
+def classify_batch(records, mode):
+    if mode not in ('paid_only', 'paid', 'auto', 'free'):
+        raise ValueError('Unknown classification policy')
+    if not records:
+        return [], []
+    if not _policy_unchanged(mode):
+        return [], _policy_changed_results(records)
+    _load_cooldowns()
+    return _route_batch(records, mode, mode)
+
+
+def _classify_auto(records, policy):
     """Prefer free, temporarily routing failures to paid until a free probe succeeds."""
     global _free_retry_at
     if _free_retry_at and time.monotonic() < _free_retry_at:
-        return classify_batch(records, "paid_only")
+        return _route_batch(records, "paid_only", policy)
     if _free_retry_at:
-        probe = _classify_free_and_time(records[:1])
+        probe = _request_free(records[:1], policy)
+        if not _policy_unchanged(policy):
+            return probe + _policy_changed_results(records[1:]), []
         if probe[0]["action"] == "error":
-            _free_retry_at = time.monotonic() + FREE_RETRY_SECONDS
-            return classify_batch(records, "paid_only")
-        _free_retry_at = 0.0
-        free_results, paid_results = _classify_auto(records[1:]) if len(records) > 1 else ([], [])
+            _set_cooldown("free", FREE_RETRY_SECONDS)
+            return _route_batch(records, "paid_only", policy)
+        _set_cooldown("free", 0)
+        free_results, paid_results = _classify_auto(records[1:], policy) if len(records) > 1 else ([], [])
         return probe + free_results, paid_results
 
     backlog = get_backlog_estimate()
     rate = mailbox_settings.recent_free_rate()
     free_count, _ = mailbox_settings.decide_backend_split(backlog, rate, len(records))
     free_records, paid_records = records[:free_count], records[free_count:]
-    free_results = _classify_free_and_time(free_records) if free_records else []
+    free_results = _request_free(free_records, policy) if free_records else []
+    if not _policy_unchanged(policy):
+        return free_results + _policy_changed_results(paid_records), []
     failures = {result["id"] for result in free_results if result["action"] == "error"}
     if failures:
-        _free_retry_at = time.monotonic() + FREE_RETRY_SECONDS
+        _set_cooldown("free", FREE_RETRY_SECONDS)
         log(f"Free classification failed for {len(failures)} message(s); using paid temporarily; free probe in 300s")
         paid_records = [record for record in free_records if record["id"] in failures] + paid_records
         free_results = [result for result in free_results if result["id"] not in failures]
-    recovered_free, paid_results = classify_batch(
-        paid_records, "paid_only" if _free_retry_at else "paid") if paid_records else ([], [])
+    recovered_free, paid_results = _route_batch(
+        paid_records, "paid_only" if _free_retry_at else "paid", policy) if paid_records else ([], [])
     return free_results + recovered_free, paid_results
 
 
-def classify_batch(records, mode):
+def _route_batch(records, mode, policy):
     """Retry paid failures on free, periodically probing paid for recovery.
 
     The saved mode stays unchanged. Free mode never initiates paid requests.
@@ -400,9 +484,9 @@ def classify_batch(records, mode):
     if not records:
         return [], []
     if mode == "free":
-        return _classify_batch(records, mode)
+        return _classify_batch(records, mode, policy)
     if mode == "auto":
-        return _classify_auto(records)
+        return _classify_auto(records, policy)
     allow_free = mode == "paid" and classify.free_classification_enabled()
 
     probe_results = []
@@ -412,31 +496,35 @@ def classify_batch(records, mode):
                 log("Paid backend cooling down; free fallback disabled; messages retained for retry")
                 return [], paid_cooldown_results(records)
             log("Paid backend cooling down; using free tier")
-            return _classify_free_and_time(records), []
+            return _request_free(records, policy), []
         log("Probing paid backend for recovery with one message")
-        probe_results = classify_with_backend(records[:1], "openrouter-paid")
+        probe_results = _request_paid(records[:1], policy)
+        if not _policy_unchanged(policy):
+            return [], probe_results + _policy_changed_results(records[1:])
         if probe_results[0]["action"] == "error":
-            _paid_retry_at = time.monotonic() + PAID_RETRY_SECONDS
+            _set_cooldown("paid", PAID_RETRY_SECONDS)
             log_paid_failures(probe_results)
             if not allow_free:
                 log("Paid probe failed; free fallback disabled; retrying paid in 300s")
                 return [], probe_results + paid_cooldown_results(records[1:])
             log("Paid probe failed; using free tier and retrying paid in 300s")
-            return _classify_free_and_time(records), []
-        _paid_retry_at = 0.0
+            return _request_free(records, policy), []
+        _set_cooldown("paid", 0)
         log("Paid backend recovered; resuming configured mode")
         remaining = records[1:]
     else:
         remaining = records
 
-    free_results, paid_results = _classify_batch(remaining, mode) if remaining else ([], [])
+    free_results, paid_results = _classify_batch(remaining, mode, policy) if remaining else ([], [])
     paid_results = probe_results + paid_results
+    if not _policy_unchanged(policy):
+        return free_results, paid_results
     failures = [r for r in paid_results if r["action"] == "error"]
     if failures:
         log_paid_failures(failures)
         if (any(r.get("http_status") == 402 for r in failures)
                 or len(failures) / len(paid_results) >= 0.8):
-            _paid_retry_at = time.monotonic() + PAID_RETRY_SECONDS
+            _set_cooldown("paid", PAID_RETRY_SECONDS)
             log("Paid backend unavailable; next recovery probe in 300s")
         if not allow_free:
             log("Free fallback disabled; preserving paid errors for retry")
@@ -444,18 +532,18 @@ def classify_batch(records, mode):
         failed_ids = {r["id"] for r in failures}
         retry_records = [r for r in records if r["id"] in failed_ids]
         log(f"Retrying {len(retry_records)} failed paid classification(s) on free tier")
-        free_results += _classify_free_and_time(retry_records)
+        free_results += _request_free(retry_records, policy)
         paid_results = [r for r in paid_results if r["id"] not in failed_ids]
     return free_results, paid_results
 
 
-def _classify_batch(records, mode):
+def _classify_batch(records, mode, policy):
     """Returns (free_results, paid_results) -- kept separate, rather than one
     merged list, so the caller can tell a free-only quota exhaustion apart
     from a genuine paid-backend problem (see process_one_batch)."""
     if mode in ("paid", "paid_only"):
         log(f"  backend split: 0 free, {len(records)} paid (mode={mode})")
-        return [], classify_with_backend(records, "openrouter-paid")
+        return [], _request_paid(records, policy)
 
     if mode == "free":
         free_count, paid_count = len(records), 0
@@ -474,14 +562,14 @@ def _classify_batch(records, mode):
 
     if free_records and paid_records:
         with ThreadPoolExecutor(max_workers=2) as outer:
-            free_future = outer.submit(_classify_free_and_time, free_records)
-            paid_future = outer.submit(classify_with_backend, paid_records, "openrouter-paid")
+            free_future = outer.submit(_request_free, free_records, policy)
+            paid_future = outer.submit(_request_paid, paid_records, policy)
             free_results = free_future.result()
             paid_results = paid_future.result()
     elif free_records:
-        free_results, paid_results = _classify_free_and_time(free_records), []
+        free_results, paid_results = _request_free(free_records, policy), []
     else:
-        free_results, paid_results = [], classify_with_backend(paid_records, "openrouter-paid")
+        free_results, paid_results = [], _request_paid(paid_records, policy)
 
     return free_results, paid_results
 

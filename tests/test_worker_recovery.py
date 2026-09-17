@@ -34,6 +34,15 @@ def errors(records, status=402):
 
 class RecoveryTests(unittest.TestCase):
     def setUp(self):
+        for target in ('_load_cooldowns', '_policy_unchanged'):
+            patcher = patch.object(worker, target, return_value=True)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = patch.object(worker.ai_routing, 'locked_state')
+        state = patcher.start()
+        state.return_value.__enter__.return_value = {}
+        self.addCleanup(patcher.stop)
+
         worker._paid_retry_at = 0
         worker._free_retry_at = 0
         self.records = [dict(id=str(i)) for i in range(3)]

@@ -139,7 +139,7 @@ age limits.
 
 | Symptom | Behavior and next step |
 | :--- | :--- |
-| Paid API returns 402 | Failed requests try free if enabled; paid is probed after its five-minute cooldown. Check account credit and per-key limits. |
+| Paid API returns 402 | Failed requests try free only when the task policy permits fallback and free is enabled. Always paid retains work for paid retries and persistent-failure alerts. Paid is probed after its five-minute cooldown, preserved across worker restarts. Check account credit and per-key limits. |
 | Free capacity is exhausted | Failed messages stay pending. Free-only mode never escalates to paid. |
 | Both tiers fail | The worker waits five minutes and retries; it does not mark failed classifications complete. |
 | IMAP tagging fails | Only confirmed writes are recorded. Other messages remain unclassified and are fetched again. |

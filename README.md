@@ -185,8 +185,10 @@ batches; an in-flight batch finishes before the next folder is selected.
 For an internet-facing server, use the [dedicated service-account setup](docs/service-isolation.md)
 to keep application code read-only and run without administrator privileges.
 
-Policy changes govern new work; a classification batch already running may finish
-under its previous policy. Failures leave work pending. Tier recovery probes occur after a five-minute
+Policy changes are checked before each new classifier backend stage, including
+fallbacks and recovery probes. Requests already submitted may finish; remaining
+work stays queued if its policy changes. Failures leave work pending. Classifier
+recovery deadlines survive worker restarts; tier probes follow a five-minute
 cooldown, and persistent problems trigger the configured health alerts. The
 four-hour threshold is an estimate based on queued work and observed free
 throughput, not a completion guarantee. `TAHOR_CLASSIFY_FREE_ENABLED=0` remains
