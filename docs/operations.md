@@ -290,8 +290,8 @@ read for compatibility. For example:
 }
 ```
 
-New routing choices affect future filing. Existing folders are not silently
-renamed or merged. Explicit trash is deleted without retaining a new sender sample.
+New routing choices affect future filing and a bounded reconciliation of existing
+`Filed/_Unsorted` receipts and statements. Existing folders are not renamed or merged. Explicit trash is deleted without retaining a new sender sample.
 Older forever-tagged samples remain protected.
 
 ### Read state after filing

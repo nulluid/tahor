@@ -202,8 +202,9 @@ The filing sweep also checks existing folders, so first-time installations clean
 up already-filed unread mail using the same rules. It leaves starred messages,
 mail needing attention or review, and unclassified mail untouched.
 Unmapped vendors go under `Filed/_Unsorted`. The rule writer examines actual sender addresses and message samples, automatically maps confident routine receipts and statements, and brings uncertain cases to the app. Shared delivery domains can have separate merchant mappings. Enable rule AI in Settings to use this automation.
-Saving a routing rule affects future filing; it does not silently relocate older
-messages already filed elsewhere.
+Saving a routing rule affects future filing and a bounded reconciliation of
+eligible receipts and statements in `Filed/_Unsorted`. Messages already filed in
+other destinations are not silently relocated.
 
 Retention permanently deletes expired messages, whether read or unread. Filing
 delays do not postpone deletion. The worker deletes explicit trash immediately.
