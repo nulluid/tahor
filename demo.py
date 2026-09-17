@@ -23,6 +23,7 @@ def main():
         import app as ui
         from flask import request, session, redirect
         ui.init_db()
+        (state / 'vendor_buckets.json').write_text(json.dumps({'receipts@example.net': ['Shopping/Retail', 'Example Store'], 'billing@example.org': ['Finance/Statements', 'Example Bank']}))
         ui.mailbox_settings.set_ai_task_settings('classification', 'paid_only')
         for task in ('rule', 'reply'):
             ui.mailbox_settings.set_ai_task_settings(task, 'paid_only', paid_model='grok-4.6', free_model='ling-free')
@@ -39,9 +40,9 @@ def main():
         now = datetime.now(timezone.utc).isoformat()
         with db:
             for kind, summary, context in [
-                ('vendor_mapping', 'Choose a home for Northstar receipts', {'sender_label': 'northstar.example', 'note': 'Keep receipts together in a folder you choose.'}),
+                ('vendor_mapping', 'Choose a home for Northstar receipts', {'sender_label': 'northstar.example', 'sender_email': 'orders@northstar.example', 'routing_key': 'orders@northstar.example', 'display_name': 'Northstar Outdoors', 'suggestion_status': 'ready', 'suggestion_version': 2, 'suggestion_source': 'ai', 'suggested_action': 'review', 'suggested_bucket': 'Shopping/Retail', 'suggested_vendor': 'Northstar Outdoors', 'suggestion_reason': 'This sender mixes membership notices and purchases. Confirm the destination.', 'samples': [{'mailbox': 'INBOX', 'message_id': '<sample-receipt@example.com>', 'subject': 'Your outdoor membership and order', 'received_at': '2026-09-15T12:00:00+00:00'}]}),
                 ('free_text_rule', 'Review a proposed receipt policy', {'rule_proposal': {'token': 'synthetic-preview', 'result': {'kind': 'file_edit'}, 'diff': '--- prompt.txt (current)\n+++ prompt.txt (proposed)\n@@ -1 +1 @@\n-Keep receipts for three years.\n+Keep durable equipment receipts indefinitely.\n'}}),
-                ('message_review', 'Your membership renewal needs a second look', {'mailbox': 'INBOX', 'message_id': '<demo@example.com>', 'note': 'An ambiguous message stays protected until you decide.'}),
+                ('message_review', 'Your membership renewal needs a second look', {'mailbox': 'INBOX', 'message_id': '<demo@example.com>', 'sender_email': 'membership@example.org', 'sender': 'Example Community <membership@example.org>', 'received_at': '2026-09-15T14:00:00+00:00', 'date': '2026-09-15T14:00:00+00:00', 'snippet': 'Your annual membership renewal is ready. Please review the updated terms before renewing.'}),
             ]:
                 db.execute("INSERT INTO decisions(kind,summary,context,status,created_at) VALUES (?,?,?,'pending',?)", (kind, summary, json.dumps(context), now))
             db.execute("INSERT INTO decisions(kind,summary,context,status,resolution,created_at) VALUES (?,?,?,'pending',?,?)", (
@@ -58,7 +59,7 @@ def main():
         @ui.app.before_request
         def preview_session():
             session['email'] = 'demo@example.com'
-            if request.method != 'GET':
+            if request.method != 'GET' or request.path.startswith(('/message/', '/unsubscribe-link/')):
                 session['flash'] = 'This is a preview with sample data. No mailbox is connected.'
                 return redirect('/')
 

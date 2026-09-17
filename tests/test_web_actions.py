@@ -11,7 +11,7 @@ class WebActionTests(AppTestCase):
         self.assertEqual(self.post('/settings', inbox_grace='1', inbox_read_days='3', inbox_unread_days='7').status_code, 302)
         self.assertEqual(settings.get_inbox_grace_days(), {'read': 3, 'unread': 7})
         page = self.client.get('/settings').get_data(as_text=True)
-        self.assertIn('Save inbox timing', page)
+        self.assertIn('Changes save automatically.', page)
         for invalid in ('-1', '1.5', 'abc', '3651', ''):
             self.assertEqual(self.post('/settings', inbox_grace='1', inbox_read_days='12', inbox_unread_days=invalid).status_code, 400)
             self.assertEqual(settings.get_inbox_grace_days(), {'read': 3, 'unread': 7})
@@ -141,7 +141,7 @@ class WebActionTests(AppTestCase):
         with patch.object(self.module.tahor_db, 'execute_unsubscribe', side_effect=RuntimeError('unreachable')):
             self.post(f'/unsubscribe/{row["id"]}', action='unsubscribe')
         self.assertEqual(self.module.tahor_db.get_unsubscribe_candidate('example.com')['status'], 'pending')
-        self.assertIn('Unsubscribe failed', self.client.get('/unsubscribe').get_data(as_text=True))
+        self.assertIn('The unsubscribe request could not be confirmed', self.client.get('/unsubscribe').get_data(as_text=True))
 
     def test_block_and_sieve_survive_unsubscribe_failure(self):
         self.module.tahor_db.upsert_unsubscribe_candidate('example.com', '', '', 'https://example.com/unsubscribe', None, True)
@@ -245,3 +245,30 @@ class WebActionTests(AppTestCase):
         for route in ('/', '/settings', '/unsubscribe', '/drafts', '/status'):
             self.assertEqual(self.client.get(route).status_code, 302)
         self.assertEqual(self.client.get('/healthz').json, {'ok': True})
+
+    def test_subscription_results_stay_with_sender_and_failed_request_is_retryable(self):
+        from urllib.error import HTTPError
+        self.module.tahor_db.upsert_unsubscribe_candidate('example.com', 'offers@example.com', 'Example offers', 'https://example.com/unsubscribe', None, True)
+        row = self.module.tahor_db.get_unsubscribe_candidate('example.com')
+        with patch.object(self.module.tahor_db, 'execute_unsubscribe', side_effect=HTTPError('https://example.com/private-token', 403, 'Forbidden', {}, None)):
+            response = self.client.post(f'/unsubscribe/{row["id"]}', data={'action': 'unsubscribe', 'csrf_token': self.token()}, headers={'Accept': 'application/json'})
+        self.assertEqual(response.status_code, 200)
+        result = response.get_json()
+        self.assertTrue(result['pending'])
+        self.assertTrue(result['failed'])
+        self.assertEqual(result['candidate_id'], row['id'])
+        self.assertNotIn('private-token', result['message'])
+        self.assertEqual(self.module.tahor_db.get_unsubscribe_candidate('example.com')['status'], 'pending')
+        page = self.client.get('/unsubscribe').get_data(as_text=True)
+        self.assertIn('Stop marketing, keep transactions', page)
+        self.assertIn('Working… You can continue with another sender.', page)
+        self.assertIn('aria-live="polite"', page)
+
+    def test_marketing_block_survives_unsubscribe_failure_without_claiming_success(self):
+        self.module.tahor_db.upsert_unsubscribe_candidate('example.com', '', '', 'https://example.com/unsubscribe', None, True)
+        row = self.module.tahor_db.get_unsubscribe_candidate('example.com')
+        with patch.object(self.module.tahor_db, 'execute_unsubscribe', side_effect=RuntimeError('unavailable')):
+            response = self.client.post(f'/unsubscribe/{row["id"]}', data={'action': 'unsubscribe_block_marketing', 'csrf_token': self.token()}, headers={'Accept': 'application/json'})
+        self.assertTrue(response.get_json()['failed'])
+        self.assertIn('transactional mail remains allowed', response.get_json()['message'])
+        self.assertEqual(self.module.tahor_db.get_sender_rule('example.com'), 'block_marketing')

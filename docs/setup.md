@@ -201,7 +201,7 @@ After a successful move, qualifying unread mail is marked read in its destinatio
 The filing sweep also checks existing folders, so first-time installations clean
 up already-filed unread mail using the same rules. It leaves starred messages,
 mail needing attention or review, and unclassified mail untouched.
-Unmapped vendors go under `Filed/_Unsorted` and get a routing decision in the app.
+Unmapped vendors go under `Filed/_Unsorted`. The rule writer examines actual sender addresses and message samples, automatically maps confident routine receipts and statements, and brings uncertain cases to the app. Shared delivery domains can have separate merchant mappings. Enable rule AI in Settings to use this automation.
 Saving a routing rule affects future filing; it does not silently relocate older
 messages already filed elsewhere.
 
@@ -274,3 +274,13 @@ systemctl --user restart tahor-backlog-worker tahor-web tahor-draft-replies
 Back up private data and the database before updating. Keep the virtual environment
 and code checkout separate from your personal configuration. See the
 [operations guide](operations.md) for recovery and backup details.
+
+### Email-based unsubscribe requests
+
+Fastmail must allow the configured app password to send mail through SMTP.
+Choose **Mail (IMAP/POP/SMTP)** access when creating that app password. Reading
+mail and delivering Tahor digests use IMAP, so those working does not establish
+that SMTP sending works. Optionally configure `FASTMAIL_SMTP_USERNAME` and
+`FASTMAIL_SMTP_APP_PASSWORD` in the protected environment file to use a separate
+sending credential. Do not use your account password or authenticator key here.
+Sender website links may require you to confirm the unsubscribe in your browser.

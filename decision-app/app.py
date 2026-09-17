@@ -29,7 +29,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 import requests
-from flask import Flask, g, redirect, request, session, abort
+from flask import Flask, g, redirect, request, session, abort, jsonify
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import apply_decisions
@@ -39,6 +39,7 @@ import config
 import reply_rules
 import provider_bridge
 import mailbox_settings
+import settings_autosave
 import tahor_db
 
 DB_PATH = tahor_db.DB_PATH
@@ -93,7 +94,7 @@ def secure_response(response):
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers.setdefault("Referrer-Policy", "same-origin")
     response.headers["Content-Security-Policy"] = "frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
     if response.mimetype == "text/html" and not response.is_streamed:
         body = response.get_data(as_text=True)
@@ -426,13 +427,13 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
 <section>
 <h2>Time in the inbox</h2>
 <p class="hint">Keep read and unread messages in the inbox before filing them into folders. These delays run from delivery and do not delay classification, trash deletion, or retention cleanup.</p>
-<form method="post" action="/settings">
+<form method="post" action="/settings" data-autosave>
   <input type="hidden" name="inbox_grace" value="1">
   <div class="fields">
     <label>Read mail (days)<input type="number" name="inbox_read_days" min="0" max="3650" value="{inbox_read_days}" required></label>
     <label>Unread mail (days)<input type="number" name="inbox_unread_days" min="0" max="3650" value="{inbox_unread_days}" required></label>
   </div>
-  <button type="submit" class="primary">Save inbox timing</button>
+  {autosave_status}
 </form>
 </section>
 <section>
@@ -470,6 +471,8 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
 {reply_ai_settings}
 </section>
 </main>
+{autosave_script}
+<noscript>Enable JavaScript to save Settings changes automatically.</noscript>
 </body>
 </html>
 """
@@ -555,6 +558,42 @@ CARD_GENERIC = """
 </div>
 """
 
+SUBSCRIPTION_SCRIPT = """<script>
+document.querySelectorAll('.subscription-form').forEach(form => {
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (form.dataset.busy) return;
+    const button = event.submitter;
+    if (!button) return;
+    const card = form.closest('.card');
+    const result = card.querySelector('.subscription-result');
+    const data = new FormData(form);
+    data.set('action', button.value);
+    form.dataset.busy = 'true';
+    form.setAttribute('aria-busy', 'true');
+    form.querySelectorAll('button').forEach(item => item.disabled = true);
+    result.textContent = 'Working… You can continue with another sender.';
+    try {
+      const response = await fetch(form.action, {method: 'POST', body: data, headers: {'Accept': 'application/json'}, credentials: 'same-origin'});
+      if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('session');
+      const outcome = await response.json();
+      result.textContent = outcome.message;
+      if (!outcome.pending) {
+        form.hidden = true;
+        card.dataset.resolved = 'true';
+      }
+    } catch (error) {
+      result.textContent = 'The result could not be confirmed. Reload to check this sender before trying again.';
+    } finally {
+      delete form.dataset.busy;
+      form.removeAttribute('aria-busy');
+      form.querySelectorAll('button').forEach(item => item.disabled = false);
+    }
+  });
+});
+</script>"""
+
+
 UNSUBSCRIBE_PAGE_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -572,11 +611,12 @@ UNSUBSCRIBE_PAGE_TEMPLATE = """<!doctype html>
 {header}
 {flash}
 <h1>Unsubscribe <span class="count">{count}</span></h1>
-<p class="hint">Every sender seen with a List-Unsubscribe header, most recent first. Whichever action you pick removes it from this list. Unsubscribing isn't always honored, so blocking is offered alongside it -- "block entirely" unsubscribes too, then blocks going forward regardless.</p>
+<p class="hint">Choose <strong>Stop marketing, keep transactions</strong> to request removal from this mailing list and have Tahor block future marketing while preserving receipts, payment notices, and other transactional messages. Unsubscribe alone requests removal without adding a block. The sender controls what its subscription covers; a confirmation page may require your attention. Block all mail also blocks transactional messages.</p>
 {non_compliant_banner}
 {cards}
 <section><h2>Blocked senders</h2>{blocked_senders}</section>
 </main>
+{interaction_script}
 </body>
 </html>
 """
@@ -590,14 +630,16 @@ NON_COMPLIANT_SECTION = """
 """
 
 UNSUBSCRIBE_CARD = """
-<div class="card">
+<div class="card" id="subscription-{id}">
   <div class="summary">{display_name}</div>
+  <p class="subscription-result" role="status" aria-live="polite">{result}</p>
+  {manual_link}
   <div class="context">{sender_email} &middot; {message_count} message(s) &middot; {mechanism}</div>
-  <form method="post" action="/unsubscribe/{id}">
+  <form method="post" action="/unsubscribe/{id}" class="subscription-form">
     <div class="actions">
       <button type="submit" name="action" value="unsubscribe" class="primary">Unsubscribe</button>
-      <button type="submit" name="action" value="unsubscribe_block_marketing">Unsubscribe + block marketing</button>
-      <button type="submit" name="action" value="block_all" class="trash">Unsubscribe + block entirely</button>
+      <button type="submit" name="action" value="unsubscribe_block_marketing">Stop marketing, keep transactions</button>
+      <button type="submit" name="action" value="block_all" class="trash">Unsubscribe + block all mail</button>
       <button type="submit" name="action" value="dismiss">Keep subscription</button>
     </div>
   </form>
@@ -605,13 +647,15 @@ UNSUBSCRIBE_CARD = """
 """
 
 NON_COMPLIANT_CARD = """
-<div class="card warn">
+<div class="card warn" id="subscription-{id}">
   <div class="summary">{display_name}</div>
+  <p class="subscription-result" role="status" aria-live="polite">{result}</p>
+  {manual_link}
   <div class="context">{sender_email} &middot; {message_count} message(s) &middot; sent again after you unsubscribed</div>
-  <form method="post" action="/unsubscribe/{id}">
+  <form method="post" action="/unsubscribe/{id}" class="subscription-form">
     <div class="actions">
-      <button type="submit" name="action" value="unsubscribe_block_marketing" class="primary">Block marketing (keep receipts, etc.)</button>
-      <button type="submit" name="action" value="block_all" class="trash">Block entirely</button>
+      <button type="submit" name="action" value="unsubscribe_block_marketing" class="primary">Stop marketing, keep transactions</button>
+      <button type="submit" name="action" value="block_all" class="trash">Block all mail, including receipts</button>
       <button type="submit" name="action" value="dismiss">Leave unsubscribed, don't block</button>
     </div>
   </form>
@@ -752,7 +796,7 @@ def index():
                 vendor_context = {}
             if not isinstance(vendor_context, dict):
                 vendor_context = {}
-            if ('vendor:' + str(row['id']) in automatic_ids or vendor_context.get('automatic_vendor_mapping')):
+            if ('vendor:' + str(row['id']) in automatic_ids or (mailbox_settings.is_ai_enabled('rule') and vendor_context.get('automatic_vendor_mapping'))):
                 automatic_count += 1
                 continue
             suggested_bucket = vendor_context.get('suggested_bucket')
@@ -862,11 +906,11 @@ def render_ai_task_settings(task):
         caution = ('Free reply drafts can contain unsupported promises, incorrect roles, or invented details even after model verification. Review every draft before sending.' if task == 'reply' else
                    'In an eight-instruction test, the free rule model proposed the wrong folder once. Review every proposed action and diff; model validation does not establish your intent.')
     status = 'Enabled' if enabled else 'Disabled'
-    return (f'<form method="post" action="/settings" class="ai-task-settings" data-ai-task="{task}">'
-            f'<input type="hidden" name="ai_task" value="{task}"><p><strong>{status}</strong></p>'
+    return (f'<form method="post" action="/settings" class="ai-task-settings" data-autosave data-ai-task="{task}">'
+            f'<input type="hidden" name="ai_task" value="{task}"><p><strong class="ai-enabled-status">{status}</strong></p>'
             f'<div class="mode-options">{cards}</div>{controls}'
             f'<p class="hint">{caution}</p><p class="hint">All hosted routes require zero data retention and prohibit data collection. The free route is restricted to Novita; privacy routing does not guarantee answer quality.</p>'
-            '<button type="submit" class="primary">Save AI settings</button></form>')
+            + settings_autosave.STATUS + '</form>')
 
 
 @app.route("/settings", methods=["GET", "POST"])
@@ -882,11 +926,15 @@ def settings_page():
                     raise ValueError('Free classification is disabled by the server configuration.')
                 mailbox_settings.set_ai_task_settings(task, policy, paid_model=request.form.get('paid_model'), free_model=request.form.get('free_model'))
             except ValueError as exc:
+                if request.headers.get('Accept') == 'application/json':
+                    return {'saved': False, 'message': str(exc)}, 400
                 abort(400, str(exc))
         elif "inbox_grace" in request.form:
             try:
                 mailbox_settings.set_inbox_grace_days(request.form.get("inbox_read_days", ""), request.form.get("inbox_unread_days", ""))
             except ValueError as exc:
+                if request.headers.get('Accept') == 'application/json':
+                    return {'saved': False, 'message': str(exc)}, 400
                 abort(400, str(exc))
         elif "classify_mode" in request.form:
             mode = request.form.get("classify_mode", "")
@@ -916,11 +964,18 @@ def settings_page():
                 abort(400, "Choose an available reply model.")
         else:
             abort(400, "No setting was selected.")
+        if request.headers.get('Accept') == 'application/json':
+            result = {'saved': True}
+            if request.form.get('ai_task') in ('classification', 'rule', 'reply'):
+                result['enabled'] = mailbox_settings.is_ai_enabled(request.form['ai_task'])
+            return result
         return redirect("/settings")
 
     current_mode = mailbox_settings.get_classify_mode()
     provider = provider_bridge.status()
     return SETTINGS_PAGE_TEMPLATE.format(
+        autosave_status=settings_autosave.STATUS,
+        autosave_script=settings_autosave.SCRIPT,
         icon=TAHOR_ICON,
         style=STYLE_BLOCK,
         header=tahor_header("settings"),
@@ -951,10 +1006,10 @@ def render_reply_rules():
             sender_rows.append(f'<form method="post" action="/reply-rules/exclude"><input type="hidden" name="rule_id" value="{identifier}"><input type="hidden" name="sender" value="{html(sender)}"><p>{html(sender)} — {row["messages"]} matched message(s) — {"opted out" if is_excluded else "drafting allowed"} <button name="excluded" value="{"0" if is_excluded else "1"}">{"Allow drafts" if is_excluded else "Opt out"}</button></p></form>')
         options = ''.join(f'<option value="{kind}"{" selected" if kind == rule["match_type"] else ""}>{label}</option>' for kind, label in [('natural_language','Natural-language description'),('sender_email','Specific email address'),('sender_domain','Sender domain')])
         sentence_options = ''.join(f'<option{" selected" if count == rule.get("max_sentences",3) else ""}>{count}</option>' for count in (3,2,1))
-        cards.append(f'''<div class="card"><h3>{html(rule['name'])}</h3><p>{"Enabled" if rule.get('enabled', True) else "Paused"}</p>
-<p>{html(rule['match'])}</p><p>{html(rule['instructions'])}</p><pre>{html(rule.get('signature',''))}</pre>
+        cards.append(f'''<div class="card"><h3 data-rule-display="name">{html(rule['name'])}</h3><p>{"Enabled" if rule.get('enabled', True) else "Paused"}</p>
+<p data-rule-display="match">{html(rule['match'])}</p><p data-rule-display="instructions">{html(rule['instructions'])}</p><pre data-rule-display="signature">{html(rule.get('signature',''))}</pre>
 <details><summary>Matched senders ({len(senders)}) and opt-outs</summary><p class="hint">Opting out stops future drafts from that sender for this rule. Existing drafts stay in your mailbox; mail protection and normal inbox timing are unchanged.</p>{''.join(sender_rows) or '<p>No matched senders yet.</p>'}</details>
-<details><summary>Edit rule</summary><form method="post" action="/reply-rules/save">
+<details><summary>Edit rule</summary><form method="post" action="/reply-rules/save" data-autosave>
 <input type="hidden" name="rule_id" value="{identifier}">
 <p><label>Name<br><input name="name" value="{html(rule['name'])}" required maxlength="120"></label></p>
 <p><label>Match using<br><select name="match_type">{options}</select></label></p>
@@ -963,7 +1018,7 @@ def render_reply_rules():
 <p><label>Filing folder after inbox timing<br><input name="filing_folder" maxlength="250" value="{html(rule.get('filing_folder',''))}"></label></p>
 <p><label>Signature<br><textarea name="signature" rows="2" maxlength="300">{html(rule.get('signature',''))}</textarea></label></p>
 <p><label>Maximum sentences<br><select name="max_sentences">{sentence_options}</select></label></p>
-<button type="submit">Save changes</button></form></details>
+{settings_autosave.STATUS}</form></details>
 <form method="post" action="/reply-rules/toggle"><input type="hidden" name="rule_id" value="{identifier}"><button name="enabled" value="{'0' if rule.get('enabled', True) else '1'}">{'Pause rule' if rule.get('enabled', True) else 'Enable rule'}</button></form></div>''')
     return ''.join(cards) or '<p>No reply rules yet. Add one below.</p>'
 
@@ -972,9 +1027,14 @@ def render_reply_rules():
 @login_required
 def save_reply_rule():
     try:
-        reply_rules.save_rule(request.form.get('name',''), request.form.get('match_type',''), request.form.get('match',''), request.form.get('instructions',''), request.form.get('signature',''), request.form.get('max_sentences','3'), request.form.get('rule_id') or None, filing_folder=request.form.get('filing_folder','').strip())
+        rule_id = reply_rules.save_rule(request.form.get('name',''), request.form.get('match_type',''), request.form.get('match',''), request.form.get('instructions',''), request.form.get('signature',''), request.form.get('max_sentences','3'), request.form.get('rule_id') or None, filing_folder=request.form.get('filing_folder','').strip())
     except ValueError as error:
+        if request.headers.get('Accept') == 'application/json':
+            return {'saved': False, 'message': str(error)}, 400
         abort(400, str(error))
+    if request.headers.get('Accept') == 'application/json':
+        rule = next(rule for rule in reply_rules.get_rules(False) if rule['id'] == rule_id)
+        return {'saved': True, 'rule': {key: rule.get(key, '') for key in ('name', 'match', 'instructions', 'signature')}}
     return redirect('/settings#reply-rules')
 
 
@@ -1353,6 +1413,8 @@ def _unsubscribe_card(row, non_compliant=False):
         sender_email=html(row["sender_email"] or row["sender_domain"]),
         message_count=row["message_count"],
         mechanism=mechanism,
+        manual_link=(f'<p><a href="/unsubscribe-link/{row["id"]}" target="_blank" rel="noopener noreferrer">Open sender’s unsubscribe page</a> <span class="hint">Complete any confirmation there.</span></p>' if row['unsubscribe_url'] else ''),
+        result=html(session.pop("subscription_result_" + str(row["id"]), "")),
     )
 
 
@@ -1377,6 +1439,7 @@ def unsubscribe_page():
         icon=TAHOR_ICON,
         style=STYLE_BLOCK,
         header=tahor_header("unsubscribe"),
+        interaction_script=SUBSCRIPTION_SCRIPT,
         flash=FLASH_BANNER.format(message=html(session.pop("flash", ""))) if session.get("flash") else "",
         count=len(non_compliant_rows) + len(pending_rows),
         non_compliant_banner=non_compliant_banner,
@@ -1388,6 +1451,22 @@ def unsubscribe_page():
         ) or '<p class="empty">No blocked senders.</p>',
         cards=body,
     )
+
+
+@app.route("/unsubscribe-link/<int:candidate_id>")
+@login_required
+def unsubscribe_link(candidate_id):
+    row = get_db().execute("SELECT unsubscribe_url FROM unsubscribe_candidates WHERE id=?", (candidate_id,)).fetchone()
+    if not row or not row['unsubscribe_url']:
+        abort(404)
+    from unsubscribe import validate_url
+    try:
+        target = validate_url(row['unsubscribe_url'])
+    except Exception:
+        abort(400, "This sender's unsubscribe link could not be safely opened.")
+    response = redirect(target)
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    return response
 
 
 @app.route("/unsubscribe/<int:candidate_id>", methods=["POST"])
@@ -1414,14 +1493,15 @@ def unsubscribe_action(candidate_id):
             )
         except Exception as e:
             unsubscribe_failed = True
-            outcome = f"Unsubscribe failed: {e}"  # best-effort: a dead unsubscribe link or SMTP failure shouldn't block the rest of the action
+            from unsubscribe import describe_failure
+            outcome = describe_failure(e)
         app.logger.info("unsubscribe %s (%s): %s", row["sender_domain"], action, outcome)
         if action == "unsubscribe":
             new_status = "pending" if unsubscribe_failed else "unsubscribed"  # watched: if this sender mails again, it resurfaces flagged non-compliant
     if row and action in ("unsubscribe_block_marketing", "block_all"):
         rule = "block_all" if action == "block_all" else "block_marketing"
         tahor_db.set_sender_rule(row["sender_domain"], rule)
-        outcome += "; sender block saved."
+        outcome += (" Marketing block saved; transactional mail remains allowed." if rule == "block_marketing" else " All-mail block saved, including transactional mail.")
         try:
             generate_sieve.refresh_sieve()
             outcome += " Sieve proposal updated on the decisions page."
@@ -1429,8 +1509,13 @@ def unsubscribe_action(candidate_id):
             outcome += f" Sieve proposal could not be updated: {exc}. The worker block is active."
     db.execute("UPDATE unsubscribe_candidates SET status=?,non_compliant=0,unsubscribed_at=CASE WHEN ?='unsubscribed' THEN ? ELSE unsubscribed_at END WHERE id=?", (new_status,new_status,datetime.now(timezone.utc).isoformat(),candidate_id))
     db.commit()
-    session["flash"] = outcome
-    return redirect("/unsubscribe")
+    if request.headers.get("Accept") == "application/json":
+        return jsonify(message=outcome, pending=new_status == "pending", failed=unsubscribe_failed, candidate_id=candidate_id)
+    if new_status == "pending":
+        session["subscription_result_" + str(candidate_id)] = outcome
+    else:
+        session["flash"] = (row["display_name"] or row["sender_domain"]) + ": " + outcome
+    return redirect("/unsubscribe#subscription-" + str(candidate_id))
 
 
 @app.route("/unblock-sender", methods=["POST"])

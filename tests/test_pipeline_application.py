@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
@@ -13,6 +14,20 @@ import process_batch
 
 
 class PipelineTests(unittest.TestCase):
+    def test_classifier_accepts_explicit_brief_retention(self):
+        import classify
+        answer = dict(action='keep', category='marketing', retention='brief',
+                      expense_type='n/a', needs_attention=False, reason='Routine notice')
+        response = json.dumps({'choices': [{'message': {'content': json.dumps(answer)}}]}).encode()
+        backend = classify.BACKENDS['openrouter-paid']
+        with patch.object(classify, 'wait_for_model_request'), \
+             patch('reply_rules.get_rules', return_value=[]), \
+             patch.object(classify.urllib.request, 'urlopen', return_value=io.BytesIO(response)):
+            result = classify.classify_one(backend['url'], {}, backend['default_model'],
+                                           'Use brief only when instructed.', {'id': 'notice'}, retries=0)
+        self.assertEqual(result['action'], 'keep')
+        self.assertEqual(result['retention'], 'brief')
+
     def test_brief_keep_is_classified_without_immediate_deletion(self):
         with tempfile.TemporaryDirectory() as directory:
             prefix = str(Path(directory) / 'batch')

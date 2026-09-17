@@ -280,7 +280,7 @@ Retention uses targeted UID expunge. Filing uses IMAP MOVE. Neither falls back t
 expunging every message carrying the Deleted flag. Dry runs select mailboxes
 read-only and do not close them with an expunging IMAP CLOSE command.
 
-Routing maps accept complete sender domains. Older short-label mappings are also
+Routing maps prefer exact sender email addresses and also accept complete sender domains. Older short-label mappings are also
 read for compatibility. For example:
 
 ```json
@@ -436,3 +436,62 @@ so a large folder does not exceed the IMAP client’s response-line limit. There
 no folder-size cutoff. Searches keep the UID boundary observed when selecting
 the folder; newer arrivals are picked up on the next visit. A failed range
 invalidates that search instead of applying a partial filing or deletion result.
+
+### Reviewing individual messages and subscriptions
+
+Decision cards include the sender, delivery date and age where available. The
+**View email** action reads the message without marking it read and displays escaped
+plain text, without loading remote images or running message HTML. Oversized
+messages are not displayed. A moved message is located by its verified identity;
+ambiguous matches stay pending. Saved actions retry after temporary failures.
+
+**Keep** removes the review hold and retains ordinary filing and retention.
+**Keep briefly** uses `retention-short-lived` and the configured read/unread age
+windows (three/seven days by default). Its targeted cleanup also checks filed
+folders. **Trash** acts on that message only. **Skip for now** preserves the hold
+and pauses any saved action. A routing sample can be trashed or kept briefly
+without creating a sender-wide rule.
+
+Confident routine vendor recommendations can apply automatically through the rule
+writer. They require an identified merchant, consistent observed samples, a kept
+transactional message, and confidence of at least 0.9. Uncertain or shared-sender
+cases remain reviewable. This route never automatically approves deletion. Legacy
+unsorted folders are inventoried in bounded batches to enrich older routing cards.
+
+Subscription actions show progress and results beside the affected sender.
+**Stop marketing, keep transactions** adds a marketing-only block even if the
+sender rejects the unsubscribe request; the result reports both outcomes.
+**Unsubscribe + block all mail** also blocks transactional mail. Unsubscribe requests
+apply to the sender's advertised mailing list; Tahor cannot control the scope of
+the sender's subscription system. A website-only mechanism requires confirmation
+in the browser. Email mechanisms require SMTP-enabled app credentials; successful
+IMAP access alone does not verify this permission.
+
+### Keeping coupons until expiration
+
+An optional private `coupon_policies.json` in `DATA_DIR` can retain coupons from
+chosen senders and file them under a destination relative to `FILING_ROOT`:
+
+```json
+{
+  "offers@example.com": {
+    "folder": "Shopping/Coupons/Example Store",
+    "date_order": "mdy"
+  }
+}
+```
+
+Expiration comes from the message text, rather than a model-generated date.
+A clear expiration must include the year. Missing, ambiguous or conflicting dates
+keep the coupon protected; Tahor does not guess. Dated coupons are retained until
+the stated day has ended in every timezone. The normal inbox filing delay still
+applies. Receipts and messages held for attention or review remain protected.
+Coupon policies are private, excluded from Git, and included in private backups.
+`TAHOR_COUPON_POLICIES_PATH` can select another protected policy file.
+
+To cover coupon offers across senders, add a `"*"` entry with a folder such as
+`Shopping/Coupons`. Tahor creates sender-domain subfolders beneath that root.
+This general policy requires coupon, voucher or promo-code language in a message
+classified as marketing; it does not retain every sale announcement or newsletter.
+Exact sender policies override the general destination. Explicit sender blocks and
+recorded successful unsubscribe requests take precedence.
