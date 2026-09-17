@@ -588,3 +588,11 @@ existing Pending decisions review flow and require approval. Saving a note does 
 apply an unsubscribe choice, delete mail, or send a reply. Notes stay in the private
 database and recovery backups. Sender context comes from the stored review item;
 email contents and unsubscribe links are not treated as owner instructions.
+
+Completed or already-queued subscription choices are excluded from later batches
+on the same page. If another tab or worker handled a sender meanwhile, Tahor
+removes that stale selection and preserves the remaining choices for submission.
+A failed external unsubscribe can still have a successfully saved marketing block;
+that completed local choice is not offered again as a new bulk action. Network
+failures with an unknown submission outcome retry the same request identifier,
+so retrying cannot queue the same unsubscribe twice.
