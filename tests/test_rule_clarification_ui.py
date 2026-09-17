@@ -101,3 +101,28 @@ class RuleClarificationUITests(AppTestCase):
             apply.assert_not_called()
         self.assertTrue(json.loads(real.execute('SELECT context FROM decisions WHERE id=?', (row['id'],)).fetchone()['context'])['applied'])
         real.close()
+
+    def test_generic_resolve_cannot_overwrite_any_rule_review_state(self):
+        for state in ('clarification', 'proposal', 'approved', 'applied'):
+            with self.subTest(state=state):
+                row = self.seed()
+                context = json.loads(row['context'])
+                resolution = json.loads(row['resolution'])
+                if state != 'clarification':
+                    context = {'rule_proposal': {'token': 'saved-proposal'}}
+                if state == 'approved':
+                    resolution['approved_proposal'] = 'saved-proposal'
+                if state == 'applied':
+                    context['applied'] = True
+                db = self.module.tahor_db.get_db()
+                with db:
+                    db.execute('UPDATE decisions SET context=?,resolution=? WHERE id=?', (json.dumps(context), json.dumps(resolution), row['id']))
+                before = dict(db.execute('SELECT * FROM decisions WHERE id=?', (row['id'],)).fetchone())
+                with patch.object(self.module.apply_decisions, 'apply_one') as apply:
+                    for action in ('keep', 'trash', 'skip', 'map'):
+                        response = self.client.post('/resolve/' + str(row['id']), data={'csrf_token': self.token(), 'action': action})
+                        self.assertEqual(response.status_code, 400)
+                    apply.assert_not_called()
+                after = dict(db.execute('SELECT * FROM decisions WHERE id=?', (row['id'],)).fetchone())
+                db.close()
+                self.assertEqual(before, after)

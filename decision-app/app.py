@@ -970,6 +970,8 @@ def resolve(decision_id):
     row = db.execute("SELECT * FROM decisions WHERE id=?", (decision_id,)).fetchone()
     if row is None:
         abort(404)
+    if row['kind'] not in ('vendor_mapping', 'message_review'):
+        abort(400, 'Use the review action for this decision type.')
     action = request.form.get("action")
     allowed = ("map", "skip") if row["kind"] == "vendor_mapping" else ("keep", "trash", "skip")
     if action not in allowed:
