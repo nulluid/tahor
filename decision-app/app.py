@@ -1195,7 +1195,7 @@ def drafts_page():
 @login_required
 def worker_status():
     snapshot = runtime_status.read_status()
-    details = [("Configured speed", mailbox_settings.get_classify_mode()),
+    details = [("Classification policy", dict((key, label) for key, label, _ in AI_POLICY_OPTIONS).get(mailbox_settings.get_classify_mode(), mailbox_settings.get_classify_mode())),
                ("Last worker update", snapshot.get("updated_at", "Not recorded")),
                ("Last successful batch", snapshot.get("last_success_at", "Not recorded")),
                ("Applied in last batch", snapshot.get("last_batch_applied", "—")),
