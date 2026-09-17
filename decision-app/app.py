@@ -15,6 +15,7 @@ hands free-text rules to a model to draft the change.
 Google OAuth restricts access to the configured mailbox owner.
 """
 import json
+import hashlib
 import fcntl
 import os
 import re
@@ -657,10 +658,19 @@ def index():
         ctx = decision_context(row)
         if row["kind"] == "free_text_rule":
             try:
-                proposal = json.loads(row['context'] or '{}').get('rule_proposal')
+                rule_context = json.loads(row['context'] or '{}')
+                proposal = rule_context.get('rule_proposal')
+                clarification = rule_context.get('rule_clarification')
             except (ValueError, TypeError, AttributeError):
                 proposal = None
-            if proposal:
+                clarification = None
+            if clarification and not proposal:
+                try:
+                    original = json.loads(row["resolution"] or "{}").get("text", "")
+                except (ValueError, TypeError, AttributeError):
+                    original = ""
+                cards.append(f'<div class="card"><div class="summary">Rule needs clarification</div><p>{html(clarification.get("question", "Please clarify your instruction."))}</p><form method="post" action="/clarify-rule/{row["id"]}"><input type="hidden" name="revision" value="{rule_revision(row)}"><label>Full instruction, including the exact sender domain when applicable<textarea name="rule_text" rows="4" required>{html(original)}</textarea></label><p>Use a full domain such as alerts.example.com, not a brand name. Include what you want Tahor to do. The revised proposal still needs your approval.</p><button type="submit">Resubmit instruction</button></form></div>')
+            elif proposal:
                 result = proposal['result']
                 if result.get('kind') == 'sender_rule':
                     sender = result.get('sender_rule') or {}
@@ -976,6 +986,12 @@ def resolve(decision_id):
     db.execute("UPDATE decisions SET status='resolved', resolution=?, resolved_at=? WHERE id=?", (json.dumps(resolution), datetime.now(timezone.utc).isoformat(), decision_id))
     db.commit()
     try:
+        context = json.loads(row['context'] or '{}')
+    except (ValueError, TypeError):
+        context = {}
+    if isinstance(context, dict) and context.get('rule_clarification'):
+        abort(409, 'Clarify the full instruction before retrying.')
+    try:
         session["flash"] = apply_decisions.apply_one(decision_id)
     except Exception as exc:
         db.execute("UPDATE decisions SET status='pending' WHERE id=?", (decision_id,))
@@ -1007,7 +1023,7 @@ def add_rule():
 
         try:
             outcome = apply_decisions.apply_one(row_id)
-            session["flash"] = f"Rule applied: {outcome}"
+            session["flash"] = f"Rule saved: {outcome}"
         except Exception as e:
             db.execute("UPDATE decisions SET status='pending' WHERE id=?", (row_id,))
             db.commit()
@@ -1016,6 +1032,48 @@ def add_rule():
                 "Use Retry on the decisions page."
             )
     return redirect("/")
+
+
+def rule_revision(row):
+    return hashlib.sha256(json.dumps([row['context'], row['resolution'], row['status']], ensure_ascii=True).encode()).hexdigest()
+
+
+@app.route("/clarify-rule/<int:decision_id>", methods=["POST"])
+@login_required
+def clarify_rule(decision_id):
+    db = get_db()
+    row = db.execute("SELECT * FROM decisions WHERE id=? AND kind='free_text_rule'", (decision_id,)).fetchone()
+    if row is None:
+        abort(404)
+    try:
+        context = json.loads(row['context'])
+        resolution = json.loads(row['resolution'])
+    except (ValueError, TypeError):
+        abort(409, 'This instruction is not awaiting clarification.')
+    if (row['status'] != 'pending' or not isinstance(context, dict) or not isinstance(resolution, dict)
+            or not context.get('rule_clarification') or context.get('applied')
+            or context.get('rule_proposal') or resolution.get('approved_proposal')):
+        abort(409, 'This instruction is not awaiting clarification.')
+    if request.form.get('revision') != rule_revision(row):
+        abort(409, 'This instruction changed; refresh before editing.')
+    text = request.form.get('rule_text', '').strip()
+    if not text or len(text) > 20000 or '\x00' in text:
+        abort(400, 'Enter the complete instruction, up to 20,000 characters.')
+    context.pop('rule_clarification', None)
+    resolution = {'action': 'free_text_rule', 'text': text}
+    changed = db.execute("UPDATE decisions SET summary=?, context=?, resolution=?, status='resolved', resolved_at=? WHERE id=? AND context=? AND resolution=? AND status='pending'",
+                         ('Rule: ' + text[:80], json.dumps(context), json.dumps(resolution), datetime.now(timezone.utc).isoformat(), decision_id, row['context'], row['resolution']))
+    if changed.rowcount != 1:
+        db.rollback()
+        abort(409, 'This instruction changed; refresh before editing.')
+    db.commit()
+    try:
+        session['flash'] = 'Instruction saved: ' + apply_decisions.apply_one(decision_id)
+    except Exception:
+        db.execute("UPDATE decisions SET status='pending' WHERE id=?", (decision_id,))
+        db.commit()
+        session['flash'] = 'Instruction saved. Drafting did not finish; it remains pending for retry.'
+    return redirect('/')
 
 
 @app.route("/review-rule/<int:decision_id>", methods=["POST"])
@@ -1073,9 +1131,17 @@ def retry_rule(decision_id):
     if row is None:
         abort(404)
     try:
+        context = json.loads(row['context'] or '{}')
+    except (ValueError, TypeError):
+        context = {}
+    if isinstance(context, dict) and context.get('rule_clarification'):
+        abort(409, 'Clarify the full instruction before retrying.')
+    try:
         session["flash"] = apply_decisions.apply_one(decision_id)
-        db.execute("UPDATE decisions SET status='resolved' WHERE id=?", (decision_id,))
-        db.commit()
+        latest = db.execute('SELECT context FROM decisions WHERE id=?', (decision_id,)).fetchone()
+        if latest and json.loads(latest['context'] or '{}').get('applied'):
+            db.execute("UPDATE decisions SET status='resolved' WHERE id=?", (decision_id,))
+            db.commit()
     except Exception as exc:
         session["flash"] = f"Could not apply rule: {exc}. You can retry."
     return redirect("/")

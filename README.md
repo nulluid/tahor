@@ -198,7 +198,10 @@ an optional operator override that blocks free classification requests.
 AI-generated rule changes appear as proposals in the decision queue. Review the
 exact sender action or file diff before approving. Domain blocks require the exact
 domain in your instruction; a brand name or single email address cannot authorize
-a whole-domain block. Changed underlying rules invalidate an older proposal.
+a whole-domain block. If the scope is unclear, Tahor preserves your instruction
+and asks for clarification instead of guessing or repeatedly retrying. Edit the
+complete instruction in the decision queue and resubmit it for a new proposal.
+Changed underlying rules invalidate an older proposal.
 **Grok 4.6** is the recommended rule-writing option, selected independently from
 classification and reply writing; its requests use the xAI zero-retention route.
 
