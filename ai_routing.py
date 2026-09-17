@@ -16,7 +16,7 @@ COOLDOWN_SECONDS = 300
 QUEUE_LIMIT_SECONDS = 4 * 3600
 ALERT_SECONDS = 30 * 60
 DEFAULT_FREE_SECONDS = 60
-TASKS = ('classification', 'reply', 'rule')
+TASKS = ('classification', 'reply', 'rule', 'subscriptions')
 
 
 class RoutingUnavailable(ValueError):

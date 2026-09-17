@@ -12,10 +12,10 @@ class AIPolicyUITests(AppTestCase):
         original=settings.load_settings()
         self.addCleanup(settings.save_settings,original)
         with patch.dict('os.environ',{'TAHOR_CLASSIFY_FREE_ENABLED':'1'}):
-            for task in ('classification','reply','rule'):
+            for task in ('classification','reply','rule','subscriptions'):
                 for policy in ('paid_only','paid','auto','free'):
                     with self.subTest(task=task,policy=policy):
-                        untouched={other:settings.get_ai_policy(other) for other in ('classification','reply','rule') if other!=task}
+                        untouched={other:settings.get_ai_policy(other) for other in ('classification','reply','rule','subscriptions') if other!=task}
                         fields={'ai_task':task,'ai_policy':policy}
                         if task!='classification':fields.update(paid_model='grok-4.6',free_model='ling-free')
                         self.assertEqual(self.post(**fields).status_code,302)
@@ -106,3 +106,15 @@ class AIPolicyUITests(AppTestCase):
             self.assertEqual(self.post(reply_backup_model=backup).status_code,302)
             self.assertEqual(settings.get_ai_policy('reply'),'free')
             self.assertEqual(self.routed_models('reply'),['ling-free'])
+
+    def test_subscription_batch_and_private_guidance_save_atomically(self):
+        settings=self.module.mailbox_settings
+        original=settings.load_settings();self.addCleanup(settings.save_settings,original)
+        response=self.post(ai_task='subscriptions',ai_policy='free',paid_model='gpt5',free_model='ling-free',batch_size='75',subscription_guidance='Keep local volunteer updates <script>example</script>')
+        self.assertEqual(response.status_code,302)
+        self.assertEqual(settings.get_subscription_batch_size(),75)
+        page=self.client.get('/settings').get_data(as_text=True)
+        self.assertIn('Keep local volunteer updates &lt;script&gt;example&lt;/script&gt;',page)
+        before=settings.load_settings()
+        self.assertEqual(self.post(ai_task='subscriptions',ai_policy='paid_only',paid_model='gpt5',free_model='ling-free',batch_size='0',subscription_guidance='Changed').status_code,400)
+        self.assertEqual(settings.load_settings(),before)

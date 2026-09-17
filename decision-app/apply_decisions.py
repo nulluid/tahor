@@ -506,8 +506,13 @@ def apply_one(decision_id):
 def main():
     import ai_routing
     import vendor_suggestions
+    import subscription_bulk
+    import subscription_suggestions
+    subscription_bulk.run_pending(limit=10)
     conn = tahor_db.get_db()
     try:
+        import message_reviews
+        message_reviews.hydrate_pending(conn, limit=3, budget_seconds=30)
         pending_ids = pending_ai_rule_ids(conn)
         resolved_ids = []
         for row in conn.execute("SELECT id,context FROM decisions WHERE status='resolved' AND resolution IS NOT NULL"):
@@ -540,6 +545,7 @@ def main():
             failures += 1
             print(f"{decision_id}: could not apply ({type(exc).__name__}); work remains pending", file=sys.stderr)
     import vendor_inventory
+    failures += subscription_suggestions.run_pending_jobs(max_jobs=5)
     failures += vendor_inventory.enrich_pending()
     failures += vendor_suggestions.suggest_pending(rule_model_call, apply_decision=apply_one)
     if failures:

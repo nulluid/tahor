@@ -22,7 +22,7 @@ from pathlib import Path
 SETTINGS_PATH = Path(os.environ.get("TAHOR_SETTINGS_PATH", Path.home() / ".config" / "tahor" / "settings.json"))
 
 MODES = ("paid_only", "paid", "auto", "free")
-AI_TASKS = ("classification", "reply", "rule")
+AI_TASKS = ("classification", "reply", "rule", "subscriptions")
 
 # Rule drafting is rare and judgment-heavy, so it's worth a stronger model than routine classification uses.
 RULE_MODELS = {
@@ -126,11 +126,24 @@ RULE_MODELS['ling-free'] = copy.deepcopy(REPLY_MODELS['ling-free'])
 RULE_MODELS['ling-free']['request_options']['max_tokens'] = 4096
 
 
+SUBSCRIPTION_MODELS = {key: copy.deepcopy(RULE_MODELS[key]) for key in ("none", "grok-4.6", "gpt5", "ling-free")}
+for backend in SUBSCRIPTION_MODELS.values():
+    if backend["model"] != "none":
+        backend.setdefault("request_options", {}).update(max_tokens=4096, response_format={"type": "json_object"})
+
+def ai_model_registry(task):
+    return {"reply": REPLY_MODELS, "rule": RULE_MODELS, "subscriptions": SUBSCRIPTION_MODELS}[task]
+
+
 DEFAULT_SETTINGS = {
     "classify_mode": "free",
     "rule_model": DEFAULT_RULE_MODEL,
     "reply_model": DEFAULT_REPLY_MODEL,
     "reply_backup_model": "none",
+    "subscriptions_model": "grok-4.6",
+    "subscriptions_free_model": "ling-free",
+    "subscriptions_ai_policy": "paid",
+    "subscriptions_batch_size": 50,
     "free_rate_log": [],  # rolling [{"messages": N, "seconds": S}, ...], see record_free_batch
     "backlog_estimate": None,
     "backlog_estimate_at": None,
@@ -231,7 +244,7 @@ def get_ai_policy(task):
     if value in MODES:
         return value
     # Preserve a legacy free primary or explicitly selected free reply backup.
-    registry = REPLY_MODELS if task == 'reply' else RULE_MODELS
+    registry = ai_model_registry(task)
     primary = settings.get(task + '_model', 'none')
     if registry.get(primary, {}).get('model', '').endswith(':free'):
         return 'free'
@@ -246,10 +259,10 @@ def get_ai_models(task):
     if task == 'classification':
         return {'paid': 'openrouter-paid', 'free': 'openrouter-free'}
     settings = load_settings()
-    registry = REPLY_MODELS if task == 'reply' else RULE_MODELS
+    registry = ai_model_registry(task)
     primary = settings.get(task + '_model', 'none')
     legacy_free = registry.get(primary, {}).get('model', '').endswith(':free')
-    free_key = 'reply_backup_model' if task == 'reply' else 'rule_free_model'
+    free_key = 'reply_backup_model' if task == 'reply' else task + '_free_model'
     free = settings.get(free_key, 'ling-free')
     if not registry.get(free, {}).get('model', '').endswith(':free'):
         free = primary if legacy_free else 'ling-free'
@@ -263,16 +276,24 @@ def is_ai_enabled(task):
 
 
 @locked_update
-def set_ai_task_settings(task, policy, paid_model=None, free_model=None):
+def set_ai_task_settings(task, policy, paid_model=None, free_model=None, batch_size=None, guidance=None):
     if task not in AI_TASKS or policy not in MODES:
         raise ValueError('Unknown AI task or policy')
     settings = load_settings()
+    if guidance is not None:
+        if task != 'subscriptions' or not isinstance(guidance, str) or len(guidance) > 12000 or '\x00' in guidance:
+            raise ValueError('Subscription guidance must be text of at most 12,000 characters.')
+        settings['subscription_guidance'] = guidance.strip()
+    if batch_size is not None:
+        if task != 'subscriptions' or isinstance(batch_size, bool) or not str(batch_size).isascii() or not str(batch_size).isdigit() or not 1 <= int(batch_size) <= 200:
+            raise ValueError('Choose a subscription batch size from 1 to 200.')
+        settings['subscriptions_batch_size'] = int(batch_size)
     if task == 'classification':
         if paid_model not in (None, '', 'openrouter-paid') or free_model not in (None, '', 'openrouter-free'):
             raise ValueError('Unknown classification model')
         settings['classify_mode'] = policy
     else:
-        registry = REPLY_MODELS if task == 'reply' else RULE_MODELS
+        registry = ai_model_registry(task)
         current = get_ai_models(task)
         paid_model = current['paid'] if paid_model is None else paid_model
         free_model = current['free'] if free_model is None else free_model
@@ -282,7 +303,7 @@ def set_ai_task_settings(task, policy, paid_model=None, free_model=None):
             raise ValueError('Choose an explicitly free model')
         settings[task + '_ai_policy'] = policy
         settings[task + '_model'] = paid_model
-        settings['reply_backup_model' if task == 'reply' else 'rule_free_model'] = free_model
+        settings['reply_backup_model' if task == 'reply' else task + '_free_model'] = free_model
     save_settings(settings)
 
 
@@ -537,3 +558,8 @@ def set_inbox_grace_days(read_days, unread_days):
     settings = load_settings()
     settings.update(values)
     save_settings(settings)
+
+
+def get_subscription_batch_size():
+    value = load_settings().get("subscriptions_batch_size", 50)
+    return value if type(value) is int and 1 <= value <= 200 else 50
