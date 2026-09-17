@@ -443,7 +443,10 @@ Decision cards include the sender, delivery date and age where available. The
 **View email** action reads the message without marking it read and displays escaped
 plain text, without loading remote images or running message HTML. Oversized
 messages are not displayed. A moved message is located by its verified identity;
-ambiguous matches stay pending. Saved actions retry after temporary failures.
+ambiguous matches stay pending. Saved actions retry after temporary failures. Decisions update in place and keep
+your scroll position; results appear beside the affected card. Handling an
+individual sample does not create a sender-wide rule, and completed samples no
+longer keep a stale routing question on screen.
 
 **Keep** removes the review hold and retains ordinary filing and retention.
 **Keep briefly** uses `retention-short-lived` and the configured read/unread age

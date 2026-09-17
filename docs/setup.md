@@ -285,3 +285,17 @@ that SMTP sending works. Optionally configure `FASTMAIL_SMTP_USERNAME` and
 `FASTMAIL_SMTP_APP_PASSWORD` in the protected environment file to use a separate
 sending credential. Do not use your account password or authenticator key here.
 Sender website links may require you to confirm the unsubscribe in your browser.
+
+On an isolated Linux installation under `/opt/tahor`, enroll a separate sending
+credential through a private terminal:
+
+```bash
+sudo /opt/tahor/venv/bin/python /opt/tahor/scripts/enroll_smtp.py
+```
+
+The command accepts the app password through a hidden prompt, verifies one SMTP
+sign-in over TLS without sending mail, and updates only the separate SMTP fields
+in `/etc/tahor/config.env`. Rejected authentication leaves that file unchanged.
+After saving, it restarts the web service to load the credential. If that restart
+fails, it reports that the credential was saved and prints the recovery command.
+Never enter the account password, authenticator seed, or app password in chat.

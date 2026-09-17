@@ -161,7 +161,8 @@ Tahor uses observed messages to identify merchants and automatically route confi
 receipt and statement matches. Shared delivery services are matched by the actual
 sender address; a marketplace purchase does not turn every future receipt into the
 same product category. Uncertain cases show the sender, date, suggested folder,
-and a link to read the email safely before deciding.
+and a link to read the email safely before deciding. Actions update the queue in
+place so you can keep working without losing your position.
 
 **Keep** releases a review hold and preserves normal retention and filing rules.
 **Keep briefly** expires the message after the configured three-day read or
