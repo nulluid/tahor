@@ -94,7 +94,7 @@ class DraftTests(unittest.TestCase):
         self.conn.append.assert_not_called()
 
     def test_optout_during_generation_prevents_append(self):
-        def generate(*args):
+        def generate(*args, **kwargs):
             self.rule['excluded_senders'] = ['person@example.com']
             return 'Thank you.'
         with patch.object(draft_replies, 'draft_reply_body', side_effect=generate):
@@ -129,11 +129,85 @@ class DraftTests(unittest.TestCase):
         response = MagicMock()
         response.__enter__.return_value.read1.side_effect = [
             json.dumps({'choices': [{'message': {'content': 'NO_REPLY_NEEDED'}}]}).encode(), b'',
-            json.dumps({'choices': [{'message': {'content': json.dumps({'sentences': ['Thank you for the update.', 'I appreciate the volunteer report.', 'May your week go well.']})}}]}).encode(), b'']
+            json.dumps({'choices': [{'message': {'content': json.dumps({'sentences': ['Thank you for the update.', 'I appreciate the volunteer report.', 'May your week go well.']})}}]}).encode(), b'',
+            json.dumps({'choices': [{'message': {'content': json.dumps({'approved': True, 'issues': [], 'needs_attention': False})}}]}).encode(), b'']
         with patch.dict(draft_replies.os.environ, {'OPENROUTER_API_KEY': 'test-only'}), patch.object(draft_replies.mailbox_settings, 'get_reply_model', return_value='nemotron-free'), patch.object(draft_replies.urllib.request, 'urlopen', return_value=response) as request:
             body = draft_replies.draft_reply_body('Update', 'person@example.com', 'Here is the latest volunteer report.', self.rule)
-        self.assertEqual(request.call_count, 2)
+        self.assertEqual(request.call_count, 3)
         self.assertEqual(body, 'Thank you for the update. I appreciate the volunteer report. May your week go well.\n\nBest,\nExample Owner')
+
+    def prose_test(self, responses, verification=None):
+        with patch.dict(draft_replies.os.environ, {'OPENROUTER_API_KEY': 'test-only'}), patch.object(draft_replies.mailbox_settings, 'get_reply_model', return_value='nemotron-free'), patch.object(draft_replies, 'reply_completion', side_effect=[json.dumps(r) for r in responses]) as completion:
+            body = draft_replies.draft_reply_body('A question', 'person@example.com', 'Can you attend? Please confirm your availability.', self.rule, verification=verification)
+        return body, completion
+
+    def test_prose_rejection_regenerates_once_with_critique_then_verifies(self):
+        responses = [{'sentences': ['I will attend.']},
+                     {'approved': False, 'issues': ['Do not invent the owner’s availability.'], 'needs_attention': True},
+                     {'sentences': ['[Please add your availability].']},
+                     {'approved': True, 'issues': [], 'needs_attention': True}]
+        verification = {}
+        body, completion = self.prose_test(responses, verification)
+        self.assertEqual(body, '[Please add your availability].\n\nBest,\nExample Owner')
+        self.assertEqual(completion.call_count, 4)
+        self.assertEqual(verification, {'needs_attention': True})
+        correction = json.loads(completion.call_args_list[2].args[2]['messages'][-1]['content'])
+        self.assertIn('availability', correction['issues'][0])
+        verifier_input = json.loads(completion.call_args_list[-1].args[2]['messages'][1]['content'])
+        self.assertEqual(verifier_input['candidate_reply'], '[Please add your availability].')
+        self.assertNotIn('Example Owner', verifier_input['candidate_reply'])
+
+    def test_second_prose_rejection_fails_closed(self):
+        responses = [{'sentences': ['I will attend.']}, {'approved': False, 'issues': ['Unsupported commitment.'], 'needs_attention': True}]*2
+        with self.assertRaisesRegex(ValueError, 'verification'):
+            self.prose_test(responses)
+
+    def test_malformed_verifier_never_approves_a_reply(self):
+        for verdict in ({'approved': 'true', 'issues': [], 'needs_attention': False},
+                        {'approved': True, 'issues': ['Unresolved problem.'], 'needs_attention': False},
+                        {'approved': True, 'issues': []},
+                        {'approved': False, 'issues': [], 'needs_attention': True},
+                        {'approved': True, 'issues': [], 'needs_attention': False, 'extra': 'field'}):
+            with self.subTest(verdict=verdict), self.assertRaises(ValueError):
+                self.prose_test([{'sentences': ['Thank you.']}, verdict])
+
+    def test_prose_failure_prevents_append_and_leaves_source_retryable(self):
+        with patch.object(draft_replies, 'draft_reply_body', side_effect=ValueError('Reply failed verification')):
+            self.assertEqual(draft_replies.process_new_mail(self.conn), [])
+        self.conn.append.assert_not_called()
+        self.assertIsNone(draft_replies.tahor_db.get_reply_draft_for_thread('<one@example.com>'))
+        self.assertFalse(any(c.args[0] == 'STORE' and 'draft-created' in c.args[-1] for c in self.conn.uid.call_args_list))
+
+    def test_personal_question_attention_survives_append_retry_without_blanket_newsletter_hold(self):
+        for attention in (True, False):
+            with self.subTest(attention=attention):
+                database = draft_replies.tahor_db.get_db()
+                with database:
+                    database.execute('DELETE FROM reply_drafts')
+                database.close()
+                self.conn.reset_mock()
+                def generate(*args, **kwargs):
+                    kwargs['verification']['needs_attention'] = attention
+                    return 'Thank you.'
+                self.conn.append.return_value = ('NO', [])
+                with patch.object(draft_replies, 'draft_exists', return_value=None), patch.object(draft_replies, 'draft_reply_body', side_effect=generate) as model:
+                    self.assertEqual(draft_replies.process_new_mail(self.conn), [])
+                    saved = draft_replies.tahor_db.get_reply_draft_for_thread('<one@example.com>')
+                    self.assertEqual(json.loads(saved['trigger_reason'])['needs_attention'], attention)
+                    self.conn.reset_mock()
+                    self.conn.append.return_value = ('OK', [])
+                    self.assertEqual(len(draft_replies.process_new_mail(self.conn)), 1)
+                    model.assert_called_once()
+                holds = [call for call in self.conn.uid.call_args_list if call.args[0] == 'STORE' and call.args[-1] == '(needs-attention)']
+                self.assertEqual(bool(holds), attention)
+
+    def test_legacy_prepared_body_is_regenerated_after_proving_absent(self):
+        draft_replies.tahor_db.prepare_reply_draft('<one@example.com>', '<one@example.com>', 'person@example.com', 'Question', 'Unverified old text.', 'legacy')
+        self.conn.append.return_value = ('OK', [])
+        with patch.object(draft_replies, 'draft_exists', return_value=None), patch.object(draft_replies, 'draft_reply_body', return_value='Verified replacement.') as model:
+            self.assertEqual(len(draft_replies.process_new_mail(self.conn)), 1)
+            model.assert_called_once()
+        self.assertEqual(draft_replies.tahor_db.get_reply_draft_for_thread('<one@example.com>')['draft_body'], 'Verified replacement.')
 
     def test_read_and_unread_windows_use_server_delivery_date(self):
         now = datetime(2026, 9, 16, 12, tzinfo=timezone.utc)
@@ -155,7 +229,7 @@ class DraftTests(unittest.TestCase):
 
     def test_rule_edit_during_generation_defers_append_then_regenerates(self):
         self.rule['revision'] = 'old'
-        def generate(*args):
+        def generate(*args, **kwargs):
             self.rule['revision'] = 'new'
             return 'Old instructions.'
         with patch.object(draft_replies, 'draft_reply_body', side_effect=generate):
@@ -188,7 +262,7 @@ class DraftTests(unittest.TestCase):
                 with database:
                     database.execute('DELETE FROM reply_drafts')
                 database.close()
-                def generate(*args):
+                def generate(*args, **kwargs):
                     if case == 'expired':
                         self.metadata = b'42 (UID 42 FLAGS () INTERNALDATE "01-Jan-2000 12:00:00 +0000")'
                     elif case == 'uid':
@@ -255,7 +329,7 @@ class DraftTests(unittest.TestCase):
         self.rule.update(match_type='natural_language', match='Community project updates', revision='current')
         markers = (draft_replies.reply_rules.keyword(self.rule)+' '+draft_replies.reply_rules.scan_keyword(self.rule)).encode()
         self.metadata = self.metadata.replace(b'FLAGS (', b'FLAGS ('+markers+b' ')
-        def generate(*args):
+        def generate(*args, **kwargs):
             self.metadata = self.metadata.replace(markers, b'')
             return 'Thank you for the update.'
         with patch.object(draft_replies, 'draft_reply_body', side_effect=generate), patch.object(draft_replies, 'draft_exists', return_value=None):

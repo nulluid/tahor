@@ -58,6 +58,21 @@ such as Euryale independently of classification speed. Treat generated text as
 a draft: check factual claims, requested commitments, and the recipient before
 sending. A prompt cannot make unavailable personal facts known to the model.
 
+Before accepting new text, Tahor makes a separate verification call using the same
+configured reply model, source excerpt, and private owner directions. It checks
+factual grounding, required details, unsupported promises, and handling of personal
+questions. A rejected reply is regenerated once with review feedback and checked
+again; invalid or rejected results remain retryable and are not appended. The
+signature is attached after verification. This adds model calls and improves
+checks; it is not a guarantee that model-written prose is correct.
+
+The verifier also identifies personal questions or requests needing the owner's
+answer. Those messages receive `needs-attention` before the draft is saved, and
+that decision persists across append retries. Routine newsletters do not receive
+this extra hold, so ordinary inbox timing still applies. Cached text prepared
+before verification was introduced is regenerated and checked before any new
+append; an already existing draft is reconciled without being rewritten.
+
 ## Failure and recovery
 
 | Symptom | Behavior and next step |

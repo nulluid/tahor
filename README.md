@@ -116,7 +116,11 @@ milestone, while answering personal questions according to their actual content.
 Expand the rule’s matched-sender list to opt individual senders out.
 
 Tahor saves a threaded reply in your mailbox’s **Drafts** folder and leaves the
-original unread. Edit and send it in your usual email client; there is no separate
+original unread. A separate check with your selected writing model verifies the
+reply against the source and your instructions; a rejected reply is revised once
+and checked again. Unverified text is not added to Drafts. Personal questions
+that need your answer also receive an attention flag. Edit and send it in your
+usual email client; there is no separate
 web draft editor and **Tahor never sends these replies automatically**. A reply
 address must pass syntax and DNS checks. Those checks cannot prove that the
 recipient’s mailbox accepts delivery.
