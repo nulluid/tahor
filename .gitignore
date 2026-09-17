@@ -39,3 +39,6 @@ session.json
 provider-credentials*
 
 coupon_policies.json
+
+# Development-only browser test dependencies
+node_modules/

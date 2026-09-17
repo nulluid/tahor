@@ -59,6 +59,9 @@ def main():
         @ui.app.before_request
         def preview_session():
             session['email'] = 'demo@example.com'
+            if request.method == 'GET' and request.path.startswith(('/subscription-messages/', '/subscription-message/')):
+                return ('<!doctype html><html><head><meta charset="utf-8"><title>Tahor — sample email</title>' + ui.STYLE_BLOCK + '</head><body><main>' + ui.tahor_header('unsubscribe') +
+                        '<h1>A weekend offer from Northstar Outdoors</h1><p>From: Offers &lt;news@northstar.example&gt;</p><p>Received: September 15, 2026</p><pre style="white-space:pre-wrap">Thanks for being a customer. Use coupon code TRAIL for your next visit. Offer expires September 30, 2026.</pre><p>This is synthetic preview content. No mailbox is connected.</p><a href="/unsubscribe">Back to subscriptions</a></main></body></html>')
             if request.method != 'GET' or request.path.startswith(('/message/', '/unsubscribe-link/')):
                 session['flash'] = 'This is a preview with sample data. No mailbox is connected.'
                 return redirect('/')

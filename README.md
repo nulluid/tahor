@@ -171,8 +171,9 @@ seven-day unread window, measured from delivery. **Trash** deletes that message;
 
 For subscriptions, **Stop marketing, keep transactions** requests an unsubscribe
 and blocks future marketing in Tahor while allowing receipts and payment notices.
-Each sender shows its own progress and result, so you can work through other
-senders while a request runs. Some senders require confirmation on their website;
+**View emails** opens recent subjects, dates, and full message text in a separate
+tab without marking mail read. Each sender shows its own progress and result, so
+you can work through other senders while a request runs. Some senders require confirmation on their website;
 email-based requests require an app password with SMTP sending access.
 
 ## Choose the pace

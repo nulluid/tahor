@@ -15,7 +15,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix tests/browser --ignore-scripts --no-fund
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m unittest discover -s tests -v
+        env:
+          TAHOR_JSDOM_MODULE: ${{ github.workspace }}/tests/browser/node_modules/jsdom
       - run: bash -n install.sh
       - run: python demo.py --export /tmp/tahor-preview

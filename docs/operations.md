@@ -498,3 +498,31 @@ This general policy requires coupon, voucher or promo-code language in a message
 classified as marketing; it does not retain every sale announcement or newsletter.
 Exact sender policies override the general destination. Explicit sender blocks and
 recorded successful unsubscribe requests take precedence.
+
+### Browser interaction regression checks
+
+Node is needed only for development tests, not to run Tahor. With Node 24.15 or
+newer in the 24.x line, install the pinned test dependency and run the full suite:
+
+```bash
+npm ci --prefix tests/browser --ignore-scripts --no-fund
+TAHOR_JSDOM_MODULE="$PWD/tests/browser/node_modules/jsdom" python -m unittest discover -s tests -v
+```
+
+CI runs these DOM checks alongside every supported Python version. They exercise
+real form controls, serialized saves, double-click protection, retained edits,
+and scroll-preserving card updates. The ordinary Python suite remains available
+without Node, with the browser checks explicitly skipped.
+
+### Inspecting subscription messages
+
+Each subscription card has **View emails**. It opens a separate tab with up to
+three recent captured messages, including the actual sender, subject, delivery
+date, and folder. Open a subject to read escaped plain text; no remote images
+load and the message is not marked read. The classifier records references as
+mail arrives, without retaining message bodies in this preview cache.
+
+For older subscriptions without references, opening the viewer searches the Inbox
+first in a small read-only batch. **Find more emails** continues through additional
+folders. The search verifies the full sender address and mailbox identities;
+substring matches do not count. Messages already deleted cannot be displayed.
