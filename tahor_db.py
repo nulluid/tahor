@@ -6,6 +6,7 @@ import sqlite3
 import urllib.request
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 import os
 
@@ -63,6 +64,17 @@ def init_db():
     if "unsubscribed_at" not in existing_cols:
         conn.execute("ALTER TABLE unsubscribe_candidates ADD COLUMN unsubscribed_at TEXT")
     conn.execute("CREATE TABLE IF NOT EXISTS unsubscribe_seen (sender_domain TEXT NOT NULL, message_id TEXT NOT NULL, PRIMARY KEY(sender_domain,message_id))")
+    conn.execute("""CREATE TABLE IF NOT EXISTS subscription_message_samples (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        candidate_id INTEGER NOT NULL REFERENCES unsubscribe_candidates(id) ON DELETE CASCADE,
+        mailbox TEXT NOT NULL, message_id TEXT NOT NULL, uid TEXT, uidvalidity TEXT,
+        sender_email TEXT NOT NULL, display_name TEXT NOT NULL DEFAULT '',
+        subject TEXT NOT NULL DEFAULT '', message_date TEXT NOT NULL DEFAULT '',
+        received_at TEXT NOT NULL DEFAULT '', received_epoch REAL NOT NULL DEFAULT 0,
+        captured_at TEXT NOT NULL,
+        UNIQUE(candidate_id, message_id)
+    )""")
+    conn.execute('CREATE INDEX IF NOT EXISTS subscription_sample_candidate ON subscription_message_samples(candidate_id,received_epoch DESC)')
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS sender_rules (
@@ -97,7 +109,7 @@ def init_db():
     conn.close()
 
 
-def upsert_unsubscribe_candidate(sender_domain, sender_email, display_name, unsubscribe_url, unsubscribe_mailto, one_click, message_id=None, received_at=None, is_marketing=False):
+def upsert_unsubscribe_candidate(sender_domain, sender_email, display_name, unsubscribe_url, unsubscribe_mailto, one_click, message_id=None, received_at=None, is_marketing=False, metadata=None):
     if not sender_domain:
         return
     sender_domain = sender_domain.lower()
@@ -106,11 +118,14 @@ def upsert_unsubscribe_candidate(sender_domain, sender_email, display_name, unsu
     try:
         with conn:
             conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute("SELECT * FROM unsubscribe_candidates WHERE sender_domain=?", (sender_domain,)).fetchone()
             if message_id:
                 inserted = conn.execute("INSERT OR IGNORE INTO unsubscribe_seen(sender_domain,message_id) VALUES (?,?)", (sender_domain, message_id))
                 if not inserted.rowcount:
-                    return
-            existing = conn.execute("SELECT * FROM unsubscribe_candidates WHERE sender_domain=?", (sender_domain,)).fetchone()
+                    if existing and metadata:
+                        sample = dict(metadata, message_id=message_id, sender_email=sender_email, display_name=display_name, received_at=received_at or metadata.get('received_at', ''))
+                        _record_subscription_sample(conn, existing['id'], sample)
+                    return existing['id'] if existing else None
             if existing:
                 resend = False
                 if existing["status"] == "unsubscribed" and existing["unsubscribed_at"] and received_at and is_marketing:
@@ -130,6 +145,95 @@ def upsert_unsubscribe_candidate(sender_domain, sender_email, display_name, unsu
                     "INSERT INTO unsubscribe_candidates(sender_domain,sender_email,display_name,unsubscribe_url,unsubscribe_mailto,one_click,first_seen_at,last_seen_at) VALUES (?,?,?,?,?,?,?,?)",
                     (sender_domain,sender_email,display_name,unsubscribe_url,unsubscribe_mailto,int(one_click),now,now),
                 )
+            candidate_id = existing['id'] if existing else conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+            if metadata:
+                sample = dict(metadata, message_id=message_id or metadata.get('message_id'), sender_email=sender_email, display_name=display_name, received_at=received_at or metadata.get('received_at', ''))
+                _record_subscription_sample(conn, candidate_id, sample)
+            return candidate_id
+    finally:
+        conn.close()
+
+
+def _sample_text(value, limit):
+    if not isinstance(value, str):
+        return ''
+    return ''.join(char if ord(char) >= 32 and ord(char) != 127 else ' ' for char in value).strip()[:limit]
+
+
+def _sample_date(value):
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        try:
+            parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        except ValueError:
+            parsed = parsedate_to_datetime(value)
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def _record_subscription_sample(conn, candidate_id, metadata):
+    if not isinstance(metadata, dict):
+        return None
+    candidate = conn.execute('SELECT sender_domain FROM unsubscribe_candidates WHERE id=?', (candidate_id,)).fetchone()
+    mailbox, identifier, sender = (metadata.get(key) for key in ('mailbox', 'message_id', 'sender_email'))
+    if (candidate is None or not all(isinstance(value, str) and value for value in (mailbox, identifier, sender))
+            or len(mailbox) > 1024 or len(identifier) > 2048 or len(sender) > 320
+            or any(ord(char) < 32 or ord(char) == 127 for char in mailbox + identifier + sender)
+            or sender.count('@') != 1 or any(char.isspace() for char in sender)
+            or sender.rsplit('@', 1)[1].lower() != candidate['sender_domain'].lower()):
+        return None
+    uid, validity = (str(metadata.get(key) or '') for key in ('uid', 'uidvalidity'))
+    if not all(value.isascii() and value.isdigit() and len(value) <= 10 and 0 < int(value) <= 4294967295
+               for value in (uid, validity)):
+        # Invalid shortcuts must fall back to exact Message-ID lookup rather
+        # than preventing the rest of this batch from being processed.
+        uid = validity = None
+    received = _sample_date(metadata.get('received_at'))
+    sent = _sample_date(metadata.get('date'))
+    date = received or sent
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("""INSERT INTO subscription_message_samples
+        (candidate_id,mailbox,message_id,uid,uidvalidity,sender_email,display_name,subject,message_date,received_at,received_epoch,captured_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(candidate_id,message_id) DO UPDATE SET
+        mailbox=excluded.mailbox,uid=excluded.uid,uidvalidity=excluded.uidvalidity,
+        sender_email=excluded.sender_email,display_name=excluded.display_name,subject=excluded.subject,
+        message_date=excluded.message_date,received_at=excluded.received_at,
+        received_epoch=excluded.received_epoch,captured_at=excluded.captured_at""",
+        (candidate_id,mailbox,identifier,uid,validity,sender,
+         _sample_text(metadata.get('display_name'), 500), _sample_text(metadata.get('subject'), 1000),
+         _sample_text(metadata.get('date'), 200), received.isoformat() if received else '',
+         date.timestamp() if date else 0, now))
+    conn.execute("""DELETE FROM subscription_message_samples WHERE candidate_id=? AND id NOT IN
+        (SELECT id FROM subscription_message_samples WHERE candidate_id=?
+         ORDER BY received_epoch DESC,captured_at DESC,id DESC LIMIT 3)""", (candidate_id,candidate_id))
+    saved = conn.execute('SELECT id FROM subscription_message_samples WHERE candidate_id=? AND message_id=?', (candidate_id,identifier)).fetchone()
+    return saved['id'] if saved else None
+
+
+def record_subscription_sample(candidate_id, metadata):
+    """Retain at most three recent exact message identities, never message bodies."""
+    conn = get_db()
+    try:
+        with conn:
+            conn.execute('BEGIN IMMEDIATE')
+            return _record_subscription_sample(conn, candidate_id, metadata)
+    finally:
+        conn.close()
+
+
+def get_subscription_samples(candidate_id):
+    conn = get_db()
+    try:
+        rows = conn.execute("""SELECT id,candidate_id,mailbox,message_id,uid,uidvalidity,
+            sender_email,display_name,subject,message_date AS date,received_at,captured_at
+            FROM subscription_message_samples WHERE candidate_id=?
+            ORDER BY received_epoch DESC,captured_at DESC,id DESC""", (candidate_id,)).fetchall()
+        return [dict(row) for row in rows]
     finally:
         conn.close()
 

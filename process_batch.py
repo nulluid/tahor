@@ -111,6 +111,9 @@ def main():
                 message_id=e.get("message_id"),
                 received_at=received_at,
                 is_marketing=classifications.get(e.get("message_id"), {}).get("category") == "marketing",
+                metadata={"mailbox": mailbox, "uid": e.get("uid"), "uidvalidity": e.get("uidvalidity"),
+                          "subject": e.get("subject") or inrecs.get(e.get("message_id"), {}).get("subject", ""),
+                          "date": inrecs.get(e.get("message_id"), {}).get("date", "")},
             )
 
     trash_final = [r for r in outrecs if r["id"] in inrecs and r["action"] == "trash"]
