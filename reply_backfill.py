@@ -82,9 +82,8 @@ def refresh_recent_matches(conn, limit=10):
             add += [reply_rules.PROTECTED_KEYWORD, 'retention-standard']
             add += [reply_rules.keyword(current_rules[key]) for key in matches]
             remove += ['delete-pending', 'retention-transient']
-        if uncertain:
-            add += ['retention-pending-review', 'needs-attention']
-            tahor_db.queue_message_review('INBOX', message_id, subject, uid.decode())
+        # Uncertain draft eligibility is not a request to decide mail retention.
+        # Preserve any independent review/attention flags, without adding new ones.
         # Add protection before clearing an old deletion marker.
         if (add and not store_flags(conn, uid, add, '+')) or (remove and not store_flags(conn, uid, remove, '-')):
             raise RuntimeError('Reply-rule protection was not confirmed')

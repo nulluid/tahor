@@ -83,8 +83,8 @@ def main():
                 r.update(action='keep', category='personal-correspondence', retention='standard', expense_type='n/a', needs_attention=False)
             if r.get('retention') in ('transient', 'brief'):
                 r['retention'] = 'standard'
-            if uncertain:
-                r.update(action='mixed', retention='pending-review', needs_attention=True)
+            # Draft eligibility is separate from a keep/trash decision. An
+            # uncertain reply match protects mail but never creates a review hold.
             r['reply_rule_matches'], r['reply_rule_uncertain'] = matches, uncertain
             for rule_id in matches:
                 tahor_db.record_reply_rule_match(rule_id, r['id'], rec['from'])

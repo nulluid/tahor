@@ -28,6 +28,7 @@ PROGRESS_TIMEOUT = 3600
 PROBLEM_LABELS = {
     'ai_classification': 'Some email classification work has remained pending for at least 30 minutes.',
     'ai_reply': 'Some reply drafting work has remained pending for at least 30 minutes.',
+    'ai_subscriptions': 'Some subscription recommendations have remained pending for at least 30 minutes.',
     'ai_rule': 'Some rule drafting work has remained pending for at least 30 minutes.',
     'worker_missing': 'The email worker has not published a readable status.',
     'worker_stale': 'The email worker has not reported activity for over an hour.',

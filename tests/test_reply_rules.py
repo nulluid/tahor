@@ -99,7 +99,7 @@ class ReplyAddressTests(unittest.TestCase):
 
 
 class ReplyClassificationApplicationTests(unittest.TestCase):
-    def test_confident_community_survives_trash_and_uncertain_goes_to_review(self):
+    def test_reply_uncertainty_protects_mail_without_creating_retention_review(self):
         import process_batch
         import sys
         rule = dict(id='a'*16, match_type='natural_language', match='Community updates', excluded_senders=[])
@@ -122,10 +122,11 @@ class ReplyClassificationApplicationTests(unittest.TestCase):
             self.assertIn('reply-rule-'+rule['id'], ops['certain']['add'])
             self.assertIn('delete-pending', ops['certain']['remove'])
             self.assertIn('retention-standard', ops['certain']['add'])
-            self.assertIn('retention-pending-review', ops['uncertain']['add'])
-            self.assertIn('needs-attention', ops['uncertain']['add'])
+            self.assertIn('retention-standard', ops['uncertain']['add'])
+            self.assertNotIn('retention-pending-review', ops['uncertain']['add'])
+            self.assertNotIn('needs-attention', ops['uncertain']['add'])
             self.assertNotIn('reply-rule-'+rule['id'], ops['uncertain']['add'])
-            review.assert_called_once()
+            review.assert_not_called()
 
     def test_classifier_missing_semantic_fields_fails_closed_even_for_trash(self):
         import classify

@@ -104,3 +104,13 @@ class ReplyBackfillTests(unittest.TestCase):
             self.assertEqual(reply_backfill.refresh_recent_matches(self.conn), 1)
         self.assertEqual(self.store.call_args_list[0].args[2:], ([reply_rules.keyword(self.rule)], '-'))
         self.assertEqual(self.store.call_args_list[1].args[2:], ([reply_rules.scan_keyword(self.rule)], '+'))
+
+    def test_uncertain_draft_match_does_not_create_retention_decision(self):
+        with patch.object(reply_backfill, 'classify_records', side_effect=lambda records: [self.result(records[0], uncertain=[self.rule['id']])]), patch.object(reply_backfill.tahor_db, 'queue_message_review') as review:
+            self.assertEqual(reply_backfill.refresh_recent_matches(self.conn), 1)
+        review.assert_not_called()
+        additions = [flag for call in self.store.call_args_list if call.args[3] == '+' for flag in call.args[2]]
+        self.assertIn('reply-protected', additions)
+        self.assertNotIn('retention-pending-review', additions)
+        self.assertNotIn('needs-attention', additions)
+        self.assertNotIn(reply_rules.keyword(self.rule), additions)
