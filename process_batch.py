@@ -74,7 +74,7 @@ def main():
             # Reply protection takes precedence over an old marketing/domain block.
             if r['action'] == 'trash':
                 r.update(action='keep', category='personal-correspondence', retention='standard', expense_type='n/a', needs_attention=False)
-            if r.get('retention') == 'transient':
+            if r.get('retention') in ('transient', 'brief'):
                 r['retention'] = 'standard'
             if uncertain:
                 r.update(action='mixed', retention='pending-review', needs_attention=True)
@@ -144,10 +144,13 @@ def main():
             r["retention"] = "pending-review"
         if r.get("retention") == "pending-review" and r["id"] not in unmatched:
             envelope = envelopes_by_id[msgids[r["id"]]]
-            tahor_db.queue_message_review(mailbox, msgids[r["id"]], inrecs[r["id"]]["subject"], envelope.get("uid"), envelope.get("uidvalidity"))
+            tahor_db.queue_message_review(mailbox, msgids[r["id"]], inrecs[r["id"]]["subject"], envelope.get("uid"), envelope.get("uidvalidity"), metadata={"sender": inrecs[r["id"]].get("from", ""), "date": inrecs[r["id"]].get("date", ""), "received_at": parse_internaldate(envelope["internaldate"]).isoformat() if envelope.get("internaldate") else "", "snippet": inrecs[r["id"]].get("snippet", "")})
         if r["id"] in unmatched:
             continue
         add = [f"category-{r.get('category', 'marketing')}", f"retention-{r.get('retention', 'pending-review')}"]
+        if r.get('retention') == 'brief':
+            # Standard remains the classifier-complete marker; expiry is separate.
+            add = [f"category-{r.get('category', 'marketing')}", 'retention-standard', 'retention-short-lived']
         if r.get("expense_type") and r["expense_type"] != "n/a":
             add.append(f"expense-{r['expense_type']}")
         if r.get("needs_attention") is True:
@@ -157,7 +160,7 @@ def main():
         if r.get('reply_rule_matches') or r.get('reply_rule_uncertain'):
             add.append(reply_rules.PROTECTED_KEYWORD)
             add.extend(reply_rules.keyword(active_reply_rules[key]) for key in r.get('reply_rule_matches', []) if key in active_reply_rules)
-        ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]], "uid": msgid_to_uid.get(msgids[r["id"]]), "add": add, "remove": ["delete-pending", "retention-transient"] if r.get("reply_rule_matches") else []})
+        ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]], "uid": msgid_to_uid.get(msgids[r["id"]]), "add": add, "remove": (["delete-pending", "retention-transient"] if r.get("reply_rule_matches") else []) + (["retention-short-lived"] if r.get("retention") != "brief" else [])})
     for r in trash_final:
         if r["id"] not in unmatched:
             ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]],

@@ -13,6 +13,30 @@ import process_batch
 
 
 class PipelineTests(unittest.TestCase):
+    def test_brief_keep_is_classified_without_immediate_deletion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = str(Path(directory) / 'batch')
+            inputs = [dict(id='notice', subject='Routine update', **{'from': 'alerts@example.com'}, date='2026-01-01T00:00:00+00:00')]
+            outputs = [dict(id='notice', action='keep', category='marketing', retention='brief', needs_attention=False)]
+            envelopes = [dict(message_id='notice', uid='10', subject='Routine update', from_email='alerts@example.com', internaldate='01-Jan-2026 00:00:00 +0000')]
+            for suffix, rows in [('in', inputs), ('out', outputs), ('env', envelopes)]:
+                Path(prefix + '_' + suffix + '.json').write_text(json.dumps(rows))
+            with patch.object(sys, 'argv', ['process_batch.py', prefix, 'INBOX']), \
+                 patch.object(process_batch.reply_rules, 'get_rules', return_value=[]), \
+                 patch.object(process_batch.tahor_db, 'get_sender_rule', return_value=None), \
+                 patch.object(process_batch.tahor_db, 'has_sender_sample', return_value=False):
+                process_batch.main()
+                ops = json.loads(Path(prefix + '_ops.json').read_text())
+                self.assertEqual(ops[0]['add'], ['category-marketing', 'retention-standard', 'retention-short-lived'])
+                self.assertFalse(ops[0].get('delete'))
+                self.assertNotIn('retention-short-lived', ops[0]['remove'])
+                outputs[0]['retention'] = 'forever'
+                Path(prefix + '_out.json').write_text(json.dumps(outputs))
+                process_batch.main()
+                ops = json.loads(Path(prefix + '_ops.json').read_text())
+                self.assertIn('retention-forever', ops[0]['add'])
+                self.assertIn('retention-short-lived', ops[0]['remove'])
+
     def test_keyword_failures_are_reported_without_expunge(self):
         conn = Mock()
         conn.select.return_value = ('OK', [])

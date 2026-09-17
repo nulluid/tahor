@@ -5,7 +5,7 @@ Respond with ONLY a JSON object, nothing else, no markdown fences:
   "action": "keep"|"trash"|"mixed",
   "reason": "short reason, under 12 words",
   "category": "receipt|statement|security-alert|shipping|subscription|legal|medical|travel|financial-account|utility|government-tax|personal-correspondence|marketing",
-  "retention": "transient|standard|forever|pending-review",
+  "retention": "brief|transient|standard|forever|pending-review",
   "expense_type": "business|personal|n/a",
   "needs_attention": true|false,
   "folder_domain": "Finance/Banking|Finance/Credit|Finance/Investments|Health|Shopping/Retail|Shopping/Marketplace|Travel|Subscriptions|Utilities|Government|Other"
@@ -18,6 +18,7 @@ Rules:
 - category/retention/expense_type/folder_domain/needs_attention only matter when action is "keep" or "mixed" — for "trash" set category to "marketing", retention to "transient", expense_type to "n/a", folder_domain to "Other", needs_attention to false.
 
 Retention guidance — forever is narrow and deliberate, not a default:
+- brief: only when the owner requests short-lived notices to expire using the read/unread window (default 3/7 days from delivery). Do not use for receipts, substantive financial/security notices, medical records, or signed documents without explicit instructions.
 - transient (~1 week): expires fast — OTP/verification codes, and anything that's just a duplicate of an alert the platform itself keeps.
 - standard (~3 years, the default for ordinary keeps): routine receipts, shipping confirmations, account statements, renewals.
 - forever (use sparingly): legal documents, contracts, personal correspondence, or a receipt for a durable good you're likely to own for years.

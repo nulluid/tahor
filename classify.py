@@ -240,7 +240,7 @@ def classify_one(url, headers, model, system_prompt, record, retries=3):
             if not isinstance(parsed, dict) or parsed.get("action") not in ("keep", "trash", "mixed"):
                 raise ValueError("Invalid classification action")
             if parsed.get("action") != "trash":
-                if parsed.get("retention") not in ("transient", "standard", "forever", "pending-review"):
+                if parsed.get("retention") not in ("brief", "transient", "standard", "forever", "pending-review"):
                     raise ValueError("Invalid retention tier")
                 if not isinstance(parsed.get("category"), str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,40}", parsed["category"]):
                     raise ValueError("Invalid category")
