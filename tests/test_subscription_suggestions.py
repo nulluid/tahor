@@ -202,3 +202,22 @@ class SubscriptionSuggestionTests(unittest.TestCase):
             self.assertEqual(self.read_excerpts([(1,sample)]),{})
             client.uid.return_value=('OK',[(b'1 (UID 7)',raw.replace(b'news@example.com',b'attacker@example.com'))])
             self.assertEqual(self.read_excerpts([(1,sample)]),{})
+
+    def test_paid_fallback_uses_only_free_after_failure_and_paid_only_never_does(self):
+        self.add()
+        with self.db() as conn:
+            context=suggestions.build_context(conn,conn.execute('SELECT * FROM unsubscribe_candidates').fetchall())
+        for policy,expected in [('paid_only',['x-ai/grok-4.6']),('paid',['x-ai/grok-4.6','inclusionai/ling-3.0-flash-vl:free'])]:
+            calls=[]
+            def response(request,**kwargs):
+                payload=json.loads(request.data);calls.append(payload['model'])
+                if not payload['model'].endswith(':free'):
+                    raise OSError('Synthetic paid outage')
+                return io.BytesIO(json.dumps({'choices':[{'message':{'content':json.dumps({'recommendations':self.result(context)})}}]}).encode())
+            suggestions.mailbox_settings.set_ai_task_settings('subscriptions',policy)
+            with patch.object(suggestions.urllib.request,'urlopen',side_effect=response),patch.object(suggestions.ai_routing,'state_path',return_value=self.root/(policy+'.json')):
+                if policy=='paid_only':
+                    with self.assertRaises(OSError):suggestions.model_call(context,1,policy)
+                else:
+                    self.assertEqual(len(suggestions.model_call(context,1,policy)),1)
+            self.assertEqual(calls,expected)
