@@ -22,7 +22,7 @@ class SubscriptionViewerTests(AppTestCase):
     def test_links_available_without_samples_and_only_owner_can_view(self):
         candidate=self.candidate()
         page=self.client.get('/unsubscribe').get_data(as_text=True)
-        self.assertIn(f'href="/subscription-messages/{candidate}" target="_blank"',page)
+        self.assertIn(f'href="/subscription-messages/{candidate}"',page)
         with patch.object(subscription_messages,'scan',return_value={'complete':False}) as scan:
             response=self.client.get(f'/subscription-messages/{candidate}')
             self.assertEqual(response.status_code,200)

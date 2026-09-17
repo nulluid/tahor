@@ -261,7 +261,7 @@ class WebActionTests(AppTestCase):
         self.assertEqual(self.module.tahor_db.get_unsubscribe_candidate('example.com')['status'], 'pending')
         page = self.client.get('/unsubscribe').get_data(as_text=True)
         self.assertIn('Stop marketing, keep transactions', page)
-        self.assertIn('Working… You can continue with another sender.', page)
+        self.assertIn('Selected actions are queued. You can continue reviewing other senders.', page)
         self.assertIn('aria-live="polite"', page)
 
     def test_marketing_block_survives_unsubscribe_failure_without_claiming_success(self):
