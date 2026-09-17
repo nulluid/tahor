@@ -56,6 +56,24 @@ def _schema(conn):
             result_json TEXT,PRIMARY KEY(job_id,candidate_id))''')
 
 
+def _has_submitted_actions(conn):
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='subscription_actions'").fetchone() is not None
+
+
+SUBMITTED_CANDIDATES_SQL = '''SELECT a.candidate_id FROM subscription_actions a
+    LEFT JOIN unsubscribe_candidates c ON c.id=a.candidate_id
+    WHERE a.id=(SELECT MAX(newest.id) FROM subscription_actions newest WHERE newest.candidate_id=a.candidate_id)
+    AND NOT (a.status='done' AND c.status='pending' AND COALESCE(c.non_compliant,0)>0)'''
+
+
+def _submitted_candidates(conn):
+    # Completed intent may be reconsidered when new mail proves noncompliance;
+    # queued, failed or uncertain delivery never revokes an explicit choice.
+    if not _has_submitted_actions(conn):
+        return set()
+    return {row[0] for row in conn.execute(SUBMITTED_CANDIDATES_SQL)}
+
+
 def enqueue(limit=None, exclude_ids=None):
     if not mailbox_settings.is_ai_enabled('subscriptions'):
         raise ValueError('Subscription recommendations are disabled. Enable them in Settings.')
@@ -77,7 +95,8 @@ def enqueue(limit=None, exclude_ids=None):
                 identifier = active['id']
             else:
                 identifier = uuid.uuid4().hex
-                rows = [row for row in conn.execute("SELECT id FROM unsubscribe_candidates WHERE status='pending' AND id NOT IN (SELECT i.candidate_id FROM subscription_suggestion_items i JOIN subscription_suggestion_jobs j ON j.id=i.job_id WHERE i.status='complete' AND j.context_key=?) ORDER BY non_compliant DESC,message_count DESC,id", (context_key,)) if row["id"] not in set(exclude_ids)][:limit]
+                excluded = set(exclude_ids) | _submitted_candidates(conn)
+                rows = [row for row in conn.execute("SELECT id FROM unsubscribe_candidates WHERE status='pending' AND id NOT IN (SELECT i.candidate_id FROM subscription_suggestion_items i JOIN subscription_suggestion_jobs j ON j.id=i.job_id WHERE i.status='complete' AND j.context_key=?) ORDER BY non_compliant DESC,message_count DESC,id", (context_key,)) if row["id"] not in excluded][:limit]
                 conn.execute('INSERT INTO subscription_suggestion_jobs(id,status,created_at,context_key) VALUES (?,?,?,?)', (identifier, 'queued' if rows else 'complete', time.time(),context_key))
                 conn.executemany('INSERT INTO subscription_suggestion_items(job_id,candidate_id) VALUES (?,?)', [(identifier, row['id']) for row in rows])
         return get_job(identifier)
@@ -94,8 +113,9 @@ def get_job(identifier):
             raise ValueError('Recommendation job not found.')
         items = conn.execute('SELECT i.*,c.status AS candidate_status FROM subscription_suggestion_items i LEFT JOIN unsubscribe_candidates c ON c.id=i.candidate_id WHERE job_id=? ORDER BY candidate_id', (identifier,)).fetchall()
         current_context_key = _context_key(conn)
+        submitted = _submitted_candidates(conn)
         return dict(job_id=identifier, status=job['status'], total=len(items), completed=sum(row['status'] != 'pending' for row in items),
-                    recommendations=[json.loads(row['result_json']) for row in items if row['result_json'] and row['candidate_status'] == 'pending' and job['context_key'] == current_context_key], error=job['error'])
+                    recommendations=[json.loads(row['result_json']) for row in items if row['result_json'] and row['candidate_id'] not in submitted and row['candidate_status'] == 'pending' and job['context_key'] == current_context_key], error=job['error'])
     finally:
         conn.close()
 
@@ -305,6 +325,8 @@ def run_pending_jobs(max_jobs=1):
                     break
                 conn.execute("UPDATE subscription_suggestion_jobs SET status='running',lease_token=?,retry_at=?,error='' WHERE id=?", (token, now+LEASE_SECONDS, job['id']))
                 conn.execute("UPDATE subscription_suggestion_items SET status='skipped' WHERE job_id=? AND candidate_id NOT IN (SELECT id FROM unsubscribe_candidates WHERE status='pending')", (job['id'],))
+                if _has_submitted_actions(conn):
+                    conn.execute("UPDATE subscription_suggestion_items SET status='skipped' WHERE job_id=? AND candidate_id IN (" + SUBMITTED_CANDIDATES_SQL + ")", (job['id'],))
                 rows = conn.execute("SELECT c.* FROM subscription_suggestion_items i JOIN unsubscribe_candidates c ON c.id=i.candidate_id WHERE i.job_id=? AND i.status='pending' AND c.status='pending' ORDER BY c.id LIMIT ?", (job['id'], CHUNK_SIZE)).fetchall()
             try:
                 if rows:
@@ -343,8 +365,11 @@ def latest_recommendations():
         _schema(conn)
         rows = conn.execute("SELECT i.result_json FROM subscription_suggestion_items i JOIN unsubscribe_candidates c ON c.id=i.candidate_id JOIN subscription_suggestion_jobs j ON j.id=i.job_id WHERE i.status='complete' AND c.status='pending' AND j.context_key=? ORDER BY j.created_at DESC LIMIT 2000", (_context_key(conn),))
         found = {}
+        submitted = _submitted_candidates(conn)
         for row in rows:
             item = json.loads(row['result_json'])
+            if item['candidate_id'] in submitted:
+                continue
             found.setdefault(item['candidate_id'], item)
         return list(found.values())
     finally:

@@ -309,3 +309,52 @@ class SubscriptionSuggestionTests(unittest.TestCase):
         saved = subscription_bulk.enqueue([{'candidate_id': identifiers[0], 'action': 'dismiss'}], 'feedback-preserve-manual')
         self.assertEqual(suggestions.get_job(job['job_id'])['recommendations'], [])
         self.assertEqual(subscription_bulk.get_job(saved['job_id'])['items'][0]['action'], 'dismiss')
+
+    def test_submitted_candidates_are_excluded_without_client_exclude_ids(self):
+        import subscription_bulk
+        identifiers = self.add(4)
+        subscription_bulk.enqueue([{'candidate_id': identifiers[0], 'action': 'dismiss'}, {'candidate_id': identifiers[1], 'action': 'unsubscribe'}], 'exclude-submitted-server')
+        with self.db() as conn:
+            conn.execute("UPDATE subscription_actions SET status='attention' WHERE candidate_id=?", (identifiers[1],)); conn.commit()
+        job = suggestions.enqueue()
+        self.assertEqual(job['total'], 2)
+        with patch.object(suggestions, 'model_call', side_effect=self.result) as model:
+            suggestions.run_pending_jobs()
+        self.assertEqual({row['candidate_id'] for row in model.call_args.args[0]['untrusted_candidates']}, set(identifiers[2:]))
+
+    def test_choice_submitted_after_enqueue_is_skipped_before_model_request(self):
+        import subscription_bulk
+        identifiers = self.add(2)
+        job = suggestions.enqueue()
+        subscription_bulk.enqueue([{'candidate_id': identifiers[0], 'action': 'dismiss'}], 'exclude-during-queue')
+        with patch.object(suggestions, 'model_call', side_effect=self.result) as model:
+            suggestions.run_pending_jobs()
+        self.assertEqual([row['candidate_id'] for row in model.call_args.args[0]['untrusted_candidates']], [identifiers[1]])
+        with self.db() as conn:
+            row = conn.execute('SELECT status FROM subscription_suggestion_items WHERE job_id=? AND candidate_id=?', (job['job_id'], identifiers[0])).fetchone()
+        self.assertEqual(row['status'], 'skipped')
+
+    def test_all_candidates_submitted_after_enqueue_avoids_model_call(self):
+        import subscription_bulk
+        identifier = self.add()[0]
+        suggestions.enqueue()
+        subscription_bulk.enqueue([{'candidate_id': identifier, 'action': 'unsubscribe_block_marketing'}], 'exclude-only-queued-item')
+        with patch.object(suggestions, 'model_call') as model:
+            suggestions.run_pending_jobs()
+        model.assert_not_called()
+
+    def test_completed_choice_reopened_for_new_noncompliance_can_be_reconsidered(self):
+        import subscription_bulk
+        identifier = self.add()[0]
+        subscription_bulk.enqueue([{'candidate_id': identifier, 'action': 'unsubscribe'}], 'past-completed-unsubscribe')
+        with self.db() as conn:
+            conn.execute("UPDATE subscription_actions SET status='done'")
+            conn.execute('UPDATE unsubscribe_candidates SET non_compliant=1 WHERE id=?', (identifier,)); conn.commit()
+        job = suggestions.enqueue()
+        self.assertEqual(job['total'], 1)
+        with patch.object(suggestions, 'model_call', side_effect=self.result) as model:
+            suggestions.run_pending_jobs()
+        self.assertEqual(model.call_args.args[0]['untrusted_candidates'][0]['candidate_id'], identifier)
+        # New confirmed intent wins even while the old noncompliance flag remains.
+        subscription_bulk.enqueue([{'candidate_id': identifier, 'action': 'unsubscribe_block_marketing'}], 'new-choice-after-noncompliance')
+        self.assertEqual(suggestions.enqueue()['total'], 0)
