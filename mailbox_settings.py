@@ -22,7 +22,7 @@ from pathlib import Path
 SETTINGS_PATH = Path(os.environ.get("TAHOR_SETTINGS_PATH", Path.home() / ".config" / "tahor" / "settings.json"))
 
 MODES = ("paid_only", "paid", "auto", "free")
-AI_TASKS = ("classification", "reply", "rule", "subscriptions")
+AI_TASKS = ("classification", "reply", "rule", "subscriptions", "decisions")
 
 # Rule drafting is rare and judgment-heavy, so it's worth a stronger model than routine classification uses.
 RULE_MODELS = {
@@ -135,8 +135,11 @@ for backend in SUBSCRIPTION_MODELS.values():
         if not backend["model"].endswith(":free"):
             options["response_format"] = {"type": "json_object"}
 
+DECISION_MODELS = copy.deepcopy(SUBSCRIPTION_MODELS)
+
+
 def ai_model_registry(task):
-    return {"reply": REPLY_MODELS, "rule": RULE_MODELS, "subscriptions": SUBSCRIPTION_MODELS}[task]
+    return {"reply": REPLY_MODELS, "rule": RULE_MODELS, "subscriptions": SUBSCRIPTION_MODELS, "decisions": DECISION_MODELS}[task]
 
 
 DEFAULT_SETTINGS = {
@@ -148,6 +151,10 @@ DEFAULT_SETTINGS = {
     "subscriptions_free_model": "ling-free",
     "subscriptions_ai_policy": "paid",
     "subscriptions_batch_size": 50,
+    "decisions_model": "grok-4.6",
+    "decisions_free_model": "ling-free",
+    "decisions_ai_policy": "paid",
+    "decisions_batch_size": 20,
     "free_rate_log": [],  # rolling [{"messages": N, "seconds": S}, ...], see record_free_batch
     "backlog_estimate": None,
     "backlog_estimate_at": None,
@@ -285,13 +292,13 @@ def set_ai_task_settings(task, policy, paid_model=None, free_model=None, batch_s
         raise ValueError('Unknown AI task or policy')
     settings = load_settings()
     if guidance is not None:
-        if task != 'subscriptions' or not isinstance(guidance, str) or len(guidance) > 12000 or '\x00' in guidance:
+        if task not in ('subscriptions', 'decisions') or not isinstance(guidance, str) or len(guidance) > 12000 or '\x00' in guidance:
             raise ValueError('Subscription guidance must be text of at most 12,000 characters.')
-        settings['subscription_guidance'] = guidance.strip()
+        settings['subscription_guidance' if task == 'subscriptions' else 'decision_guidance'] = guidance.strip()
     if batch_size is not None:
-        if task != 'subscriptions' or isinstance(batch_size, bool) or not str(batch_size).isascii() or not str(batch_size).isdigit() or not 1 <= int(batch_size) <= 200:
+        if task not in ('subscriptions', 'decisions') or isinstance(batch_size, bool) or not str(batch_size).isascii() or not str(batch_size).isdigit() or not 1 <= int(batch_size) <= 200:
             raise ValueError('Choose a subscription batch size from 1 to 200.')
-        settings['subscriptions_batch_size'] = int(batch_size)
+        settings[task + '_batch_size'] = int(batch_size)
     if task == 'classification':
         if paid_model not in (None, '', 'openrouter-paid') or free_model not in (None, '', 'openrouter-free'):
             raise ValueError('Unknown classification model')
@@ -567,3 +574,8 @@ def set_inbox_grace_days(read_days, unread_days):
 def get_subscription_batch_size():
     value = load_settings().get("subscriptions_batch_size", 50)
     return value if type(value) is int and 1 <= value <= 200 else 50
+
+
+def get_decision_batch_size():
+    value = load_settings().get("decisions_batch_size", 20)
+    return value if type(value) is int and 1 <= value <= 200 else 20
