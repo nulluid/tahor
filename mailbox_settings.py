@@ -334,7 +334,7 @@ def set_reply_backup_model(key):
     settings = load_settings()
     settings['reply_backup_model'] = key
     primary = settings.get('reply_model', 'none')
-    if REPLY_MODELS.get(primary, {}).get('model', '').endswith(':free'):
+    if settings.get('reply_ai_policy') == 'free' or REPLY_MODELS.get(primary, {}).get('model', '').endswith(':free'):
         settings['reply_ai_policy'] = 'free'
     elif key == 'none':
         settings['reply_ai_policy'] = 'paid_only'

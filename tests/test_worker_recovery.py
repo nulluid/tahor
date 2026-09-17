@@ -38,6 +38,7 @@ class RecoveryTests(unittest.TestCase):
         worker._free_retry_at = 0
         self.records = [dict(id=str(i)) for i in range(3)]
         patch.object(worker, 'delete_pending_trash').start()
+        self.alert_results = patch.object(worker.ai_routing, 'record_results').start()
         self.log = patch.object(worker, 'log').start()
         self.backend = patch.object(worker, 'classify_with_backend').start()
         self.free = patch.object(worker, '_classify_free_and_time', side_effect=ok).start()
@@ -120,6 +121,7 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual((root / 'processed.txt').read_text(), '0\n')
             results = json.loads((root / 'current_batch_out.json').read_text())
             self.assertEqual(sum(r['action'] == 'error' for r in results), 2)
+            self.alert_results.assert_called_once_with('classification', results)
 
     def test_pending_trash_retry_failure_does_not_stop_classification(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(worker, 'STATE_DIR', Path(directory)), patch.object(worker, 'delete_pending_trash', side_effect=RuntimeError('temporary delete failure')), patch.object(worker, 'fetch', return_value=[]):

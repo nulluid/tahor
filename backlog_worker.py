@@ -35,6 +35,7 @@ sys.path.insert(0, str(REPO))
 
 import fetch_batch
 import classify
+import ai_routing
 import process_batch
 import keyword_tool
 import mailbox_settings
@@ -518,6 +519,7 @@ def process_one_batch(mailbox):
     free_results, paid_results = classify_batch(records, mode)
     classified = time.monotonic()
     results = free_results + paid_results
+    ai_routing.record_results("classification", results)
     Path(f"{prefix}_out.json").write_text(json.dumps(results, indent=1))
     counts = {}
     for r in results:
