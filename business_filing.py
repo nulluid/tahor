@@ -256,7 +256,7 @@ def _run_sweep(conn, *, backfill=False, limit=100, budget_seconds=45, dry_run=Fa
                             obsolete = [flag.decode('ascii') for flag in flags
                                         if flag.startswith(b'retention-') and flag not in
                                         {b'retention-forever', b'retention-pending-review'}
-                                        or flag == b'delete-pending']
+                                        or flag in {b'delete-pending', b'expense-personal'}]
                             if obsolete and conn.uid('STORE', uid, '-FLAGS.SILENT', '('+' '.join(obsolete)+')')[0] != 'OK':
                                 raise RuntimeError('Business obsolete deletion markers could not be cleared')
                             import business_ledger

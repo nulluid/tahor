@@ -182,7 +182,7 @@ def main():
         if r.get('reply_rule_matches') or r.get('reply_rule_uncertain'):
             add.append(reply_rules.PROTECTED_KEYWORD)
             add.extend(reply_rules.keyword(active_reply_rules[key]) for key in r.get('reply_rule_matches', []) if key in active_reply_rules)
-        ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]], "uid": msgid_to_uid.get(msgids[r["id"]]), "add": add, "remove": (["delete-pending", "retention-transient"] if r.get("reply_rule_matches") or r.get("reply_rule_uncertain") else []) + (["retention-short-lived"] if r.get("retention") != "brief" else [])})
+        ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]], "uid": msgid_to_uid.get(msgids[r["id"]]), "add": add, "remove": (["delete-pending", "retention-transient"] if r.get("reply_rule_matches") or r.get("reply_rule_uncertain") else []) + (["delete-pending", "retention-transient", "retention-standard", "expense-personal"] if "business-receipt" in r.get("business_keywords", []) else []) + (["retention-short-lived"] if r.get("retention") != "brief" else [])})
     for r in trash_final:
         if r["id"] not in unmatched:
             ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]],
