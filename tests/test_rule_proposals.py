@@ -79,3 +79,38 @@ class RuleProposalTests(AppTestCase):
         with self.client.session_transaction() as session:
             session.pop('email',None)
         self.assertIn(self.client.post(f'/review-rule/{id}',data=dict(data,csrf_token=self.token())).status_code,(302,403))
+
+    def test_concurrent_approval_or_rejection_cannot_overwrite_other_action(self):
+        for action in ('approve', 'reject'):
+            with self.subTest(action=action):
+                id, ctx = self.propose('Change policy', {'kind':'file_edit','prompt_txt':'proposed'})
+                token = self.token()
+                real = self.module.tahor_db.get_db()
+                module = self.module
+                class InterleavedConnection:
+                    def __init__(self):
+                        self.interleaved = False
+                    def execute(self, sql, parameters=()):
+                        if sql.startswith('UPDATE decisions SET') and not self.interleaved:
+                            self.interleaved = True
+                            if action == 'approve':
+                                changed_context = dict(ctx, applied=True, outcome='Rejected concurrently')
+                                real.execute("UPDATE decisions SET context=?, status='resolved' WHERE id=?",(json.dumps(changed_context),id))
+                            else:
+                                resolution = json.loads(real.execute('SELECT resolution FROM decisions WHERE id=?',(id,)).fetchone()['resolution'])
+                                resolution['approved_proposal'] = ctx['rule_proposal']['token']
+                                real.execute('UPDATE decisions SET resolution=? WHERE id=?',(json.dumps(resolution),id))
+                            real.commit()
+                        return real.execute(sql,parameters)
+                    def __getattr__(self, name):
+                        return getattr(real,name)
+                with patch.object(module,'get_db',return_value=InterleavedConnection()), patch.object(module.apply_decisions,'apply_one') as apply:
+                    response=self.client.post(f'/review-rule/{id}',data={'csrf_token':token,'action':action,'proposal':ctx['rule_proposal']['token']})
+                    self.assertEqual(response.status_code,409)
+                    apply.assert_not_called()
+                stored=real.execute('SELECT context,resolution FROM decisions WHERE id=?',(id,)).fetchone()
+                if action == 'approve':
+                    self.assertEqual(json.loads(stored['context'])['outcome'],'Rejected concurrently')
+                else:
+                    self.assertEqual(json.loads(stored['resolution'])['approved_proposal'],ctx['rule_proposal']['token'])
+                real.close()

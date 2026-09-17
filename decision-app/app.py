@@ -1082,12 +1082,18 @@ def review_rule(decision_id):
         if resolution.get('approved_proposal'):
             abort(409, 'This proposal was approved; retry completion before making another change.')
         context.update(applied=True, outcome='Proposal rejected; no rules changed')
-        db.execute("UPDATE decisions SET context=?, status='resolved' WHERE id=?", (json.dumps(context), decision_id))
+        changed = db.execute("UPDATE decisions SET context=?, status='resolved' WHERE id=? AND context=? AND resolution=?", (json.dumps(context), decision_id, row['context'], row['resolution']))
+        if changed.rowcount != 1:
+            db.rollback()
+            abort(409, 'This proposal changed; refresh before acting.')
         db.commit()
-        session['flash'] = 'Proposal rejected; no rules changed.'
+        session['flash'] = 'Proposal rejected; no rules changed.' 
     elif action == 'approve':
         resolution['approved_proposal'] = proposal['token']
-        db.execute('UPDATE decisions SET resolution=? WHERE id=?', (json.dumps(resolution), decision_id))
+        changed = db.execute('UPDATE decisions SET resolution=? WHERE id=? AND context=? AND resolution=?', (json.dumps(resolution), decision_id, row['context'], row['resolution']))
+        if changed.rowcount != 1:
+            db.rollback()
+            abort(409, 'This proposal changed; refresh before acting.')
         db.commit()
         try:
             session['flash'] = apply_decisions.apply_one(decision_id)
