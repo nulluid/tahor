@@ -31,6 +31,7 @@ import tahor_db
 import mailbox_settings
 import reply_rules
 import coupon_expiry
+import business_filing
 from mailbox_paths import list_mailboxes, quote_mailbox
 
 CATEGORY_KEYWORDS = ["category-receipt", "category-statement", "category-government-tax"]
@@ -187,7 +188,7 @@ def refile_unsorted(conn, buckets, root, dry_run=False, state_path=None):
         previous = int(state.get('uids', {}).get(source, 0))
         candidates = [uid for uid in candidates if int(uid) > previous] + [uid for uid in candidates if int(uid) <= previous]
         for uid in candidates[:100]:
-            status, rows = conn.uid('FETCH', uid, '(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM MESSAGE-ID)])')
+            status, rows = conn.uid('FETCH', uid, '(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM MESSAGE-ID SUBJECT DATE)])')
             if status != 'OK':
                 raise RuntimeError('Could not fetch unsorted message')
             _, flags, delivered = metadata(rows, uid, content=True)
@@ -195,6 +196,10 @@ def refile_unsorted(conn, buckets, root, dry_run=False, state_path=None):
             if not flags.intersection(blocked) and flags.intersection({key.encode() for key in CATEGORY_KEYWORDS}) and now >= delivered + timedelta(days=grace['read' if b'\\seen' in flags else 'unread']):
                 body = next(row[1] for row in rows if isinstance(row, tuple))
                 message = email.message_from_bytes(body, policy=email.policy.default)
+                if flags.intersection({b'business-receipt', b'business-correspondence'}) or business_filing.match_message(
+                        dict(id=str(message.get('Message-ID', '')), **{'from': str(message.get('From', ''))},
+                             subject=str(message.get('Subject', '')), date=str(message.get('Date', ''))), delivered=delivered, flags=flags):
+                    continue
                 bucket, vendor = vendor_for(str(message.get('From', '')), buckets)
                 if bucket != '_Unsorted':
                     target = f'{root}/{bucket}/{vendor}'
@@ -229,6 +234,7 @@ def main():
     read_min_age, unread_min_age = grace["read"], grace["unread"]
 
     conn = connect()
+    business_filing.run_sweep(conn, dry_run=dry_run)
     typ, _ = conn.select('"INBOX"', readonly=dry_run)
     if typ != "OK":
         sys.exit("Could not select INBOX.")
@@ -272,6 +278,13 @@ def main():
             if policy is None or flags.intersection({b'needs-attention', b'reply-protected', b'\\flagged', b'retention-pending-review'}):
                 continue
             by_dest[f"{root}/{policy['folder']}"].append(uid)
+            continue
+        delivered_match = re.search(rb'INTERNALDATE "([^"]+)"', msg_data[0][0])
+        delivered = datetime.strptime(delivered_match[1].decode('ascii').strip(), '%d-%b-%Y %H:%M:%S %z') if delivered_match else None
+        business_route = business_filing.match_message(dict(id=str(message.get('Message-ID', '')), **{'from': str(from_header)}, subject=str(message.get('Subject', '')), date=str(message.get('Date', ''))), delivered=delivered, flags=flags)
+        if business_route:
+            # The resumable business sweep alone owns these moves and revalidates
+            # UIDVALIDITY, exact message identity, and attention state first.
             continue
         bucket, vendor = vendor_for(from_header, buckets)
         if bucket == "_Unsorted":

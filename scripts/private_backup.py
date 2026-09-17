@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-NAMES = {'settings.json', 'decisions.db', 'prompt.txt', 'vendor_buckets.json', 'sieve.txt', 'ai_routing_state.json', 'free_classifier_guidance.txt', 'coupon_policies.json'}
+NAMES = {'settings.json', 'decisions.db', 'prompt.txt', 'vendor_buckets.json', 'sieve.txt', 'ai_routing_state.json', 'free_classifier_guidance.txt', 'coupon_policies.json', 'business_filing.json'}
 REQUIRED = {'settings.json', 'decisions.db'}
 
 
@@ -93,7 +93,7 @@ def validate_snapshot(folder):
         data = read_file(path)
         if len(data) != metadata['bytes'] or hashlib.sha256(data).hexdigest() != metadata['sha256']:
             raise ValueError('Backup checksum mismatch')
-        if name in ('settings.json', 'vendor_buckets.json', 'ai_routing_state.json', 'coupon_policies.json') and not isinstance(json.loads(data), dict):
+        if name in ('settings.json', 'vendor_buckets.json', 'ai_routing_state.json', 'coupon_policies.json', 'business_filing.json') and not isinstance(json.loads(data), dict):
             raise ValueError('Expected a JSON object')
         payloads[name] = data
     database_check(folder / 'decisions.db')
@@ -101,7 +101,7 @@ def validate_snapshot(folder):
 
 
 def validate_sources(sources):
-    if not (NAMES - {'ai_routing_state.json', 'coupon_policies.json'} <= set(sources) <= NAMES):
+    if not (NAMES - {'ai_routing_state.json', 'coupon_policies.json', 'business_filing.json'} <= set(sources) <= NAMES):
         raise ValueError('Invalid source path mapping')
     paths = {name: safe_path(path) for name, path in sources.items()}
     if len(set(paths.values())) != len(paths):
@@ -215,7 +215,8 @@ def main():
     import run
     run.load_environment(args.env.expanduser())
     data = Path(os.environ.get('DATA_DIR', Path.home() / '.config/tahor/data'))
-    sources = {'coupon_policies.json': Path(os.environ.get('TAHOR_COUPON_POLICIES_PATH') or data / 'coupon_policies.json'),
+    sources = {'business_filing.json': Path(os.environ.get('TAHOR_BUSINESS_RULES_PATH') or data / 'business_filing.json'),
+               'coupon_policies.json': Path(os.environ.get('TAHOR_COUPON_POLICIES_PATH') or data / 'coupon_policies.json'),
                'settings.json': Path(os.environ.get('TAHOR_SETTINGS_PATH', Path.home() / '.config/tahor/settings.json')),
                'decisions.db': Path(os.environ.get('TAHOR_DB_PATH', ROOT / 'decisions.db')),
                'prompt.txt': Path(os.environ.get('PROMPT_PATH', data / 'prompt.txt')),

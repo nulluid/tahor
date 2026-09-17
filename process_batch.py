@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tahor_db
 import reply_rules
 import coupon_expiry
+import business_filing
 
 
 def sender_domain_of(email_addr):
@@ -53,6 +54,7 @@ def main():
     outrecs = json.loads(Path(f"{prefix}_out.json").read_text())
     envs = json.loads(Path(f"{prefix}_env.json").read_text())
 
+    business_rules = business_filing.load_rules()
     coupon_policies = coupon_expiry.policies()
     active_reply_rules = {r["id"]: r for r in reply_rules.get_rules()}
     for r in outrecs:
@@ -92,6 +94,10 @@ def main():
             r['reply_rule_matches'], r['reply_rule_uncertain'] = matches, uncertain
             for rule_id in matches:
                 tahor_db.record_reply_rule_match(rule_id, r['id'], rec['from'])
+
+        # Business receipt protection is applied before constructing any trash
+        # operation; private source/date rules never classify all merchant ads as receipts.
+        business_filing.protect_classification(r, rec, rules=business_rules)
 
     classifications = {row["id"]: row for row in outrecs}
     for e in envs:
@@ -166,6 +172,7 @@ def main():
             # Standard remains the classifier-complete marker; expiry is separate.
             add = [f"category-{r.get('category', 'marketing')}", 'retention-standard', 'retention-short-lived']
         add.extend(r.get('coupon_keywords', []))
+        add.extend(r.get('business_keywords', []))
         if r.get("expense_type") and r["expense_type"] != "n/a":
             add.append(f"expense-{r['expense_type']}")
         if r.get("needs_attention") is True:
