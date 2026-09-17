@@ -18,7 +18,7 @@ def main():
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='tahor-demo-') as directory:
         state = Path(directory)
-        os.environ.update(TAHOR_DB_PATH=str(state / 'decisions.db'), TAHOR_SETTINGS_PATH=str(state / 'settings.json'), TAHOR_STATUS_PATH=str(state / 'worker_status.json'), DATA_DIR=str(state), ALLOWED_EMAIL='demo@example.com', BASE_URL=f'http://localhost:{args.port}', GOOGLE_CLIENT_ID='', GOOGLE_CLIENT_SECRET='', OPENROUTER_API_KEY='', GEMINI_API_KEY='', FASTMAIL_EMAIL='', FASTMAIL_APP_PASSWORD='', TAHOR_PROVIDER_BRIDGE='', TAHOR_DATA_PUSH='0', TAHOR_NOTIFY_HEALTH='0', TAHOR_NOTIFY_DIGEST='0')
+        os.environ.update(TAHOR_DB_PATH=str(state / 'decisions.db'), TAHOR_SETTINGS_PATH=str(state / 'settings.json'), TAHOR_STATUS_PATH=str(state / 'worker_status.json'), DATA_DIR=str(state), ALLOWED_EMAIL='demo@example.com', BASE_URL=f'http://localhost:{args.port}', GOOGLE_CLIENT_ID='', GOOGLE_CLIENT_SECRET='', OPENROUTER_API_KEY='', GEMINI_API_KEY='', FASTMAIL_EMAIL='', FASTMAIL_APP_PASSWORD='', TAHOR_PROVIDER_BRIDGE='', TAHOR_DATA_PUSH='0', TAHOR_NOTIFY_HEALTH='0', TAHOR_NOTIFY_DIGEST='0', TAHOR_CLASSIFY_FREE_ENABLED='1')
         sys.path.insert(0, str(ROOT / 'decision-app'))
         import app as ui
         from flask import request, session, redirect
@@ -38,6 +38,7 @@ def main():
         with db:
             for kind, summary, context in [
                 ('vendor_mapping', 'Choose a home for Northstar receipts', {'sender_label': 'northstar.example', 'note': 'Keep receipts together in a folder you choose.'}),
+                ('free_text_rule', 'Review a proposed receipt policy', {'rule_proposal': {'token': 'synthetic-preview', 'result': {'kind': 'file_edit'}, 'diff': '--- prompt.txt (current)\n+++ prompt.txt (proposed)\n@@ -1 +1 @@\n-Keep receipts for three years.\n+Keep durable equipment receipts indefinitely.\n'}}),
                 ('message_review', 'Your membership renewal needs a second look', {'mailbox': 'INBOX', 'message_id': '<demo@example.com>', 'note': 'An ambiguous message stays protected until you decide.'}),
             ]:
                 db.execute("INSERT INTO decisions(kind,summary,context,status,created_at) VALUES (?,?,?,'pending',?)", (kind, summary, json.dumps(context), now))

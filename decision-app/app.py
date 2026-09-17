@@ -388,7 +388,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <section>
 <h2>Add a free-text rule</h2>
 <form method="post" action="/add-rule">
-  <textarea name="rule_text" rows="3" placeholder="e.g. Kate Spade marketing should be trashed and unsubscribed, but keep any purchase receipts"></textarea>
+  <textarea name="rule_text" rows="3" placeholder="e.g. Trash marketing from offers.example, but keep its purchase receipts"></textarea>
   <button type="submit" class="primary">Submit rule to draft</button>
 </form>
 </section>
