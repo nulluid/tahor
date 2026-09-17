@@ -230,6 +230,8 @@ def classify_with_backend(records, backend_name):
     back in order."""
     if not records:
         return []
+    if backend_name == "openrouter-free" and not classify.free_classification_enabled():
+        return classify.free_disabled_results(records)
     system_prompt = PROMPT_PATH.read_text()
     backend = classify.BACKENDS[backend_name]
     headers = {"Content-Type": "application/json", "Authorization": backend["auth_header"]()}
@@ -270,6 +272,9 @@ def _classify_free_and_time(records):
     """classify_with_backend against openrouter-free, timing the wall clock so
     the result feeds mailbox_settings' rolling free-rate estimate (what the
     auto-mode escalation decision is based on)."""
+    if not classify.free_classification_enabled():
+        log("Free classification disabled; messages retained for retry")
+        return classify.free_disabled_results(records)
     t0 = time.monotonic()
     results = classify_with_backend(records, "openrouter-free")
     mailbox_settings.record_free_batch(sum(r["action"] != "error" for r in results), time.monotonic() - t0)

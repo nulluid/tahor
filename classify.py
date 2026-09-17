@@ -118,7 +118,20 @@ BACKENDS = {
 SCHEMA_FIELDS = ["category", "retention", "expense_type", "needs_attention", "folder_domain"]
 
 
+def free_classification_enabled():
+    return os.environ.get("TAHOR_CLASSIFY_FREE_ENABLED", "1").strip() == "1"
+
+
+def free_disabled_results(records):
+    return [{"id": record["id"], "action": "error",
+             "reason": "Free classification is disabled; message retained for retry"}
+            for record in records]
+
+
 def classify_one(url, headers, model, system_prompt, record, retries=3):
+    if (url == BACKENDS["openrouter-free"]["url"] and model.endswith(":free")
+            and not free_classification_enabled()):
+        return free_disabled_results([record])[0]
     hints = [f"{k[5:]}={v}" if not isinstance(v, bool) else k[5:]
              for k, v in record.items() if k.startswith("hint_") and v]
     hint_line = f"Hints (context only, not decisive): {', '.join(hints)}\n" if hints else ""
@@ -208,6 +221,13 @@ def main():
     if backend_name not in BACKENDS:
         raise SystemExit(f"Unknown CLASSIFY_BACKEND={backend_name!r}. Choose from: {', '.join(BACKENDS)}")
     backend = BACKENDS[backend_name]
+
+    if backend_name == "openrouter-free" and not free_classification_enabled():
+        with open(input_path) as f:
+            records = json.load(f)
+        with open(output_path, "w") as f:
+            json.dump(free_disabled_results(records), f, indent=1)
+        return
 
     concurrency, model = backend["default_concurrency"], backend["default_model"]
     for i, arg in enumerate(sys.argv):
