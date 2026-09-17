@@ -1,7 +1,7 @@
 """Accessible, read-only email previews without leaving the working page."""
 SCRIPT = r'''<script data-email-preview>
 (() => {
-  const allowed = /^\/(?:message\/\d+(?:\/\d+)?|subscription-messages\/\d+|subscription-message\/\d+\/\d+)$/;
+  const allowed = /^\/(?:message\/\d+(?:\/\d+)?|subscription-messages\/\d+|subscription-message\/\d+\/\d+|expenses\/message\/\d+)$/;
   let dialog, content, opener, controller, previousOverflow, previousScroll;
   function destination(value) {
     const url = new URL(value, window.location.href);

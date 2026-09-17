@@ -57,11 +57,15 @@ SCRIPT = r'''<script>
         oldFields.forEach((field, index) => {
           const target = newFields[index];
           if (!target || target.name !== field.name || field.type === 'hidden') return;
-          target.value = field.value;
-          if (field.type === 'checkbox' || field.type === 'radio') target.checked = field.checked;
+          const bulkField=field.matches('[data-decision-choice],[data-bulk-bucket],[data-bulk-vendor]');
+          if(bulkField&&other.dataset.decisionRevision!==fresh.dataset.decisionRevision)return;
+          if (field.type === 'checkbox' || field.type === 'radio') { if(target.value===field.value)target.checked=field.checked; }
+          else target.value = field.value;
+          if(bulkField&&other.dataset.manual==='true')fresh.dataset.manual='true';
         });
       }
       current.replaceWith(replacement);
+      document.dispatchEvent(new Event('tahor-decisions-updated'));
       const destination = (anchorId && cardFor(anchorId)) || (nextId && cardFor(nextId));
       if (destination && Number.isFinite(top)) window.scrollBy(0, destination.getBoundingClientRect().top - top);
       else window.scrollTo(0, scroll);

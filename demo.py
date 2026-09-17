@@ -53,6 +53,8 @@ def main():
         for domain, name, count in [('papertrail.example', 'Papertrail Weekly', 8), ('northstar.example', 'Northstar Outdoors', 5), ('brightday.example', 'Brightday Offers', 12)]:
             ui.tahor_db.upsert_unsubscribe_candidate(domain, 'news@' + domain, name, 'https://' + domain + '/unsubscribe', None, True)
         ui.tahor_db.set_sender_rule('brightday.example', 'block_marketing')
+        import business_ledger
+        business_ledger.record_receipt(dict(business_key='example-studio',matched_rule_id='software-receipts',vendor='Example Cloud',sender_email='billing@cloud.example',mailbox='Example Studio/Receipts/2026',message_id='<demo-business-receipt@example.com>',uid='1',uidvalidity='1',received_at='2026-09-15T12:00:00+00:00',subject='Your cloud receipt'), 'Amount paid: USD 24.00\nPayment date: 2026-09-15\nReceipt ID: DEMO-24', verified_business=True)
         ui.generate_sieve.refresh_sieve()
         ui.runtime_status.write_status('processed', mode='paid_only', last_batch_applied=50, last_batch_pending=0, last_success_at=now)
 
@@ -78,7 +80,7 @@ def main():
         if args.export:
             args.export.mkdir(parents=True, exist_ok=True)
             client = ui.app.test_client()
-            for route, name in [('/', 'index'), ('/unsubscribe', 'unsubscribe'), ('/settings', 'settings'), ('/status', 'status')]:
+            for route, name in [('/', 'index'), ('/unsubscribe', 'unsubscribe'), ('/settings', 'settings'), ('/status', 'status'), ('/expenses', 'expenses')]:
                 response = client.get(route)
                 if response.status_code != 200:
                     raise RuntimeError(f'Preview failed: {route}')

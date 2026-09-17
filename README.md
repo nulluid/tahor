@@ -29,6 +29,7 @@ that should not be left to a model.
 | :--- | :--- |
 | Classify and tag messages in the background | Review ambiguous mail before retention cleanup |
 | File routine receipts and statements, then mark them read | Choose the vendor’s destination in the app |
+| Group business receipts by calendar year and preserve them permanently | Review a private expense ledger and export CSV |
 | Track unsubscribe requests and sender blocks | Keep subscriptions, block marketing, or block a domain |
 | Draft a response when your reply rule matches | Find the original unread; edit and send its draft in your mail client |
 | Recover from provider failures | See actual worker progress and retry status |
@@ -48,8 +49,8 @@ that should not be left to a model.
 </tr>
 </table>
 
-The app also includes separate model settings for classification, rule drafting,
-and reply drafting, plus a Status page showing the last successful batch.
+The app includes independent model settings for each AI task, an Expenses page
+for private receipt review, and a Status page showing the last successful batch.
 [Try the sample-data preview](#try-it-without-connecting-a-mailbox).
 
 <details>
@@ -165,6 +166,13 @@ same product category. Uncertain cases show the sender, date, suggested folder,
 and a link to read the email safely before deciding. Actions update the queue in
 place so you can keep working without losing your position.
 
+**Generate AI suggestions** on Pending decisions recommends up to **20 items**
+per batch by default. Adjust its independent model policy, batch size, and written
+guidance in Settings. Recommended items rise above undecided ones. Review the
+radio choices, then apply a batch from the sticky toolbar; individual decisions
+remain available. Your confirmed choices guide future recommendations, including
+choices still waiting for mailbox recovery. Rule proposals require separate approval.
+
 **Keep** releases a review hold and preserves normal retention and filing rules.
 **Keep briefly** expires the message after the configured three-day read or
 seven-day unread window, measured from delivery. **Trash** deletes that message;
@@ -185,10 +193,32 @@ changes mailbox policy. Recommended and selected items appear above undecided on
 preferences for wanted coupons; review the selected actions before applying them. Some senders require confirmation on their website;
 email-based requests require an app password with SMTP sending access.
 
+## Business receipts and expenses
+
+Private business rules group correspondence and file receipt evidence into
+`Your Business/Receipts/YYYY`. Matching receipts receive permanent retention
+before they are moved. Existing mail can be reconciled with a resumable scan;
+new mail follows the same rules and your configured inbox timing.
+
+The **Expenses** page keeps an initial ledger alongside the receipt emails.
+Review uncertain amounts, inspect the source email, correct values, and export a
+CSV. Paid receipts, refunds, and invoices are distinct; currencies are never
+silently combined, and uncertain or duplicate entries stay out of totals.
+Your business rules, receipts, and ledger stay in private instance data and backups.
+[Business filing and ledger setup](docs/business-ledger.md) explains the current
+workflow and export format. Cloud-drive storage is not required.
+
+<details>
+<summary>See the private expense ledger</summary>
+
+![Business expense evidence and reviewable totals](docs/screenshots/expenses.png)
+
+</details>
+
 ## Choose the pace
 
-Choose independently for **classification, reply drafting, rule drafting, and
-subscription recommendations**. Subscription recommendations default to paid
+Choose independently for **classification, reply drafting, rule drafting,
+pending decisions, and subscription recommendations**. Subscription recommendations default to paid
 with free fallback.
 Settings save as you change them, with a confirmation beside each section:
 

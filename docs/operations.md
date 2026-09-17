@@ -601,3 +601,18 @@ The subscription toolbar shows an animated working indicator while AI suggestion
 are queued or running, actions are being submitted, or saved batches are still
 processing. Progress text remains visible; reduced-motion preferences disable
 the rotation while retaining the working label.
+
+
+### Pending decision recommendations
+
+Pending decisions has its own AI policy and models, private written guidance, and
+configurable batch size (20 by default). Generate suggestions to preselect
+message Keep, Keep briefly, Trash or Skip choices and vendor filing destinations.
+Review the selections before applying them. Free-text rule proposals retain their
+separate approval controls. Recommended and selected items rise above undecided
+items; the sticky toolbar and working indicator remain visible while you review.
+Individual and bulk choices are recorded as private feedback, including saved
+choices awaiting recovery. Automatic vendor choices are not counted as owner
+feedback. Stale source revisions cannot inherit a previous destructive selection.
+The decision-suggestions and decision-actions timers run independently every
+15 seconds after the preceding pass, using the same unprivileged service identity.

@@ -29,7 +29,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 import requests
-from flask import Flask, g, redirect, request, session, abort, jsonify
+from flask import Flask, g, redirect, request, session, abort, jsonify, Response
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import apply_decisions
@@ -46,6 +46,7 @@ import card_instructions_ui
 import settings_autosave
 import vendor_review_state
 import decision_interactions
+import decision_bulk_ui
 import tahor_db
 
 DB_PATH = tahor_db.DB_PATH
@@ -227,6 +228,7 @@ def tahor_header(current):
     links = [
         ("decisions", "/", "Pending decisions"),
         ("unsubscribe", "/unsubscribe", "Unsubscribe"),
+        ("expenses", "/expenses", "Expenses"),
         ("settings", "/settings", "Settings"),
         ("status", "/status", "Status"),
     ]
@@ -310,7 +312,7 @@ STYLE_BLOCK = """
   .fields select { grid-column: 1 / -1; }
   .actions { display: flex; flex-wrap: wrap; gap: 8px; }
   .fields label { display: grid; gap: 8px; }
-  select, input[type=text], input[type=number], textarea {
+  select, input[type=text], input[type=number], input[type=date], textarea {
     width: 100%;
     background: var(--well);
     color: var(--ink);
@@ -394,7 +396,8 @@ PAGE_TEMPLATE = """<!doctype html>
 <h1>Pending decisions <span class="count">{count}</span></h1>
 {flash}
 {sieve_banner}
-{cards}
+{decision_controls}
+<div id="decision-cards">{cards}</div>
 <section>
 <h2>Add a free-text rule</h2>
 <form method="post" action="/add-rule">
@@ -457,6 +460,11 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
 <h2>AI rule drafting</h2>
 <p class="hint">Turn a free-text instruction into a proposed mailbox rule. Review the exact action or diff before applying it. Manually entered reply rules remain available when this AI task is disabled.</p>
 {rule_ai_settings}
+</section>
+<section>
+<h2>Pending decision recommendations</h2>
+<p class="hint">Review messages and filing choices in batches. Recommendations preselect choices; nothing is applied until you submit.</p>
+{decision_ai_settings}
 </section>
 <section>
 <h2>Subscription recommendations</h2>
@@ -722,6 +730,9 @@ def index():
     import vendor_suggestions
     automatic_ids = set(vendor_suggestions.pending_work_ids(db)) if mailbox_settings.is_ai_enabled('rule') else set()
     automatic_count = 0
+    import decision_suggestions, decision_bulk
+    recommendations = {item['decision_id']: item for item in decision_suggestions.latest_recommendations()}
+    pending = sorted(pending, key=lambda row: row['id'] not in recommendations)
     cards = []
     saved_instructions = card_instructions.get_all_card_instructions('decision')
     for row in pending:
@@ -805,6 +816,15 @@ def index():
             cards.append(CARD_GENERIC.format(id=row["id"], summary=html(row["summary"] or '(No subject)'), context=html(ctx), details=details))
 
         if cards:
+            if row['kind'] in ('message_review', 'vendor_mapping') and not row['resolution']:
+                cards[-1] = re.sub(r'(<form method="post" action="/resolve/[^"]+">[\s\S]*?</form>)', r'<details><summary>Apply this decision separately</summary>\1</details>', cards[-1], count=1)
+                recommendation = recommendations.get(row['id'])
+                revision = decision_bulk.decision_revision(row)
+                end = cards[-1].rfind('</div>')
+                controls = decision_bulk_ui.choices(row, revision, recommendation, buckets)
+                cards[-1] = cards[-1][:end] + controls + cards[-1][end:]
+                attrs = f' data-bulk-eligible="true" data-decision-revision="{html(revision)}"' + (' data-recommended="true"' if recommendation else '')
+                cards[-1] = cards[-1].replace('<div class="card"', '<div class="card"' + attrs, 1)
             instruction_form = card_instructions_ui.render('decision', row['id'], saved_instructions.get(row['id'], ''))
             end = cards[-1].rfind('</div>')
             cards[-1] = cards[-1][:end] + instruction_form + cards[-1][end:]
@@ -839,9 +859,10 @@ def index():
         count=review_count,
         flash=flash,
         sieve_banner=sieve_banner,
+        decision_controls=decision_bulk_ui.BAR,
         cards=body,
         sieve_content=html(sieve_content),
-    ) + decision_interactions.SCRIPT + card_instructions_ui.SCRIPT
+    ) + decision_interactions.SCRIPT + card_instructions_ui.SCRIPT + decision_bulk_ui.SCRIPT
 
 
 def _settings_status_line(current_mode):
@@ -885,6 +906,10 @@ def render_ai_task_settings(task):
                     '<p class="hint">Selecting Disabled for the paid model disables this AI task, regardless of policy. Choosing a paid model makes it available; Always free still never calls it.</p>')
         caution = ('Free reply drafts can contain unsupported promises, incorrect roles, or invented details even after model verification. Review every draft before sending.' if task == 'reply' else
                    'In an eight-instruction test, the free rule model proposed the wrong folder once. Review every proposed action and diff; model validation does not establish your intent.')
+    if task == 'decisions':
+        controls += (f'<p><label>Recommendations per batch <input type="number" name="batch_size" min="1" max="200" value="{mailbox_settings.get_decision_batch_size()}" required></label></p>'
+                     f'<p><label>Your decision preferences<textarea name="decision_guidance" rows="5" maxlength="12000">{html(mailbox_settings.load_settings().get("decision_guidance", ""))}</textarea></label></p>')
+        caution = 'Recommendations only preselect choices. Review suggested trash actions carefully: applying Trash permanently deletes the message. Rule proposals still need separate approval.'
     if task == 'subscriptions':
         controls += (f'<p><label>Recommendations per batch <input type="number" name="batch_size" min="1" max="200" value="{mailbox_settings.get_subscription_batch_size()}" required></label></p>'
                      f'<p><label>Your subscription preferences<textarea name="subscription_guidance" rows="5" maxlength="12000">{html(mailbox_settings.load_settings().get("subscription_guidance", ""))}</textarea></label></p>')
@@ -908,7 +933,7 @@ def settings_page():
                 import classify
                 if task == 'classification' and policy in ('auto', 'free') and not classify.free_classification_enabled():
                     raise ValueError('Free classification is disabled by the server configuration.')
-                mailbox_settings.set_ai_task_settings(task, policy, paid_model=request.form.get('paid_model'), free_model=request.form.get('free_model'), batch_size=request.form.get('batch_size') if task == 'subscriptions' else None, guidance=request.form.get('subscription_guidance') if task == 'subscriptions' else None)
+                mailbox_settings.set_ai_task_settings(task, policy, paid_model=request.form.get('paid_model'), free_model=request.form.get('free_model'), batch_size=request.form.get('batch_size') if task in ('subscriptions', 'decisions') else None, guidance=request.form.get('subscription_guidance') if task == 'subscriptions' else request.form.get('decision_guidance') if task == 'decisions' else None)
             except ValueError as exc:
                 if request.headers.get('Accept') == 'application/json':
                     return {'saved': False, 'message': str(exc)}, 400
@@ -969,6 +994,7 @@ def settings_page():
         classification_ai_settings=render_ai_task_settings('classification'),
         rule_ai_settings=render_ai_task_settings('rule'),
         subscription_ai_settings=render_ai_task_settings('subscriptions'),
+        decision_ai_settings=render_ai_task_settings('decisions'),
         reply_ai_settings=render_ai_task_settings('reply'),
         reply_rules_list=render_reply_rules(),
         provider_status=html(provider['label']),
@@ -1171,6 +1197,9 @@ def review_vendor_message(decision_id, sample_index):
     with db:
         changed = db.execute("UPDATE decisions SET status='resolved',context=?,resolution=?,resolved_at=? WHERE id=? AND status='pending' AND context=? AND resolution IS ?",
             (json.dumps(review_context), json.dumps({'action': action}), datetime.now(timezone.utc).isoformat(), review['id'], review['context'], review['resolution']))
+        if changed.rowcount == 1:
+            import decision_bulk
+            decision_bulk.record_choice_feedback(db, review, {'action': action})
     if changed.rowcount != 1:
         session['flash'] = 'This message already has a saved choice being processed. No second action was started.'
         return redirect('/')
@@ -1212,6 +1241,8 @@ def resolve(decision_id):
     if action not in allowed:
         abort(400, "Unknown decision action.")
     if action == "skip" and row["kind"] != "vendor_mapping":
+        import decision_bulk
+        decision_bulk.record_choice_feedback(db, row, {'action': 'skip'})
         db.execute("UPDATE decisions SET resolution=NULL WHERE id=? AND status='pending'", (decision_id,))
         db.commit()
         return redirect("/")
@@ -1223,9 +1254,12 @@ def resolve(decision_id):
             abort(400, "Enter a folder and vendor name without quotes or control characters.")
         resolution.update(bucket=bucket, vendor_name=vendor)
     changed = db.execute("UPDATE decisions SET status='resolved', resolution=?, resolved_at=? WHERE id=? AND status='pending' AND context=?", (json.dumps(resolution), datetime.now(timezone.utc).isoformat(), decision_id, row["context"]))
-    db.commit()
     if changed.rowcount != 1:
+        db.rollback()
         abort(409, "This decision changed. Refresh the page before trying again.")
+    import decision_bulk
+    decision_bulk.record_choice_feedback(db, row, resolution)
+    db.commit()
     try:
         context = json.loads(row['context'] or '{}')
     except (ValueError, TypeError):
@@ -1254,6 +1288,109 @@ def save_card_guidance(kind, identifier):
     except ValueError as error:
         return jsonify(error=str(error)), 400
     return jsonify(result)
+
+
+@app.route('/decisions/batches', methods=['GET', 'POST'])
+@login_required
+def decision_batches():
+    import decision_bulk
+    if request.method == 'GET':
+        return jsonify(decision_bulk.recent_jobs())
+    try:
+        return jsonify(decision_bulk.enqueue(json.loads(request.form.get('selections', '[]')), request.form.get('request_key', ''))), 202
+    except decision_bulk.SelectionConflict as error:
+        return jsonify(error=str(error), unavailable_ids=error.unavailable_ids), 409
+    except (ValueError, TypeError):
+        return jsonify(error='The selected decisions could not be submitted. Review the choices and try again.'), 400
+
+
+@app.route('/decisions/batches/<job_id>')
+@login_required
+def decision_batch_status(job_id):
+    import decision_bulk
+    try:
+        return jsonify(decision_bulk.get_job(job_id))
+    except ValueError:
+        abort(404)
+
+
+@app.route('/decisions/suggestions', methods=['POST'])
+@login_required
+def decision_suggestion_request():
+    import decision_suggestions
+    try:
+        return jsonify(decision_suggestions.enqueue(exclude_ids=json.loads(request.form.get('exclude_ids', '[]')))), 202
+    except (ValueError, TypeError) as error:
+        return jsonify(error=str(error)), 400
+
+
+@app.route('/decisions/suggestions/<job_id>')
+@login_required
+def decision_suggestion_status(job_id):
+    import decision_suggestions
+    try:
+        return jsonify(decision_suggestions.get_job(job_id))
+    except ValueError:
+        abort(404)
+
+
+@app.route('/expenses')
+@login_required
+def expenses_page():
+    import business_ledger, expense_ui
+    flash = session.pop('flash', '')
+    return '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Tahor — expenses</title>' + STYLE_BLOCK + '</head><body><main>' + tahor_header('expenses') + ('<p role="status">' + html(flash) + '</p>' if flash else '') + expense_ui.render(business_ledger.list_entries(), business_ledger.summaries()) + '</main></body></html>'
+
+
+@app.route('/expenses.csv')
+@login_required
+def expenses_csv():
+    import business_ledger
+    response = Response(business_ledger.export_csv(), mimetype='text/csv')
+    response.headers['Content-Disposition'] = 'attachment; filename="business-expenses.csv"'
+    return response
+
+
+@app.route('/expenses/<int:identifier>/confirm', methods=['POST'])
+@login_required
+def confirm_expense(identifier):
+    import business_ledger
+    try:
+        business_ledger.confirm_entry(identifier, document_type=request.form.get('document_type'), currency=request.form.get('currency'), amount=request.form.get('amount'), document_date=request.form.get('document_date'), reference=request.form.get('reference'), distinct_document=request.form.get('distinct_document') == '1')
+    except LookupError:
+        abort(404)
+    except ValueError as error:
+        abort(400, str(error))
+    session['flash'] = 'Ledger values confirmed. The receipt email is unchanged.'
+    return redirect('/expenses')
+
+
+@app.route('/expenses/<int:identifier>/exclude', methods=['POST'])
+@login_required
+def exclude_expense(identifier):
+    import business_ledger
+    try:
+        business_ledger.exclude_entry(identifier)
+    except LookupError:
+        abort(404)
+    session['flash'] = 'Entry excluded from totals. The receipt email is unchanged.'
+    return redirect('/expenses')
+
+
+@app.route('/expenses/message/<int:identifier>')
+@login_required
+def expense_message(identifier):
+    import business_ledger, message_reviews
+    item = business_ledger.get_entry(identifier)
+    if item is None:
+        abort(404)
+    try:
+        details, body = message_reviews.read_message(item)
+    except (ValueError, RuntimeError):
+        return 'The receipt could not be located safely. Open it in your mail client or try again later.', 409
+    except Exception:
+        return 'The mailbox is temporarily unavailable. The receipt is unchanged.', 503
+    return '<!doctype html><html><head><title>Receipt email</title>' + STYLE_BLOCK + '</head><body><main><h1>' + html(details.get('subject', 'Receipt email')) + '</h1><p>From: ' + html(details.get('sender', '')) + '</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">' + html(body) + '</pre></main></body></html>'
 
 
 @app.route("/add-rule", methods=["POST"])

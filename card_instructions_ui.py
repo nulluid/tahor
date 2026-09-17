@@ -15,7 +15,7 @@ SCRIPT = r'''<script>
 (() => {
  document.addEventListener('input', event => {
   const form=event.target.closest('[data-card-instructions]');if(!form)return;
-  const card=form.closest('[data-subscription-id]');if(card){delete card.dataset.guidanceSaved;card.dispatchEvent(new Event('card-guidance-state',{bubbles:true}));}
+  const card=form.closest('[data-subscription-id],[data-bulk-eligible="true"]');if(card){delete card.dataset.guidanceSaved;card.dispatchEvent(new Event('card-guidance-state',{bubbles:true}));}
   if(card&&!card.dataset.queued&&card.dataset.manual!=='true'){
    const none=card.querySelector('input[type="radio"][value=""]');
    if(none){card.dataset.instructionCleared='true';none.checked=true;none.dispatchEvent(new Event('change',{bubbles:true}));}
@@ -33,7 +33,7 @@ SCRIPT = r'''<script>
    const result=await response.json();if(!response.ok)throw new Error(result.error||'Instructions could not be saved.');
    const unchanged=form.querySelector('textarea').value===data.get('instructions');
    status.textContent=unchanged?(result.message||'Guidance saved. Generate fresh suggestions to use it.'):'Earlier text saved; save your latest edits before generating.';
-   const card=form.closest('[data-subscription-id]');if(unchanged&&card?.dataset.instructionCleared){card.dataset.guidanceSaved='true';card.dispatchEvent(new Event('card-guidance-state',{bubbles:true}));}
+   const card=form.closest('[data-subscription-id],[data-bulk-eligible="true"]');if(unchanged&&card?.dataset.instructionCleared){card.dataset.guidanceSaved='true';card.dispatchEvent(new Event('card-guidance-state',{bubbles:true}));}
    if(result.decision_id){const link=document.createElement('a');link.href='/';link.textContent=' Review rule proposals';status.append(link);}
   }catch(error){status.textContent=error.message||'Could not confirm the save. Your text is still here; retry when ready.';}
   finally{delete form.dataset.busy;form.querySelectorAll('button').forEach(b=>b.disabled=false);}
