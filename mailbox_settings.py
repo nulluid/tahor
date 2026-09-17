@@ -92,6 +92,19 @@ REPLY_MODELS = {
         "model": "openai/gpt-5.1",
         "auth_env": "OPENROUTER_API_KEY",
     },
+    "gpt5-flex": {
+        "label": "GPT-5.1 Flex (via OpenRouter) — half-price tokens, availability varies",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "model": "openai/gpt-5.1",
+        "auth_env": "OPENROUTER_API_KEY",
+        "request_options": {
+            "service_tier": "flex",
+            "provider": {"only": ["openai/flex"], "allow_fallbacks": False},
+            "reasoning": {"effort": "none"},
+            "response_format": {"type": "json_object"},
+        },
+        "expected_service_tier": "flex",
+    },
 }
 DEFAULT_REPLY_MODEL = "nemotron-free"
 

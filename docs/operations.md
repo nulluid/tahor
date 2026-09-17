@@ -66,6 +66,17 @@ again; invalid or rejected results remain retryable and are not appended. The
 signature is attached after verification. This adds model calls and improves
 checks; it is not a guarantee that model-written prose is correct.
 
+**GPT-5.1 Flex** is an optional reply-writing choice. Both generation and verification
+use OpenRouter's Flex endpoint, with reasoning disabled and JSON output requested.
+The server requires the response to confirm the Flex tier; it preserves pending
+work on capacity errors or an unexpected tier. There is no automatic upgrade to
+standard-price GPT-5.1. The published Flex token rates are half the corresponding
+standard rates; slower or unavailable capacity is possible. This uses ordinary
+requests, not the asynchronous Batch API or its 24-hour queue. See
+[OpenRouter service tiers](https://openrouter.ai/docs/guides/features/service-tiers).
+Changing the reply model does not change classification or rule-drafting models,
+and the fresh-install writing default remains free.
+
 The verifier also identifies personal questions or requests needing the owner's
 answer. Those messages receive `needs-attention` before the draft is saved, and
 that decision persists across append retries. Routine newsletters do not receive

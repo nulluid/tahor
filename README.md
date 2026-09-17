@@ -135,7 +135,11 @@ Natural-language matching shares the existing classification request, using up
 to 6,000 characters of message context when such rules are enabled. Uncertain
 matches stay pending review and do not produce a draft. Reply writing is a
 separate model request; free models remain the default, with paid prose models
-such as Euryale available as an optional choice in Settings.
+such as Euryale available as an optional choice in Settings. **GPT-5.1 Flex**
+is another writing option: half-price input/output tokens compared with standard
+GPT-5.1, with variable latency and availability. Tahor restricts it to the Flex
+endpoint and checks the returned tier; capacity failures stay retryable without
+switching to a more expensive writing route. Classification settings are separate.
 
 ## Choose the pace
 
