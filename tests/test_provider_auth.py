@@ -118,7 +118,8 @@ class SettingsAuthenticationTests(unittest.TestCase):
         self.expiry = '1970-01-01T01:00:00Z'
 
     def sequence(self):
-        return [(200, {'loginId': 'step-one', 'methods': [{'type': 'password'}]}),
+        return [(200, {'loginId': 'step-one', 'methods': [{'type': 'password'}],
+                       'nextUrl': 'https://phl.api.fastmail.com/auth/sudo'}),
                 (200, {'loginId': 'step-two', 'methods': [{'type': 'totp'}]}),
                 (201, {'sudoUntil': self.expiry})]
 
@@ -127,8 +128,10 @@ class SettingsAuthenticationTests(unittest.TestCase):
         with patch.object(self.auth, 'request', side_effect=self.sequence()) as request:
             self.auth.ensure_settings_auth()
         self.assertEqual([c.args[2]['type'] for c in request.call_args_list], ['start', 'password', 'totp'])
+        self.assertEqual(request.call_args_list[0].args[1], 'https://api.fastmail.com/auth/sudo')
+        self.assertEqual([call.args[1] for call in request.call_args_list[1:]],
+                         ['https://phl.api.fastmail.com/auth/sudo'] * 2)
         for call in request.call_args_list:
-            self.assertEqual(call.args[1], 'https://phl.api.fastmail.com/auth/sudo')
             self.assertEqual(call.kwargs['token'], SESSION['accessToken'])
         self.assertEqual(request.call_args_list[1].args[2]['value'], CREDENTIALS['password'])
         self.assertEqual(request.call_args_list[2].args[2]['value'], '287082')

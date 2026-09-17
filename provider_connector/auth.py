@@ -246,8 +246,9 @@ class FastmailAuth:
         attempt = {'revision': revision, 'blocked': False, 'next_attempt': now + 900}
         self.auth_state['settings_attempt'] = attempt
         self.save()
-        parsed = urlsplit(endpoint(self.session['apiUrl'], '/jmap/api/'))
-        url = parsed.scheme + '://' + parsed.netloc + '/auth/sudo'
+        # Fastmail's web client starts settings authorization at its global
+        # API origin, then follows only allowlisted nextUrl challenge locations.
+        url = 'https://api.fastmail.com/auth/sudo'
         body = {'type': 'start'}
         try:
             for step in ('start', 'password', 'totp'):
