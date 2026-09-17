@@ -408,7 +408,7 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tahor — classification mode</title>
+<title>Tahor — Settings</title>
 <link rel="icon" type="image/svg+xml" href="{icon}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -418,13 +418,10 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
 <body>
 <main>
 {header}
-<h1>Classification mode</h1>
+<h1>Settings</h1>
+<h2>Mail classification</h2>
 {status_line}
-<form method="post" action="/settings">
-  <div class="mode-options">
-    {mode_cards}
-  </div>
-</form>
+{classification_ai_settings}
 <section>
 <h2>Time in the inbox</h2>
 <p class="hint">Keep read and unread messages in the inbox before filing them into folders. These delays run from delivery and do not delay classification, trash deletion, or retention cleanup.</p>
@@ -447,13 +444,9 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
 <p class="hint">Turning this off stops future synchronization; installed rules remain. Unblock domains while enabled to remove their Tahor rules. Sign-in credentials never enter this page.</p>
 </section>
 <section>
-<h2>Rule drafting model</h2>
-<p class="hint">Used when you submit a free-text rule below on the main page. This runs rarely, so it's worth spending on quality over cost.</p>
-<form method="post" action="/settings">
-  <div class="mode-options">
-    {rule_model_cards}
-  </div>
-</form>
+<h2>AI rule drafting</h2>
+<p class="hint">Turn a free-text instruction into a proposed mailbox rule. Review the exact action or diff before applying it. Manually entered reply rules remain available when this AI task is disabled.</p>
+{rule_ai_settings}
 </section>
 <section>
 <h2 id="reply-rules">Reply rules</h2>
@@ -471,19 +464,9 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
   <button type="submit" class="primary">Save reply rule</button>
 </form>
 </details>
-<p class="hint">Model used to write and verify these replies. Choose a model known for natural English prose; each reply requires multiple model calls.</p>
-<form method="post" action="/settings">
-  <div class="mode-options">
-    {reply_model_cards}
-  </div>
-</form>
-<h3>Free backup for reply writing</h3>
-<p class="hint">If the primary writer is unavailable, use this free model for both writing and verification. Retry the primary on new drafting work after a five-minute cooldown. A rejected reply stays pending; Tahor never substitutes another paid model. Disable backup to keep work pending until the primary recovers.</p>
-<p class="hint">Writing is disabled until you choose a model. All available routes require provider zero data retention and prohibit data collection; if no eligible endpoint is available, work stays pending. Free backups are optional. Retired or unverified routes are disabled rather than replaced silently.</p>
-<form method="post" action="/settings">
-  <label>Free backup model <select name="reply_backup_model">{reply_backup_options}</select></label>
-  <button type="submit">Save free backup</button>
-</form>
+<h3>Reply writing and verification</h3>
+<p class="hint">One policy controls both the writer and verifier for each attempt. Drafts stay in your mailbox for your review; nothing sends automatically.</p>
+{reply_ai_settings}
 </section>
 </main>
 </body>
@@ -729,56 +712,70 @@ def index():
     )
 
 
-MODE_LABELS = {"free": "Free", "paid": "Paid", "auto": "Auto"}
-MODE_DESCRIPTIONS = {
-    "free": "No paid classification requests. Speed and availability depend on the provider’s free quota.",
-    "paid": "Paid capacity for clearing a backlog faster. Provider usage charges apply; failed requests can temporarily fall back to free when that route is enabled.",
-    "auto": "Balances free and paid capacity using estimated backlog and throughput. The one-hour target is an estimate, not a guarantee.",
-}
-
-
 def _settings_status_line(current_mode):
-    backlog_estimate, _ = mailbox_settings.get_cached_backlog(mailbox_settings.BACKLOG_REFRESH_SECONDS)
-    if backlog_estimate is None:
-        return ""
-    free_rate = mailbox_settings.recent_free_rate()
-    if free_rate <= 0:
-        return ""
-    hours_at_free = backlog_estimate / free_rate / 3600
+    backlog, _ = mailbox_settings.get_cached_backlog(mailbox_settings.BACKLOG_REFRESH_SECONDS)
+    if backlog is None:
+        return ''
+    return (f'<p class="hint">Backlog estimate: approximately {int(backlog)} messages. '
+            'The Status page shows actual processing and retries; queue completion estimates are not guarantees.</p>')
 
-    if current_mode == "paid":
-        return (
-            f'<p class="hint">Backlog estimate: ~{backlog_estimate} messages. '
-            f"Paid mode is selected. The Status page shows actual processing and retries.</p>"
-        )
-    if current_mode == "free":
-        return (
-            f'<p class="hint">Backlog estimate: ~{backlog_estimate} messages, '
-            f"would clear in ~{hours_at_free:.1f}h at the current free rate.</p>"
-        )
 
-    free_count, paid_count = mailbox_settings.decide_backend_split(
-        backlog_estimate, free_rate, mailbox_settings.DISPLAY_BATCH_SIZE
-    )
-    if paid_count == 0:
-        return (
-            f'<p class="hint">Auto mode: currently running free (no paid spend), '
-            f"backlog (~{backlog_estimate} messages) would clear in ~{hours_at_free:.1f}h at the free rate.</p>"
-        )
-    paid_fraction = paid_count / mailbox_settings.DISPLAY_BATCH_SIZE
-    dollars_per_hour = paid_fraction * mailbox_settings.PAID_RATE_MSGS_PER_SEC * 3600 * mailbox_settings.COST_PER_PAID_MSG
-    return (
-        f'<p class="hint">Auto mode: currently blending in paid (~{paid_fraction * 100:.0f}% of each batch), '
-        f"roughly ${dollars_per_hour:.2f}/hour in paid spend to keep the backlog "
-        f"(~{backlog_estimate} messages) under an hour.</p>"
-    )
+AI_POLICY_OPTIONS = (
+    ('paid_only', 'Always paid', 'Use only the selected paid model. Provider failures stay pending and retry; never use a free model.'),
+    ('paid', 'Paid with free fallback', 'Use paid normally. Use the free model only when the paid provider fails, then periodically retry paid.'),
+    ('auto', 'Balanced', 'Start free. Temporarily use paid if free is unavailable or the estimated queue exceeds four hours; return to free afterward.'),
+    ('free', 'Always free', 'Use only the selected free model. Errors stay pending and retry; never call a paid model.'),
+)
+
+
+def render_ai_task_settings(task):
+    policy = mailbox_settings.get_ai_policy(task)
+    models = mailbox_settings.get_ai_models(task)
+    enabled = mailbox_settings.is_ai_enabled(task)
+    cards = ''.join(
+        f'<label class="card mode-option{" active" if key == policy else ""}">'
+        f'<div class="mode-option-head"><input type="radio" name="ai_policy" value="{key}"{" checked" if key == policy else ""}>'
+        f'<span class="summary">{label}</span></div><p class="context">{description}</p></label>'
+        for key, label, description in AI_POLICY_OPTIONS)
+    if task == 'classification':
+        controls = '<p class="hint">Paid model: Gemini 3.8 Flash. Free model: Ling 3.0 Flash VL.</p>'
+        caution = 'In a selected 24-message test, the best tested free classifier wrongly trashed five messages, including medical and family correspondence. This is a small test, not an accuracy guarantee; choose a policy that fits the risk of losing useful mail.'
+        import classify
+        if not classify.free_classification_enabled():
+            controls += '<p class="hint">Free classification is disabled by the server configuration. Policies that require it cannot be selected.</p>'
+    else:
+        registry = mailbox_settings.REPLY_MODELS if task == 'reply' else mailbox_settings.RULE_MODELS
+        def choices(tier):
+            entries = [(key, value) for key, value in registry.items() if (key == 'none' and tier == 'paid') or (key != 'none' and value['model'].endswith(':free') == (tier == 'free'))]
+            return ''.join(f'<option value="{html(key)}"{" selected" if key == models[tier] else ""}>{html(value["label"])}</option>' for key, value in entries)
+        controls = (f'<p><label>Paid model <select name="paid_model">{choices("paid")}</select></label></p>'
+                    f'<p><label>Free model <select name="free_model">{choices("free")}</select></label></p>'
+                    '<p class="hint">Selecting Disabled for the paid model disables this writing task, regardless of policy. Choosing a paid model makes it available; Always free still never calls it.</p>')
+        caution = ('Free reply drafts can contain unsupported promises, incorrect roles, or invented details even after model verification. Review every draft before sending.' if task == 'reply' else
+                   'In an eight-instruction test, the free rule model proposed the wrong folder once. Review every proposed action and diff; model validation does not establish your intent.')
+    status = 'Enabled' if enabled else 'Disabled'
+    return (f'<form method="post" action="/settings" class="ai-task-settings" data-ai-task="{task}">'
+            f'<input type="hidden" name="ai_task" value="{task}"><p><strong>{status}</strong></p>'
+            f'<div class="mode-options">{cards}</div>{controls}'
+            f'<p class="hint">{caution}</p><p class="hint">All hosted routes require zero data retention and prohibit data collection. The free route is restricted to Novita; privacy routing does not guarantee answer quality.</p>'
+            '<button type="submit" class="primary">Save AI settings</button></form>')
 
 
 @app.route("/settings", methods=["GET", "POST"])
 @login_required
 def settings_page():
     if request.method == "POST":
-        if "inbox_grace" in request.form:
+        if "ai_task" in request.form:
+            task = request.form.get('ai_task', '')
+            policy = request.form.get('ai_policy', '')
+            try:
+                import classify
+                if task == 'classification' and policy in ('auto', 'free') and not classify.free_classification_enabled():
+                    raise ValueError('Free classification is disabled by the server configuration.')
+                mailbox_settings.set_ai_task_settings(task, policy, paid_model=request.form.get('paid_model'), free_model=request.form.get('free_model'))
+            except ValueError as exc:
+                abort(400, str(exc))
+        elif "inbox_grace" in request.form:
             try:
                 mailbox_settings.set_inbox_grace_days(request.form.get("inbox_read_days", ""), request.form.get("inbox_unread_days", ""))
             except ValueError as exc:
@@ -814,49 +811,6 @@ def settings_page():
         return redirect("/settings")
 
     current_mode = mailbox_settings.get_classify_mode()
-    import classify
-    free_available = classify.free_classification_enabled()
-    mode_cards = "".join(
-        MODE_OPTION.format(
-            field="classify_mode",
-            value=m,
-            label=MODE_LABELS[m],
-            description=MODE_DESCRIPTIONS[m] + (" Free classification is disabled by the server configuration." if m in ("free", "auto") and not free_available else ""),
-            active_class=" active" if m == current_mode else "",
-            checked=" checked" if m == current_mode else "",
-            active_badge='<span class="count">current</span>' if m == current_mode else "",
-        )
-        for m in mailbox_settings.MODES
-    )
-
-    current_rule_model = mailbox_settings.get_rule_model()
-    rule_model_cards = "".join(
-        MODE_OPTION.format(
-            field="rule_model",
-            value=key,
-            label=backend["label"],
-            description=f"Model: {backend['model']}",
-            active_class=" active" if key == current_rule_model else "",
-            checked=" checked" if key == current_rule_model else "",
-            active_badge='<span class="count">current</span>' if key == current_rule_model else "",
-        )
-        for key, backend in mailbox_settings.RULE_MODELS.items()
-    )
-
-    current_reply_model = mailbox_settings.get_reply_model()
-    reply_model_cards = "".join(
-        MODE_OPTION.format(
-            field="reply_model",
-            value=key,
-            label=backend["label"],
-            description=f"Model: {backend['model']}",
-            active_class=" active" if key == current_reply_model else "",
-            checked=" checked" if key == current_reply_model else "",
-            active_badge='<span class="count">current</span>' if key == current_reply_model else "",
-        )
-        for key, backend in mailbox_settings.REPLY_MODELS.items()
-    )
-
     provider = provider_bridge.status()
     return SETTINGS_PAGE_TEMPLATE.format(
         icon=TAHOR_ICON,
@@ -865,10 +819,9 @@ def settings_page():
         inbox_read_days=mailbox_settings.get_inbox_grace_days()["read"],
         inbox_unread_days=mailbox_settings.get_inbox_grace_days()["unread"],
         status_line=_settings_status_line(current_mode),
-        mode_cards=mode_cards,
-        rule_model_cards=rule_model_cards,
-        reply_model_cards=reply_model_cards,
-        reply_backup_options=('<option value="none"'+(' selected' if mailbox_settings.get_reply_backup_model() == 'none' else '')+'>Disabled — keep replies pending</option>')+"".join(f'<option value="{html(key)}"{" selected" if key == mailbox_settings.get_reply_backup_model() else ""}>{html(backend["label"])}</option>' for key, backend in mailbox_settings.free_reply_models().items()),
+        classification_ai_settings=render_ai_task_settings('classification'),
+        rule_ai_settings=render_ai_task_settings('rule'),
+        reply_ai_settings=render_ai_task_settings('reply'),
         reply_rules_list=render_reply_rules(),
         provider_status=html(provider['label']),
         provider_next_value='0' if provider['enabled'] else '1',

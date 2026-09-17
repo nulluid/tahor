@@ -27,9 +27,9 @@ class WebActionTests(AppTestCase):
         self.assertEqual(self.post('/settings', reply_backup_model='gpt5').status_code, 400)
         self.assertEqual(settings.get_reply_backup_model(), 'ling-free')
         page = self.client.get('/settings').get_data(as_text=True)
-        self.assertIn('Free backup for reply writing', page)
-        self.assertIn('name="reply_backup_model"', page)
-        self.assertIn('Disabled — keep replies pending', page)
+        self.assertIn('Reply writing and verification', page)
+        self.assertIn('name="free_model"', page)
+        self.assertIn('Always free', page)
         self.assertEqual(self.post('/settings', reply_backup_model='none').status_code, 302)
         self.assertEqual(settings.get_reply_backup_model(), 'none')
 
