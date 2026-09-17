@@ -370,8 +370,11 @@ def _process_new_mail(conn):
             # A reply already sent by the owner is handled without changing their read state.
             if location != 'Sent':
                 store_checked(conn, uid, '-FLAGS.SILENT', '(\\Seen)')
-            store_checked(conn, uid, '+FLAGS.SILENT', '('+DRAFTED_KEYWORD+')')
+            # Persist completion before hiding the source from future searches.
+            # If SQLite fails, reconciliation can still find the appended draft;
+            # if the final STORE fails, the completed journal restores its marker.
             tahor_db.finish_reply_draft(draft_key)
+            store_checked(conn, uid, '+FLAGS.SILENT', '('+DRAFTED_KEYWORD+')')
             if location != 'Sent':
                 created.append({'subject': subject, 'to': recipient})
         except Exception:

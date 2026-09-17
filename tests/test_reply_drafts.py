@@ -97,6 +97,58 @@ class DraftTests(unittest.TestCase):
         self.assertEqual(self.conn.append.call_args.args[:2], ('Drafts', '\\Draft'))
         self.assertFalse(any(call.args[0] in ('MOVE', 'COPY', 'EXPUNGE') for call in self.conn.uid.call_args_list))
 
+    def test_journal_failure_after_append_remains_searchable_and_reconciles(self):
+        self.conn.append.return_value = ('OK', [])
+        with patch.object(draft_replies, 'draft_exists', return_value=False), patch.object(draft_replies, 'draft_reply_body', return_value='Thank you.'), patch.object(draft_replies.tahor_db, 'finish_reply_draft', side_effect=OSError('Database temporarily unavailable')):
+            self.assertEqual(draft_replies.process_new_mail(self.conn), [])
+        self.conn.append.assert_called_once()
+        self.assertFalse(any(call.args[0] == 'STORE' and call.args[-1] == '(' + draft_replies.DRAFTED_KEYWORD + ')' for call in self.conn.uid.call_args_list))
+        self.assertEqual(draft_replies.tahor_db.get_reply_draft_for_thread('<one@example.com>')['status'], 'preparing')
+        with patch.object(draft_replies, 'draft_exists', return_value='Drafts'), patch.object(draft_replies, 'draft_reply_body') as generate:
+            self.assertEqual(len(draft_replies.process_new_mail(self.conn)), 1)
+            generate.assert_not_called()
+        self.conn.append.assert_called_once()
+        self.assertEqual(draft_replies.tahor_db.get_reply_draft_for_thread('<one@example.com>')['status'], 'pending')
+
+    def test_final_source_marker_failure_recovers_from_completed_journal(self):
+        self.conn.append.return_value = ('OK', [])
+        def fail_marker(command, *args):
+            if command == 'STORE' and args[-1] == '(' + draft_replies.DRAFTED_KEYWORD + ')':
+                return 'NO', []
+            return self.command(command, *args)
+        self.conn.uid.side_effect = fail_marker
+        with patch.object(draft_replies, 'draft_exists', return_value=False), patch.object(draft_replies, 'draft_reply_body', return_value='Thank you.'):
+            self.assertEqual(draft_replies.process_new_mail(self.conn), [])
+        self.assertEqual(draft_replies.tahor_db.get_reply_draft_for_thread('<one@example.com>')['status'], 'pending')
+        self.conn.uid.side_effect = self.command
+        with patch.object(draft_replies, 'draft_reply_body') as generate:
+            self.assertEqual(draft_replies.process_new_mail(self.conn), [])
+            generate.assert_not_called()
+        self.conn.append.assert_called_once()
+        self.conn.uid.assert_any_call('STORE', b'42', '+FLAGS.SILENT', '(' + draft_replies.DRAFTED_KEYWORD + ')')
+
+    def test_pausing_rule_during_generation_prevents_append(self):
+        def generate(*args, **kwargs):
+            draft_replies.reply_rules.get_rules.return_value = []
+            return 'Thank you.'
+        with patch.object(draft_replies, 'draft_reply_body', side_effect=generate):
+            self.assertEqual(draft_replies.process_new_mail(self.conn), [])
+        self.conn.append.assert_not_called()
+
+    def test_new_personal_followup_gets_one_new_draft_without_repeating_previous(self):
+        self.conn.append.return_value = ('OK', [])
+        with patch.object(draft_replies, 'draft_exists', return_value=False), patch.object(draft_replies, 'draft_reply_body', return_value='Thank you.') as generate:
+            self.assertEqual(len(draft_replies.process_new_mail(self.conn)), 1)
+            self.assertEqual(draft_replies.process_new_mail(self.conn), [])
+            self.raw = self.raw.replace(b'Message-ID: <one@example.com>', b'Message-ID: <followup@example.com>\r\nReferences: <one@example.com>')
+            self.assertEqual(len(draft_replies.process_new_mail(self.conn)), 1)
+            self.assertEqual(draft_replies.process_new_mail(self.conn), [])
+            self.assertEqual(generate.call_count, 2)
+        self.assertEqual(self.conn.append.call_count, 2)
+        messages = [email.message_from_bytes(call.args[-1]) for call in self.conn.append.call_args_list]
+        self.assertNotEqual(messages[0]['Message-ID'], messages[1]['Message-ID'])
+        self.assertEqual(messages[1]['In-Reply-To'], '<followup@example.com>')
+
     def test_excluded_sender_and_expired_source_are_not_drafted(self):
         with patch.object(draft_replies, 'draft_reply_body') as generate:
             self.rule['excluded_senders'] = ['person@example.com']
