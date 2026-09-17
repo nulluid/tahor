@@ -231,9 +231,10 @@ health alerts and a daily summary, enable the separate
   Initial matching is bounded to recent inbox mail; the normal three-day read
   and seven-day unread filing windows still govern drafting eligibility.
   Uncertain matches wait for review rather than generating a reply.
-  Free reply models are the default. Optionally select a paid prose model such
-  as Euryale in Settings; reply-model billing is separate from classification mode.
-- **Free-text rules:** submit an instruction from the decision queue. A model can
+  Reply writing starts disabled. Select a private model and an optional free backup
+  in Settings; reply-model billing is separate from classification mode.
+- **Free-text rules:** first select an AI rule model in Settings, then submit an
+  instruction from the decision queue. A model can
   update routing or classification rules; failures stay visible for retry.
   Instructions that require new code stay pending and are recorded for manual
   implementation; submitting one does not change application code.

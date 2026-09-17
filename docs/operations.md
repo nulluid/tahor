@@ -53,8 +53,8 @@ only when Reply-To is absent. Syntax and DNS checks cannot confirm
 that a specific remote mailbox accepts replies. Unsupported or unsafe reply
 addresses do not result in a draft.
 
-Free models remain the default for writing. You can select a paid prose model
-such as Euryale independently of classification speed. Treat generated text as
+AI writing starts disabled until you choose a model in Settings. You can select
+a private writing route independently of classification speed. Treat generated text as
 a draft: check factual claims, requested commitments, and the recipient before
 sending. A prompt cannot make unavailable personal facts known to the model.
 
