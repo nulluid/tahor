@@ -32,7 +32,7 @@ class WritingPrivacyTests(unittest.TestCase):
     def test_rule_request_enforces_private_route(self):
         response = MagicMock()
         response.__enter__.return_value = response
-        response.read.return_value = json.dumps({'choices':[{'message':{'content':'{}'}}]}).encode()
+        response.read1.side_effect = [json.dumps({'choices':[{'message':{'content':'{}'}}]}).encode(), b'']
         with patch.object(mailbox_settings, 'get_rule_model', return_value='gpt5'), patch.dict(apply.os.environ, {'OPENROUTER_API_KEY':'synthetic'}), patch.object(apply.urllib.request, 'urlopen', return_value=response) as network:
             apply.rule_model_call('synthetic directions')
         self.assertEqual(json.loads(network.call_args.args[0].data)['provider'], {'zdr':True, 'data_collection':'deny'})

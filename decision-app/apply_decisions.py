@@ -188,6 +188,36 @@ def rule_base_hash(buckets, prompt, instruction):
     return hashlib.sha256(json.dumps([buckets, prompt, instruction]).encode()).hexdigest()
 
 
+def validate_rule_proposal(result):
+    allowed = {'kind', 'explanation', 'sender_rule', 'vendor_buckets_json', 'prompt_txt'}
+    if not isinstance(result, dict) or set(result) - allowed:
+        raise ValueError('Model returned an invalid rule proposal')
+    if 'explanation' in result and not isinstance(result['explanation'], str):
+        raise ValueError('Model returned an invalid explanation')
+    kind = result.get('kind')
+    if kind == 'sender_rule':
+        sender = result.get('sender_rule')
+        if (not isinstance(sender, dict) or set(sender) != {'domain', 'rule', 'attempt_unsubscribe'}
+                or not isinstance(sender['domain'], str)
+                or not isinstance(sender['rule'], str)
+                or sender['rule'] not in tahor_db.SENDER_RULES
+                or type(sender['attempt_unsubscribe']) is not bool
+                or result.get('vendor_buckets_json') is not None
+                or result.get('prompt_txt') is not None):
+            raise ValueError('Sender proposals must contain only an exact domain, supported action, and boolean unsubscribe choice')
+    elif kind == 'file_edit':
+        if result.get('sender_rule') is not None:
+            raise ValueError('File proposals cannot also contain sender actions')
+        changes = [result.get('vendor_buckets_json'), result.get('prompt_txt')]
+        if all(change is None for change in changes) or any(change is not None and not isinstance(change, str) for change in changes):
+            raise ValueError('File proposals must contain text changes')
+    elif kind == 'needs_code_change':
+        if any(result.get(key) is not None for key in ('sender_rule', 'vendor_buckets_json', 'prompt_txt')):
+            raise ValueError('Code-change proposals cannot contain actions to apply')
+    else:
+        raise ValueError('The model did not return an actionable rule')
+
+
 def validate_explicit_sender_target(instruction, sender_rule):
     domain = sender_rule.get('domain', '').strip().lower()
     generate_sieve.domain_test(domain)
@@ -240,6 +270,7 @@ def apply_free_text_rule(row, resolution):
     proposal = context.get('rule_proposal')
     if proposal:
         result = proposal['result']
+        validate_rule_proposal(result)
         if proposal.get('base_hash') != rule_base_hash(current_buckets, current_prompt, text):
             original = proposal.get('base_files', {})
             approved = resolution.get('approved_proposal') == proposal.get('token')
@@ -254,6 +285,7 @@ def apply_free_text_rule(row, resolution):
                 raise ValueError('Rules changed since this preview; reject it and submit a fresh instruction')
     else:
         result = rule_model_call(user_content)
+        validate_rule_proposal(result)
     kind = result.get("kind")
 
     if kind == "sender_rule" and result.get("sender_rule"):
@@ -261,7 +293,7 @@ def apply_free_text_rule(row, resolution):
         require_rule_approval(row, resolution, context, result, current_buckets, current_prompt, text)
         return apply_sender_rule(result["sender_rule"])
 
-    if kind == "needs_code_change" or result.get("needs_code_change"):
+    if kind == "needs_code_change":
         flag_path = DATA_DIR / "needs_code_change.md"
         existing = flag_path.read_text() if flag_path.exists() else "# Rules needing a code change\n\n"
         heading = f"## #{row['id']}:"

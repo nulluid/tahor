@@ -679,7 +679,13 @@ def index():
                 proposal = None
             if proposal:
                 result = proposal['result']
-                details = proposal['diff'] or json.dumps(result.get('sender_rule'), indent=2)
+                if result.get('kind') == 'sender_rule':
+                    sender = result.get('sender_rule') or {}
+                    details = (f"Domain: {sender.get('domain', '')}\n"
+                               f"Action: {sender.get('rule', '')}\n"
+                               f"Attempt unsubscribe: {'Yes' if sender.get('attempt_unsubscribe') is True else 'No'}")
+                else:
+                    details = proposal['diff']
                 cards.append(f'<div class="card"><div class="summary">{html(row["summary"])}</div><p>Review this model proposal before changing your rules.</p><pre style="white-space:pre-wrap">{html(details)}</pre><form method="post" action="/review-rule/{row["id"]}"><input type="hidden" name="proposal" value="{html(proposal["token"])}"><button name="action" value="approve">Approve these changes</button><button name="action" value="reject">Reject proposal</button></form></div>')
             else:
                 cards.append(f'<div class="card"><div class="summary">{html(row["summary"])}</div><form method="post" action="/retry-rule/{row["id"]}"><button type="submit">Retry rule</button></form></div>')

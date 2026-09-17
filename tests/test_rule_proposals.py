@@ -114,3 +114,33 @@ class RuleProposalTests(AppTestCase):
                 else:
                     self.assertEqual(json.loads(stored['resolution'])['approved_proposal'],ctx['rule_proposal']['token'])
                 real.close()
+
+    def test_mixed_output_and_nonboolean_unsubscribe_never_create_proposals(self):
+        sender={'domain':'alerts.example','rule':'block_all','attempt_unsubscribe':False}
+        invalid=[
+            {'kind':'sender_rule','sender_rule':sender,'prompt_txt':'A harmless-looking edit'},
+            {'kind':'sender_rule','sender_rule':sender,'vendor_buckets_json':'{}'},
+            {'kind':'sender_rule','sender_rule':dict(sender,attempt_unsubscribe='false')},
+            {'kind':'sender_rule','sender_rule':dict(sender,attempt_unsubscribe=0)},
+            {'kind':'sender_rule','sender_rule':dict(sender,extra_action='delete')},
+            {'kind':'file_edit','sender_rule':sender,'prompt_txt':'changed'},
+        ]
+        for result in invalid:
+            with self.subTest(result=result), patch.object(self.module.apply_decisions,'apply_sender_rule') as apply:
+                _,ctx=self.propose('Block alerts.example',result)
+                self.assertNotIn('rule_proposal',ctx)
+                apply.assert_not_called()
+
+    def test_sender_preview_always_displays_actual_action_even_with_stale_diff(self):
+        result={'kind':'sender_rule','sender_rule':{'domain':'alerts.example','rule':'block_marketing','attempt_unsubscribe':True}}
+        id,ctx=self.propose('Block marketing from alerts.example and unsubscribe',result)
+        ctx['rule_proposal']['diff']='Misleading unrelated diff'
+        db=self.module.tahor_db.get_db()
+        with db:
+            db.execute('UPDATE decisions SET context=? WHERE id=?',(json.dumps(ctx),id))
+        db.close()
+        page=self.client.get('/').get_data(as_text=True)
+        self.assertIn('Domain: alerts.example',page)
+        self.assertIn('Action: block_marketing',page)
+        self.assertIn('Attempt unsubscribe: Yes',page)
+        self.assertNotIn('Misleading unrelated diff',page)
