@@ -25,6 +25,18 @@ MODES = ("free", "paid", "auto")
 # Rule drafting is rare and judgment-heavy, so it's worth a stronger model than routine classification uses.
 RULE_MODELS = {
     "none": {"label": "Disabled — choose a private model to enable", "model": "none", "url": "", "auth_env": ""},
+    "grok-4.6": {
+        "label": "Grok 4.6 (via OpenRouter) — rule drafting with a ZDR route",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "model": "x-ai/grok-4.6",
+        "auth_env": "OPENROUTER_API_KEY",
+        "request_options": {
+            "reasoning": {"effort": "low"},
+            "max_tokens": 4096,
+            "provider": {"only": ["xai/zdr"], "allow_fallbacks": False,
+                         "zdr": True, "data_collection": "deny"},
+        },
+    },
     "claude-opus": {
         "label": "Claude Opus 5 (via OpenRouter) — best judgment, highest cost",
         "url": "https://openrouter.ai/api/v1/chat/completions",
