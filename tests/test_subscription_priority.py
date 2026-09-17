@@ -25,7 +25,7 @@ class PriorityBrowserTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('node') and os.environ.get('TAHOR_JSDOM_MODULE'), 'Set TAHOR_JSDOM_MODULE for DOM tests')
     def test_arriving_recommendations_sort_stably_and_preserve_visible_card(self):
         script=subscription_bulk_ui.SCRIPT.removeprefix('<script>').removesuffix('</script>')
-        harness=r''' 
+        harness=r'''
 const assert=require('node:assert/strict');const {JSDOM}=require(process.env.TAHOR_JSDOM_MODULE);
 const card=id=>`<div data-subscription-id="${id}"><p class="subscription-result"></p><fieldset><input type="radio" name="r${id}" value="" checked><input type="radio" name="r${id}" value="dismiss"><input type="radio" name="r${id}" value="unsubscribe_block_marketing"></fieldset></div>`;
 const dom=new JSDOM(BAR.replace('<form ','<input name="csrf_token" value="csrf"><form ')+'<div id="subscription-cards">'+[1,2,3].map(card).join('')+'</div>',{url:'https://example.test/unsubscribe',runScripts:'outside-only'});
