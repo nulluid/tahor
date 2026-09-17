@@ -80,6 +80,9 @@ def _refresh_sieve():
                 conn.execute("INSERT INTO decisions(kind,summary,context,status,created_at) VALUES ('sieve_update', 'Sieve filter update recommended', ?, 'pending', ?)", (f'{len(block_all)} provider-side domain block(s). Marketing-only blocks stay in the classifier. Review and install this script in your mail provider.', now))
         finally:
             conn.close()
+    import provider_bridge
+    if provider_bridge.paths() is not None:
+        provider_bridge.publish()
     commit_data(DATA_DIR, 'update sender blocking rules', ['sieve.txt'])
     return changed
 

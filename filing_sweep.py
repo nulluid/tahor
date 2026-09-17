@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 import config
 import tahor_db
 import mailbox_settings
+import reply_rules
 from mailbox_paths import list_mailboxes, quote_mailbox
 
 CATEGORY_KEYWORDS = ["category-receipt", "category-statement", "category-government-tax"]
@@ -89,7 +90,11 @@ def mark_filed_read(conn, mailbox, dry_run=False):
     days = mailbox_settings.get_inbox_grace_days()["unread"]
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%d-%b-%Y")
     criteria = ("UNSEEN", "BEFORE", cutoff) if days else ("UNSEEN",)
-    candidates = sorted(eligible_uids(conn, criteria), key=int)
+    candidates = eligible_uids(conn, criteria)
+    for rule in reply_rules.get_rules():
+        if rule.get('filing_folder'):
+            candidates.update(reply_filing_uids(conn, rule, criteria))
+    candidates = sorted(candidates, key=int)
     if dry_run:
         return len(candidates)
     changed = 0
@@ -119,6 +124,29 @@ def reconcile_filed_mail(conn, dry_run=False):
     return total, failures
 
 
+def reply_filing_uids(conn, rule, criteria):
+    # A stable rule ID alone can describe a match under an obsolete owner policy.
+    status, rows = conn.uid('SEARCH', None, *criteria, 'KEYWORD', reply_rules.keyword(rule),
+                            'KEYWORD', reply_rules.scan_keyword(rule), *PROTECTED, *CLASSIFIED)
+    if status != 'OK':
+        raise RuntimeError('Reply-rule filing search failed')
+    return set(rows[0].split() if rows and rows[0] else [])
+
+
+def reply_filing_destinations(conn, read_criteria, unread_criteria):
+    destinations = {}
+    for rule in reply_rules.get_rules():
+        target = rule.get('filing_folder', '')
+        if not target:
+            continue
+        for criteria in (read_criteria, unread_criteria):
+            for uid in reply_filing_uids(conn, rule, criteria):
+                if uid in destinations and destinations[uid] != target:
+                    raise RuntimeError('Reply rules disagree on a filing destination; messages preserved')
+                destinations[uid] = target
+    return destinations
+
+
 def main():
     dry_run = "--dry-run" in sys.argv
     buckets = config.vendor_buckets()
@@ -138,6 +166,8 @@ def main():
     unread_criteria = ("UNSEEN", "BEFORE", unread_cutoff) if unread_min_age > 0 else ("UNSEEN",)
     try:
         candidates = eligible_uids(conn, read_criteria) | eligible_uids(conn, unread_criteria)
+        reply_destinations = reply_filing_destinations(conn, read_criteria, unread_criteria)
+        candidates |= set(reply_destinations)
     except Exception:
         conn.logout()
         raise
@@ -146,6 +176,9 @@ def main():
     unsorted_labels = set()
     failures = 0
     for uid in candidates:
+        if uid in reply_destinations:
+            by_dest[reply_destinations[uid]].append(uid)
+            continue
         typ, msg_data = conn.uid("FETCH", uid, "(BODY.PEEK[HEADER.FIELDS (FROM)])")
         if typ != "OK" or not msg_data or not msg_data[0]:
             failures += 1

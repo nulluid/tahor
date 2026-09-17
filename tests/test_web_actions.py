@@ -150,8 +150,38 @@ class WebActionTests(AppTestCase):
         db = self.module.tahor_db.get_db()
         id = db.execute('SELECT id FROM reply_drafts').fetchone()['id']
         db.close()
-        self.assertEqual(self.post(f'/dismiss-draft/{id}').status_code, 302)
+        self.assertEqual(self.post(f'/dismiss-draft/{id}').status_code, 404)
         self.assertNotIn('Draft text', self.client.get('/drafts').get_data(as_text=True))
+
+
+    def test_reply_rules_can_be_created_edited_paused_and_excluded(self):
+        rule_module = self.module.reply_rules
+        original = self.module.mailbox_settings.load_settings()
+        self.addCleanup(self.module.mailbox_settings.save_settings, original)
+        response = self.post('/reply-rules/save', name='Community updates', match_type='natural_language', match='Personal updates from community volunteers', instructions='Thank them and mention a request.', signature='Regards,\nExample Owner', max_sentences='3')
+        self.assertEqual(response.status_code, 302)
+        rule = next(r for r in rule_module.get_rules() if r['name']=='Community updates')
+        self.module.tahor_db.record_reply_rule_match(rule['id'], '<sample@example.com>', 'volunteer@example.com')
+        page = self.client.get('/settings').get_data(as_text=True)
+        self.assertIn('Community updates', page)
+        self.assertIn('volunteer@example.com', page)
+        self.assertIn('Opt out', page)
+        self.assertEqual(self.post('/reply-rules/exclude', rule_id=rule['id'], sender='volunteer@example.com', excluded='1').status_code, 302)
+        self.assertIn('volunteer@example.com', next(r for r in rule_module.get_rules() if r['id']==rule['id'])['excluded_senders'])
+        self.assertEqual(self.post('/reply-rules/toggle', rule_id=rule['id'], enabled='0').status_code, 302)
+        self.assertFalse(any(r['id']==rule['id'] for r in rule_module.get_rules()))
+        self.assertEqual(self.post('/reply-rules/save', rule_id=rule['id'], name='Edited', match_type='natural_language', match='Community mail', instructions='Reply to their questions.', signature='', max_sentences='2').status_code, 302)
+        self.assertEqual(next(r for r in rule_module.get_rules() if r['id']==rule['id'])['max_sentences'], 2)
+        self.assertEqual(self.post('/reply-rules/save', name='Bad', match_type='natural_language', match='', instructions='', max_sentences='9').status_code, 400)
+
+    def test_reply_rule_content_is_escaped_and_forms_have_csrf(self):
+        original = self.module.mailbox_settings.load_settings()
+        self.addCleanup(self.module.mailbox_settings.save_settings, original)
+        self.module.reply_rules.save_rule('<script>alert(1)</script>', 'natural_language', '<img src=x>', 'Say hello.', '<b>Owner</b>')
+        page = self.client.get('/settings').get_data(as_text=True)
+        self.assertNotIn('<script>alert(1)</script>', page)
+        self.assertIn('&lt;script&gt;', page)
+        self.assertEqual(page.count('<form '), page.count('name="csrf_token"'))
 
 
     def test_unblock_updates_worker_and_sieve(self):
@@ -183,7 +213,8 @@ class WebActionTests(AppTestCase):
     def test_preparing_draft_is_visible_but_cannot_be_marked_reviewed(self):
         self.module.tahor_db.prepare_reply_draft('preparing-id', 'preparing-thread', 'person@example.com', 'Saved later', 'Please retry this draft.', 'test')
         page = self.client.get('/drafts').get_data(as_text=True)
-        self.assertIn('Waiting to save', page)
+        self.assertEqual(self.client.get('/drafts').location, '/settings#reply-rules')
+        self.assertNotIn('Please retry this draft.', page)
         self.assertNotIn('Mark reviewed', page)
 
     def test_status_requires_login_but_health_check_is_public(self):

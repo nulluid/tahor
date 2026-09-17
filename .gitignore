@@ -28,3 +28,8 @@ state/
 config.env
 *.pem
 *.key
+
+# Isolated provider credentials and journals
+credentials.json
+session.json
+provider-credentials*

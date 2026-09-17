@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tahor_db
+import reply_rules
 
 
 def sender_domain_of(email_addr):
@@ -51,15 +52,35 @@ def main():
     outrecs = json.loads(Path(f"{prefix}_out.json").read_text())
     envs = json.loads(Path(f"{prefix}_env.json").read_text())
 
+    active_reply_rules = {r["id"]: r for r in reply_rules.get_rules()}
     for r in outrecs:
         rec = inrecs.get(r["id"])
-        if not rec:
+        if not rec or r.get("action") == "error":
+            continue
+        versions = r.get('reply_rule_versions')
+        expected_versions = {key: rule.get('revision', key) for key, rule in active_reply_rules.items()}
+        if (active_reply_rules or versions is not None) and versions != expected_versions:
+            r.update(action='error', reason='Reply rules changed during classification; retry required')
             continue
         domain = sender_domain_of(rec["from"])
         rule = tahor_db.get_sender_rule(domain)
         if rule == "block_all" or (rule == "block_marketing" and r.get("category") == "marketing"):
             r["action"] = "trash"
             r["reason"] = f"sender rule: {rule}"
+
+        matches = [key for key in r.get('reply_rule_matches', []) if key in active_reply_rules]
+        uncertain = [key for key in r.get('reply_rule_uncertain', []) if key in active_reply_rules]
+        if r.get('action') != 'error' and (matches or uncertain):
+            # Reply protection takes precedence over an old marketing/domain block.
+            if r['action'] == 'trash':
+                r.update(action='keep', category='personal-correspondence', retention='standard', expense_type='n/a', needs_attention=False)
+            if r.get('retention') == 'transient':
+                r['retention'] = 'standard'
+            if uncertain:
+                r.update(action='mixed', retention='pending-review', needs_attention=True)
+            r['reply_rule_matches'], r['reply_rule_uncertain'] = matches, uncertain
+            for rule_id in matches:
+                tahor_db.record_reply_rule_match(rule_id, r['id'], rec['from'])
 
     classifications = {row["id"]: row for row in outrecs}
     for e in envs:
@@ -131,7 +152,12 @@ def main():
             add.append(f"expense-{r['expense_type']}")
         if r.get("needs_attention") is True:
             add.append("needs-attention")
-        ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]], "uid": msgid_to_uid.get(msgids[r["id"]]), "add": add})
+        if r.get('reply_rule_versions'):
+            add.extend(reply_rules.scan_keyword(rule) for rule in active_reply_rules.values())
+        if r.get('reply_rule_matches') or r.get('reply_rule_uncertain'):
+            add.append(reply_rules.PROTECTED_KEYWORD)
+            add.extend(reply_rules.keyword(active_reply_rules[key]) for key in r.get('reply_rule_matches', []) if key in active_reply_rules)
+        ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]], "uid": msgid_to_uid.get(msgids[r["id"]]), "add": add, "remove": ["delete-pending", "retention-transient"] if r.get("reply_rule_matches") else []})
     for r in trash_final:
         if r["id"] not in unmatched:
             ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]],

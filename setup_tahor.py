@@ -47,9 +47,10 @@ def write_units(directory, config, python):
         'tahor-filing': ('filing', ''),
         'tahor-retention': ('retention', ''),
         'tahor-healthcheck': ('status', '--check'),
+        'tahor-notifications': ('notify', ''),
     }
     for name, (command, suffix) in commands.items():
-        oneshot = command in ('filing', 'retention', 'status')
+        oneshot = command in ('filing', 'retention', 'status', 'notify')
         text = f'''[Unit]
 Description={name}
 After=network-online.target
@@ -65,7 +66,7 @@ NoNewPrivileges=true
         if not oneshot:
             text += 'Restart=always\nRestartSec=30\n\n[Install]\nWantedBy=default.target\n'
         (directory / (name + '.service')).write_text(text)
-    for name, schedule in (('tahor-filing', '*-*-* 09:00:00'), ('tahor-retention', '*-*-* 09:15:00'), ('tahor-healthcheck', '*:0/15')):
+    for name, schedule in (('tahor-filing', '*-*-* 09:00:00'), ('tahor-retention', '*-*-* 09:15:00'), ('tahor-healthcheck', '*:0/15'), ('tahor-notifications', '*:0/15')):
         (directory / (name + '.timer')).write_text(f'''[Unit]
 Description=Schedule {name}
 
@@ -108,6 +109,8 @@ def configure(args):
             'GOOGLE_CLIENT_ID': os.environ.get('GOOGLE_CLIENT_ID', ''),
             'GOOGLE_CLIENT_SECRET': os.environ.get('GOOGLE_CLIENT_SECRET', ''),
             'TAHOR_DATA_PUSH': '0', 'TAHOR_NOTIFY_DRAFTS': '0',
+            'TAHOR_NOTIFY_HEALTH': '0', 'TAHOR_NOTIFY_DIGEST': '0',
+            'TAHOR_NOTIFY_TIMEZONE': 'UTC', 'TAHOR_NOTIFY_HOUR': '9',
         }
         write_new(config_path, '# Private Tahor configuration. Never commit this file.\n' + ''.join(f'{key}={env_value(value)}\n' for key, value in values.items()))
     for source, destination in (('prompt.example.txt', 'prompt.txt'), ('vendor_buckets.example.json', 'vendor_buckets.json')):

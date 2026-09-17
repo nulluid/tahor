@@ -118,7 +118,9 @@ def extract_body_text(raw_bytes):
 
 
 def extract_snippet(raw_bytes):
-    return extract_body_text(raw_bytes)[:SNIPPET_MAX_CHARS]
+    import reply_rules
+    limit = 6000 if any(r['match_type'] == 'natural_language' for r in reply_rules.get_rules()) else SNIPPET_MAX_CHARS
+    return extract_body_text(raw_bytes)[:limit]
 
 
 def main():

@@ -157,9 +157,10 @@ To keep these running after logout, an administrator can enable lingering:
 sudo loginctl enable-linger "$USER"
 ```
 
-The services restart after failures. The draft watcher stays inactive until you
-add a reply trigger in Settings. A trigger should be a sender whose messages you
-actually want drafted, not an entire high-volume domain chosen just for testing.
+The services restart after failures. Drafting begins after you enable a reply
+rule in Settings. Choose a focused description of messages you actually want
+answered, or match a specific sender or domain. Existing sender triggers remain
+compatible.
 
 Check services and logs:
 
@@ -213,13 +214,25 @@ systemctl --user list-timers 'tahor-*'
 Filing runs at 09:00 and retention at 09:15 in the server’s timezone. The health
 check runs every fifteen minutes and exits nonzero when worker status is missing,
 stale, or retrying after failure. Inspect failures through systemd or connect them
-to your own monitoring. It does not send notification email by default.
+to your own monitoring. It does not send notification email by default. To opt into self-addressed
+health alerts and a daily summary, enable the separate
+[notification settings and timer](notifications.md).
 
 ## 6. Review optional features
 
-- **Reply drafts:** add a sender or domain in Settings, then choose a reply model.
-  Drafts appear in both the app and the mailbox’s Drafts folder. Optional summary
-  notifications require `TAHOR_NOTIFY_DRAFTS="1"` and SMTP credentials.
+- **Reply drafts:** open **Settings → Reply rules**. Give the rule a name, choose
+  natural-language, sender, or domain matching, and describe the reply’s content
+  and tone. Add a signature and choose one to three body sentences. Save the
+  rule, then expand its matched senders to exclude anyone you do not want to
+  answer. You can also set a filing folder for eligible low-attention matches.
+  Drafts appear in your mailbox’s Drafts folder, linked to the original message;
+  the original stays unread. Review, edit, and send in your email client.
+  There is no web draft editor and no automatic sending.
+  Initial matching is bounded to recent inbox mail; the normal three-day read
+  and seven-day unread filing windows still govern drafting eligibility.
+  Uncertain matches wait for review rather than generating a reply.
+  Free reply models are the default. Optionally select a paid prose model such
+  as Euryale in Settings; reply-model billing is separate from classification mode.
 - **Free-text rules:** submit an instruction from the decision queue. A model can
   update routing or classification rules; failures stay visible for retry.
   Instructions that require new code stay pending and are recorded for manual
@@ -228,6 +241,10 @@ to your own monitoring. It does not send notification email by default.
   blocking, review the generated Sieve proposal and install it in your provider’s
   Sieve editor. Removing a block also requires installing the updated proposal.
   Use **Refresh proposal** on the decisions page to retry a failed generation.
+  Fastmail users can alternatively install the optional
+  [isolated credential connector](fastmail-connector.md). It requires explicit
+  enrollment and account verification; the ordinary IMAP app password does not
+  authorize provider-settings management.
 - **Private version history:** initialize a private Git repository at `DATA_DIR`.
   Tahor commits configuration edits locally. `TAHOR_DATA_PUSH="1"` explicitly
   enables pushing to that repository’s configured origin.

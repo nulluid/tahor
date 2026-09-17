@@ -35,6 +35,8 @@ import apply_decisions
 import generate_sieve
 import runtime_status
 import config
+import reply_rules
+import provider_bridge
 import mailbox_settings
 import tahor_db
 
@@ -215,7 +217,6 @@ def tahor_header(current):
     links = [
         ("decisions", "/", "Pending decisions"),
         ("unsubscribe", "/unsubscribe", "Unsubscribe"),
-        ("drafts", "/drafts", "Drafts"),
         ("settings", "/settings", "Settings"),
         ("status", "/status", "Status"),
     ]
@@ -437,6 +438,15 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
 </form>
 </section>
 <section>
+<h2>Automatic provider rules</h2>
+<p class="hint">Optional high trust access: install whole-domain blocks in Fastmail before delivery. Marketing-only blocks stay in Tahor. Your administrator must enroll the isolated connector first.</p>
+<p>{provider_status}</p>
+<form method="post" action="/provider-sync">
+  <button name="enabled" value="{provider_next_value}" type="submit"{provider_disabled}>{provider_button}</button>
+</form>
+<p class="hint">Turning this off stops future synchronization; installed rules remain. Unblock domains while enabled to remove their Tahor rules. Sign-in credentials never enter this page.</p>
+</section>
+<section>
 <h2>Rule drafting model</h2>
 <p class="hint">Used when you submit a free-text rule below on the main page. This runs rarely, so it's worth spending on quality over cost.</p>
 <form method="post" action="/settings">
@@ -446,19 +456,21 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
 </form>
 </section>
 <section>
-<h2>Reply drafting</h2>
-<p class="hint">A message from any of these senders gets a drafted reply saved to Drafts for you to review and send yourself &mdash; nothing is ever sent automatically.</p>
-{reply_triggers_list}
-<form method="post" action="/add-reply-trigger">
-  <div class="fields">
-    <select name="trigger_type">
-      <option value="sender_email">Specific address</option>
-      <option value="sender_domain">Whole domain</option>
-    </select>
-    <input type="text" name="value" placeholder="e.g. boss@work.com or clientco.com">
-  </div>
-  <button type="submit" class="primary">Add trigger</button>
+<h2 id="reply-rules">Reply rules</h2>
+<p class="hint">Review, edit and send replies in your mail app. Tahor saves a threaded draft in your mailbox and leaves the original unread. Nothing is sent automatically. Rules only draft messages still within your read/unread inbox timing above; drafting does not extend that window.</p>
+{reply_rules_list}
+<details><summary>Add a reply rule</summary>
+<form method="post" action="/reply-rules/save">
+  <p><label>Rule name<br><input name="name" required maxlength="120" placeholder="Community updates"></label></p>
+  <p><label>Match using<br><select name="match_type"><option value="natural_language">Natural-language description</option><option value="sender_email">Specific email address</option><option value="sender_domain">Sender domain</option></select></label></p>
+  <p><label>Which messages?<br><textarea name="match" rows="3" required maxlength="3000" placeholder="Updates and personal messages from community volunteers; exclude generic advertising."></textarea></label></p>
+  <p><label>Directions for the reply<br><textarea name="instructions" rows="4" required maxlength="6000" placeholder="Thank them for the update. Mention the most urgent request if present and wish them well. For personal questions, respond to the actual request instead."></textarea></label></p>
+  <p><label>Optional filing folder after inbox timing<br><input name="filing_folder" maxlength="250" placeholder="Existing Projects folder (leave blank for normal filing)"></label></p>
+  <p><label>Signature<br><textarea name="signature" rows="2" maxlength="300" placeholder="Regards,&#10;Your name"></textarea></label></p>
+  <p><label>Maximum sentences (before signature)<br><select name="max_sentences"><option>3</option><option>2</option><option>1</option></select></label></p>
+  <button type="submit" class="primary">Save reply rule</button>
 </form>
+</details>
 <p class="hint">Model used to draft these replies. This runs once per matching email, so quality of the writing matters more than for rule drafting &mdash; pick a model known for natural English prose.</p>
 <form method="post" action="/settings">
   <div class="mode-options">
@@ -609,39 +621,6 @@ NON_COMPLIANT_CARD = """
 </div>
 """
 
-DRAFTS_PAGE_TEMPLATE = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tahor — drafts</title>
-<link rel="icon" type="image/svg+xml" href="{icon}">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=DM+Mono&display=swap">
-{style}
-</head>
-<body>
-<main>
-{header}
-<h1>Reply drafts <span class="count">{count}</span></h1>
-<p class="hint">Drafted from your reply triggers. Each one is also sitting in your Drafts folder, ready to edit and send &mdash; nothing here sends anything.</p>
-{cards}
-</main>
-</body>
-</html>
-"""
-
-DRAFT_CARD = """
-<div class="card">
-  <div class="summary">Re: {subject}</div>
-  <div class="context">To {recipient_email} &middot; drafted {created_at}</div>
-  <pre>{draft_body}</pre>
-  <p class="hint">{save_status}</p>
-  {review_action}
-</div>
-"""
-
 
 def decision_context(row):
     raw = row["context"] or ""
@@ -707,6 +686,9 @@ def index():
         SIEVE_BANNER.format(id=sieve_row["id"], context=html(sieve_row["context"]))
         if sieve_row else ""
     )
+    provider = provider_bridge.status()
+    if provider['enabled']:
+        sieve_banner = '<div class="card sieve"><div class="summary">Automatic provider rules</div><p>' + html(provider['label']) + '</p><p>Whole-domain blocks synchronize through the isolated connector. Manage this under Settings.</p></div>'
     sieve_content = SIEVE_PATH.read_text() if SIEVE_PATH.exists() else "(not yet synced)"
 
     flash_message = session.pop("flash", None)
@@ -843,19 +825,7 @@ def settings_page():
         for key, backend in mailbox_settings.REPLY_MODELS.items()
     )
 
-    triggers = mailbox_settings.get_reply_triggers()
-    if triggers:
-        reply_triggers_list = "".join(
-            REPLY_TRIGGER_ROW.format(
-                value=html(t["value"]),
-                type=html(t["type"]),
-                type_label="Whole domain" if t["type"] == "sender_domain" else "Specific address",
-            )
-            for t in triggers
-        )
-    else:
-        reply_triggers_list = '<p class="empty">No reply triggers configured yet.</p>'
-
+    provider = provider_bridge.status()
     return SETTINGS_PAGE_TEMPLATE.format(
         icon=TAHOR_ICON,
         style=STYLE_BLOCK,
@@ -866,8 +836,90 @@ def settings_page():
         mode_cards=mode_cards,
         rule_model_cards=rule_model_cards,
         reply_model_cards=reply_model_cards,
-        reply_triggers_list=reply_triggers_list,
+        reply_rules_list=render_reply_rules(),
+        provider_status=html(provider['label']),
+        provider_next_value='0' if provider['enabled'] else '1',
+        provider_disabled=' disabled' if provider['state'] == 'not_configured' else '',
+        provider_button='Turn off automatic rules' if provider['enabled'] else 'Enable automatic rules',
     )
+
+
+def render_reply_rules():
+    cards = []
+    for rule in reply_rules.get_rules(False):
+        identifier = html(rule['id'])
+        excluded = set(rule.get('excluded_senders', []))
+        senders = tahor_db.reply_rule_senders(rule['id'])
+        sender_rows = []
+        for row in senders:
+            sender = row['sender']
+            is_excluded = sender in excluded
+            sender_rows.append(f'<form method="post" action="/reply-rules/exclude"><input type="hidden" name="rule_id" value="{identifier}"><input type="hidden" name="sender" value="{html(sender)}"><p>{html(sender)} — {row["messages"]} matched message(s) — {"opted out" if is_excluded else "drafting allowed"} <button name="excluded" value="{"0" if is_excluded else "1"}">{"Allow drafts" if is_excluded else "Opt out"}</button></p></form>')
+        options = ''.join(f'<option value="{kind}"{" selected" if kind == rule["match_type"] else ""}>{label}</option>' for kind, label in [('natural_language','Natural-language description'),('sender_email','Specific email address'),('sender_domain','Sender domain')])
+        sentence_options = ''.join(f'<option{" selected" if count == rule.get("max_sentences",3) else ""}>{count}</option>' for count in (3,2,1))
+        cards.append(f'''<div class="card"><h3>{html(rule['name'])}</h3><p>{"Enabled" if rule.get('enabled', True) else "Paused"}</p>
+<p>{html(rule['match'])}</p><p>{html(rule['instructions'])}</p><pre>{html(rule.get('signature',''))}</pre>
+<details><summary>Matched senders ({len(senders)}) and opt-outs</summary><p class="hint">Opting out stops future drafts from that sender for this rule. Existing drafts stay in your mailbox; mail protection and normal inbox timing are unchanged.</p>{''.join(sender_rows) or '<p>No matched senders yet.</p>'}</details>
+<details><summary>Edit rule</summary><form method="post" action="/reply-rules/save">
+<input type="hidden" name="rule_id" value="{identifier}">
+<p><label>Name<br><input name="name" value="{html(rule['name'])}" required maxlength="120"></label></p>
+<p><label>Match using<br><select name="match_type">{options}</select></label></p>
+<p><label>Which messages?<br><textarea name="match" rows="3" required maxlength="3000">{html(rule['match'])}</textarea></label></p>
+<p><label>Reply directions<br><textarea name="instructions" rows="4" required maxlength="6000">{html(rule['instructions'])}</textarea></label></p>
+<p><label>Filing folder after inbox timing<br><input name="filing_folder" maxlength="250" value="{html(rule.get('filing_folder',''))}"></label></p>
+<p><label>Signature<br><textarea name="signature" rows="2" maxlength="300">{html(rule.get('signature',''))}</textarea></label></p>
+<p><label>Maximum sentences<br><select name="max_sentences">{sentence_options}</select></label></p>
+<button type="submit">Save changes</button></form></details>
+<form method="post" action="/reply-rules/toggle"><input type="hidden" name="rule_id" value="{identifier}"><button name="enabled" value="{'0' if rule.get('enabled', True) else '1'}">{'Pause rule' if rule.get('enabled', True) else 'Enable rule'}</button></form></div>''')
+    return ''.join(cards) or '<p>No reply rules yet. Add one below.</p>'
+
+
+@app.route('/reply-rules/save', methods=['POST'])
+@login_required
+def save_reply_rule():
+    try:
+        reply_rules.save_rule(request.form.get('name',''), request.form.get('match_type',''), request.form.get('match',''), request.form.get('instructions',''), request.form.get('signature',''), request.form.get('max_sentences','3'), request.form.get('rule_id') or None, filing_folder=request.form.get('filing_folder','').strip())
+    except ValueError as error:
+        abort(400, str(error))
+    return redirect('/settings#reply-rules')
+
+
+@app.route('/reply-rules/toggle', methods=['POST'])
+@login_required
+def toggle_reply_rule():
+    if request.form.get('enabled') not in ('0','1'):
+        abort(400, 'Choose enabled or paused.')
+    try:
+        reply_rules.set_enabled(request.form.get('rule_id',''), request.form['enabled'] == '1')
+    except ValueError as error:
+        abort(400, str(error))
+    return redirect('/settings#reply-rules')
+
+
+@app.route('/reply-rules/exclude', methods=['POST'])
+@login_required
+def exclude_reply_sender():
+    if request.form.get('excluded') not in ('0','1'):
+        abort(400, 'Choose whether to opt out.')
+    try:
+        reply_rules.set_sender_excluded(request.form.get('rule_id',''), request.form.get('sender',''), request.form['excluded'] == '1')
+    except ValueError as error:
+        abort(400, str(error))
+    return redirect('/settings#reply-rules')
+
+
+@app.route("/provider-sync", methods=["POST"])
+@login_required
+def provider_sync():
+    enabled = request.form.get("enabled")
+    if enabled not in ('0', '1'):
+        return 'Invalid provider setting', 400
+    try:
+        provider_bridge.publish(enabled == '1')
+    except (ValueError, OSError):
+        return 'Connector unavailable. Ask the administrator to complete enrollment.', 503
+    session['flash'] = 'Provider synchronization queued.' if enabled == '1' else 'Future provider synchronization stopped. Installed rules remain.'
+    return redirect('/settings')
 
 
 @app.route("/add-reply-trigger", methods=["POST"])
@@ -1103,40 +1155,7 @@ def unblock_sender():
 @app.route("/drafts")
 @login_required
 def drafts_page():
-    db = get_db()
-    rows = db.execute(
-        "SELECT * FROM reply_drafts WHERE status IN ('pending', 'preparing') ORDER BY created_at DESC"
-    ).fetchall()
-    cards = [
-        DRAFT_CARD.format(
-            id=row["id"],
-            subject=html(row["subject"]),
-            save_status="Saved in Drafts" if row["status"] == "pending" else "Waiting to save to your mailbox; the watcher will retry",
-            review_action=f'<form method="post" action="/dismiss-draft/{row["id"]}"><button type="submit">Mark reviewed</button></form>' if row["status"] == "pending" else "",
-            recipient_email=html(row["recipient_email"]),
-            created_at=row["created_at"][:16].replace("T", " "),
-            draft_body=html(row["draft_body"]),
-        )
-        for row in rows
-    ]
-    body = "".join(cards) if cards else '<p class="empty">No drafts waiting for review.</p>'
-    return DRAFTS_PAGE_TEMPLATE.format(
-        icon=TAHOR_ICON, style=STYLE_BLOCK, header=tahor_header("drafts"), count=len(rows), cards=body
-    )
-
-
-@app.route("/dismiss-draft/<int:draft_id>", methods=["POST"])
-@login_required
-def dismiss_draft(draft_id):
-    db = get_db()
-    db.execute(
-        "UPDATE reply_drafts SET status = 'reviewed', resolved_at = ? WHERE id = ? AND status = 'pending'",
-        (datetime.now(timezone.utc).isoformat(), draft_id),
-    )
-    db.commit()
-    return redirect("/drafts")
-
-
+    return redirect('/settings#reply-rules')
 
 
 @app.route("/status")

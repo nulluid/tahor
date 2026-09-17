@@ -30,7 +30,7 @@ def load_environment(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--env', type=Path, default=Path.home() / '.config/tahor/config.env')
-    parser.add_argument('command', choices=('worker', 'web', 'drafts', 'filing', 'retention', 'doctor', 'status', 'sieve', 'decisions'))
+    parser.add_argument('command', choices=('worker', 'web', 'drafts', 'filing', 'retention', 'doctor', 'status', 'sieve', 'decisions', 'notify'))
     args, extra = parser.parse_known_args()
     try:
         load_environment(args.env.expanduser())
@@ -38,7 +38,7 @@ def main():
         parser.error(str(exc))
     import tahor_db
     tahor_db.init_db()
-    scripts = {'worker': 'backlog_worker.py', 'drafts': 'draft_replies.py', 'filing': 'filing_sweep.py', 'retention': 'retention_sweep.py', 'doctor': 'doctor.py', 'status': 'status_report.py', 'sieve': 'decision-app/generate_sieve.py', 'decisions': 'decision-app/apply_decisions.py'}
+    scripts = {'notify': 'notifications.py', 'worker': 'backlog_worker.py', 'drafts': 'draft_replies.py', 'filing': 'filing_sweep.py', 'retention': 'retention_sweep.py', 'doctor': 'doctor.py', 'status': 'status_report.py', 'sieve': 'decision-app/generate_sieve.py', 'decisions': 'decision-app/apply_decisions.py'}
     if args.command == 'web':
         os.execv(sys.executable, [sys.executable, '-m', 'gunicorn', '--chdir', str(ROOT / 'decision-app'), '--bind', os.environ.get('TAHOR_BIND', '127.0.0.1:8420'), '--workers', '2', '--timeout', '180', 'app:app', *extra])
     os.execv(sys.executable, [sys.executable, str(ROOT / scripts[args.command]), *extra])

@@ -30,6 +30,34 @@ journalctl --user -u tahor-draft-replies -n 50 --no-pager
 systemctl --user list-timers 'tahor-*'
 ```
 
+## Mailbox reply rules
+
+Reply rules live in Settings, with matching instructions separated from writing
+instructions. Choose natural-language matching or an explicit sender/domain;
+set a signature, one to three body sentences, and optionally a filing folder.
+The matched-sender list provides per-rule opt-outs. Existing sender triggers
+remain supported.
+
+Semantic matching reuses the main classification call with up to 6,000 characters
+of message context. A bounded recent-inbox scan covers already-classified mail
+when rules change. Definite matches can receive drafts; uncertain matches are
+held for review. A positive match protects the message from automatic trash
+classification. Ordinary read/unread inbox timing still determines whether it
+is eligible for a new draft or routine filing; preparing a draft does not reset
+its age. Attention and review holds continue to prevent filing.
+
+The draft watcher saves a reply to the regular mailbox’s Drafts folder, with
+thread headers, and leaves the original unread. It does not send mail. Review and
+send in your normal email client. A present Reply-To must validate; From is used
+only when Reply-To is absent. Syntax and DNS checks cannot confirm
+that a specific remote mailbox accepts replies. Unsupported or unsafe reply
+addresses do not result in a draft.
+
+Free models remain the default for writing. You can select a paid prose model
+such as Euryale independently of classification speed. Treat generated text as
+a draft: check factual claims, requested commitments, and the recipient before
+sending. A prompt cannot make unavailable personal facts known to the model.
+
 ## Failure and recovery
 
 | Symptom | Behavior and next step |
@@ -89,7 +117,7 @@ No shell `source` command is required.
 | `PROMPT_PATH` | Optional explicit classification prompt path |
 | `VENDOR_BUCKETS_PATH` | Optional explicit routing map path |
 | `TAHOR_DB_PATH` | Shared SQLite decisions database |
-| `TAHOR_SETTINGS_PATH` | Shared speed/model/reply-trigger settings |
+| `TAHOR_SETTINGS_PATH` | Shared speed/model/reply-rule settings |
 | `TAHOR_STATE_DIR` | Worker batches, processed-ID audit, and local worker log |
 | `TAHOR_STATUS_PATH` | Optional worker status snapshot override |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Review-app OAuth client |
@@ -97,7 +125,6 @@ No shell `source` command is required.
 | `BASE_URL` | Exact browser origin, including `https://` for a public deployment |
 | `TAHOR_BIND` | Gunicorn bind address; keep the default `127.0.0.1:8420` behind a proxy |
 | `TAHOR_DATA_PUSH` | `1` to enable private configuration pushes; default is local commits only |
-| `TAHOR_NOTIFY_DRAFTS` | `1` to send yourself a summary after new drafts; disabled by default |
 | `WORKER_BATCH_SIZE` | Messages per classification batch; default 50 |
 | `WORKER_SLEEP_BETWEEN_BATCHES` | Optional delay override; defaults to 0 seconds after fully applied paid-only batches, 45 seconds otherwise |
 | `TAHOR_PAID_CONCURRENCY` | Concurrent paid classifications; default 40, configurable from 1 to 64; effective concurrency also depends on batch size |
@@ -207,26 +234,31 @@ credentials. Tahor stages only its named configuration files, not the whole
 working directory. Git commits use your normal local identity. Private pushes
 are disabled unless `TAHOR_DATA_PUSH=1`.
 
-For a consistent database backup, use SQLite’s backup API rather than copying a
-file during a write. For the default installation:
+Use the included snapshot tool for a consistent SQLite backup plus your private
+settings, prompt, vendor mappings, and Sieve proposal:
 
 ```bash
-mkdir -p "$HOME/tahor-backups"
-python3 - <<'PY'
-import sqlite3
-from pathlib import Path
-root = Path.home()
-source = sqlite3.connect(root / '.config/tahor/state/decisions.db')
-target = sqlite3.connect(root / 'tahor-backups/decisions.db')
-source.backup(target)
-target.close()
-source.close()
-PY
+venv/bin/python scripts/private_backup.py \
+  --env "$HOME/.config/tahor/config.env" \
+  --destination "$HOME/tahor-backups"
 ```
 
-Back up the private data directory and settings too. Encrypt backups that leave
-your machine. Restore paths consistently across every service and check file
-permissions before restarting.
+The tool requires private storage outside Git, verifies file checksums and SQLite
+integrity, and excludes credentials. Backups remain sensitive: the database can
+contain drafts and mailbox metadata. Keep encrypted off-host copies and test a
+restore before relying on them. See [private backups and restore](private-backups.md)
+for the allowlist, verification command, service shutdown, and restore procedure.
+Preserve the notification delivery ledger separately when moving an instance;
+it is not included in these preference/database snapshots.
+
+## Optional operational email
+
+[Health alerts and daily summaries](notifications.md) place fixed health descriptions
+and aggregate counts directly in your inbox, addressed from your account to itself.
+They are opt-in, use IMAP APPEND over TLS, and make no model calls. Alerts require persistent problems;
+healthy idle workers and progressing free-tier fallback do not trigger them.
+The daily digest's timezone and hour are configurable. Reply drafts still require
+you to review and send them in your mail client.
 
 ## Sieve proposals
 
@@ -234,6 +266,10 @@ Sender rules are enforced during classification. For provider-side filtering,
 Tahor maintains a marked section inside `sieve.txt`, preserving custom content
 outside that section. The app shows a proposal banner. Installing it in your
 provider is a separate manual step; dismiss the banner only after applying it.
+Alternatively, Fastmail users can explicitly enroll the
+[isolated connector](fastmail-connector.md) to manage Tahor-owned whole-domain
+rules. It has its own service account and credential storage; setup and fresh
+authentication must be verified for each enrolled account.
 
 Only whole-domain blocks generate Sieve discard rules. Marketing-only blocks
 stay in the classifier: a receipt can carry `List-Unsubscribe`, so that header
@@ -253,8 +289,12 @@ script over an unrelated provider script without reviewing the merged contents.
 
 Classification can be wrong. Review your prompt, ambiguous mail, and sweep
 previews. Free models have limited capacity. App authentication requires your
-Google OAuth configuration. A first real reply trigger is your choice. Provider
-Sieve installation, domain/TLS setup, and billing controls remain external steps.
+Google OAuth configuration. Reply rules need your matching and writing
+instructions. Provider rule installation requires either manual Sieve setup or
+explicit Fastmail connector enrollment. Domain/TLS setup and billing controls
+remain external steps. Optional health alerts and digests depend on the server
+and IMAP connection; external monitoring is needed to detect complete host or
+mail-delivery outages.
 
 Tahor is designed around a single mailbox owner and tested primarily against
 Fastmail. It does not support arbitrary IMAP servers without checking their

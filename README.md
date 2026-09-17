@@ -30,8 +30,9 @@ that should not be left to a model.
 | Classify and tag messages in the background | Review ambiguous mail before retention cleanup |
 | File routine receipts and statements, then mark them read | Choose the vendor’s destination in the app |
 | Track unsubscribe requests and sender blocks | Keep subscriptions, block marketing, or block a domain |
-| Draft a response when a chosen sender writes | Edit and send it yourself from your mail client |
+| Draft a response when your reply rule matches | Find the original unread; edit and send its draft in your mail client |
 | Recover from provider failures | See actual worker progress and retry status |
+| Place optional health alerts and daily summaries in your inbox | Choose which notifications to enable and your digest time |
 
 ## Inside the app
 
@@ -43,7 +44,7 @@ that should not be left to a model.
 <table>
 <tr>
 <td width="50%"><img src="docs/screenshots/subscriptions.png" alt="Unsubscribe actions and editable sender blocks"><br><strong>Subscriptions, with an exit.</strong><br>Request an unsubscribe, keep transactional mail, and remove a block later.</td>
-<td width="50%"><img src="docs/screenshots/drafts.png" alt="An editable reply awaiting human review"><br><strong>A first draft, never an automatic send.</strong><br>Replies are saved in the mailbox’s Drafts folder with their thread headers.</td>
+<td width="50%"><img src="docs/screenshots/reply-rules.png" alt="Natural-language reply instructions and sender opt-outs in Settings"><br><strong>Your instructions, your mailbox.</strong><br>Describe which messages deserve a reply and how it should read. Review the draft in your usual email client.</td>
 </tr>
 </table>
 
@@ -105,6 +106,33 @@ Open **http://127.0.0.1:8421**. This runs the real UI with disposable sample dat
 It cannot send mail, change a mailbox, or make model requests. No account or API
 key is needed.
 
+## Replies where you already read mail
+
+Describe a rule in **Settings → Reply rules**: which messages should match, what
+the reply should say, a signature, and a limit of one to three body sentences.
+Use natural language or match a specific sender or domain. For example, ask for
+brief acknowledgments of community project updates that mention a specific
+milestone, while answering personal questions according to their actual content.
+Expand the rule’s matched-sender list to opt individual senders out.
+
+Tahor saves a threaded reply in your mailbox’s **Drafts** folder and leaves the
+original unread. Edit and send it in your usual email client; there is no separate
+web draft editor and **Tahor never sends these replies automatically**. A reply
+address must pass syntax and DNS checks. Those checks cannot prove that the
+recipient’s mailbox accepts delivery.
+
+New rules can scan recent inbox mail as well as new arrivals. The usual inbox
+window still applies: three days for read mail, seven for unread by default.
+Creating a draft does not extend that window. An optional filing destination on
+the rule lets eligible low-attention messages move into your folder structure
+afterward. Messages needing attention or review stay protected.
+
+Natural-language matching shares the existing classification request, using up
+to 6,000 characters of message context when such rules are enabled. Uncertain
+matches stay pending review and do not produce a draft. Reply writing is a
+separate model request; free models remain the default, with paid prose models
+such as Euryale available as an optional choice in Settings.
+
 ## Choose the pace
 
 | Mode | Behavior | Inference cost |
@@ -165,8 +193,8 @@ value so a reset cannot redirect an old operation to a different message.
 **Filing and retention have their own scheduled sweeps.** You can preview both
 before enabling them. The worker applies classifications immediately and deletes
 explicit trash after its tags are saved. Failed deletions retain a retry marker.
-The pipeline uses Python’s standard library; the optional web app adds Flask,
-requests, and Gunicorn. SQLite holds review decisions and draft state. No broker,
+The workers use IMAP and HTTP directly; reply-address validation adds a small
+DNS-aware validator. The optional web app uses Flask, requests, and Gunicorn. SQLite holds review decisions and draft state. No broker,
 external database, or frontend build is required.
 
 | Component | Responsibility |
@@ -176,8 +204,9 @@ external database, or frontend build is required.
 | `filing_sweep.py` | Move aged receipts, statements, and tax mail with IMAP `MOVE` |
 | `retention_sweep.py` | Delete expired mail and retry pending trash deletion with targeted UID expunge |
 | `decision-app/` | Review decisions, apply rules, manage subscriptions and model settings |
-| `draft_replies.py` | Prepare recoverable, thread-aware drafts for configured senders |
-| `runtime_status.py` | Share worker progress with the app and health-check command |
+| `draft_replies.py` / `reply_rules.py` | Match owner instructions and prepare recoverable, thread-aware mailbox drafts |
+| `runtime_status.py` / `notifications.py` | Share worker progress; optionally add health alerts and daily counts to the owner’s inbox |
+| `scripts/private_backup.py` | Create and verify private snapshots; restore after stopping services |
 | `setup_tahor.py` / `run.py` | Configure a private instance and launch each component consistently |
 
 ### Engineering choices
@@ -207,14 +236,23 @@ small deployment: one mailbox owner and one host, with SQLite and local file loc
   messages from retention cleanup.
 - **Reply drafts are never sent automatically.** A stable draft Message-ID lets
   retries recover an interrupted save without intentionally appending another copy.
+  The original stays unread so the conversation remains visible.
 - **Uncertain mail stays reviewable.** Ambiguous classifications receive a
   pending-review retention tag and a decision in the app.
+- **Notifications are optional.** Health alerts and daily summaries are written directly
+  into your inbox over IMAP, addressed from you to yourself. They contain status
+  and counts, not message content; no SMTP permission is needed.
+  [Enable notifications](docs/notifications.md).
 - **Failures stay visible.** A failed rule can be retried; a failed unsubscribe is
   not silently marked successful. A saved block still applies if unsubscribing fails.
-- **Sieve changes are proposals.** The generator preserves custom rules outside
-  its managed section. You review and install the resulting script at your provider.
+- **Provider rules are your choice.** Review and install generated Sieve yourself,
+  or opt into the [isolated Fastmail connector](docs/fastmail-connector.md) for automatic
+  whole-domain blocks. The experimental connector supports fresh password/TOTP sign-in,
+  keeps credentials out of the web app, and manages only its own rule IDs. Enrollment
+  grants it full account-login authority; Fastmail's unpublished interface can change.
 - **Hosted models receive mail content.** Classification sends sender, subject,
-  date, and a short body excerpt. Reply drafting sends a longer excerpt. Rule
+  date, and a body excerpt (up to 6,000 characters with natural-language reply
+  rules). Reply drafting sends a longer excerpt and your writing instructions. Rule
   drafting sends the instruction and current routing/prompt configuration.
 
 Retention defaults are seven days for transient mail and three years for standard
@@ -233,7 +271,8 @@ Review [configuration and operating limits](docs/operations.md) before enabling 
 └── state/
     ├── decisions.db
     ├── settings.json
-    └── worker_status.json
+    ├── worker_status.json
+    └── notifications.json # optional private delivery ledger
 ```
 
 The public repository contains reusable code, tests, example configuration, and
@@ -243,7 +282,8 @@ unless you explicitly enable pushing. Credentials, message batches, databases,
 and logs do not belong in either repository. Gitignore rules help; review staged
 changes before publishing.
 
-[Private data and backups](docs/operations.md#private-data-and-backups)
+[Private backups and restore](docs/private-backups.md) ·
+[Health alerts and daily summaries](docs/notifications.md)
 
 ## Development and verification
 

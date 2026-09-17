@@ -26,7 +26,7 @@ class AppTestCase(unittest.TestCase):
         sys.path.insert(0, str(ROOT))
         sys.path.insert(0, str(ROOT / 'decision-app'))
         # Other test modules may already have loaded shared modules.
-        cls.saved = {key: sys.modules.pop(key, None) for key in ('config', 'mailbox_settings', 'tahor_db', 'apply_decisions', 'generate_sieve', 'runtime_status')}
+        cls.saved = {key: sys.modules.pop(key, None) for key in ('config', 'mailbox_settings', 'tahor_db', 'apply_decisions', 'generate_sieve', 'runtime_status', 'reply_rules')}
         spec = importlib.util.spec_from_file_location('security_app', ROOT / 'decision-app/app.py')
         cls.module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.module)
@@ -47,7 +47,7 @@ class AppTestCase(unittest.TestCase):
         with self.client.session_transaction() as session:
             session['email'] = 'owner@example.com'
         db = self.module.tahor_db.get_db()
-        for table in ('decisions', 'unsubscribe_candidates', 'reply_drafts', 'sender_rules'):
+        for table in ('decisions', 'unsubscribe_candidates', 'reply_drafts', 'sender_rules', 'reply_rule_matches'):
             db.execute('DELETE FROM ' + table)
         db.commit()
         db.close()
@@ -96,7 +96,7 @@ class WebSecurityTests(AppTestCase):
             setter.assert_called_once_with('paid')
 
     def test_forms_have_token_and_private_cache_headers(self):
-        for path in ('/', '/settings', '/unsubscribe', '/drafts'):
+        for path in ('/', '/settings', '/unsubscribe'):
             response = self.client.get(path)
             self.assertEqual(response.status_code, 200)
             text = response.get_data(as_text=True)
@@ -118,7 +118,7 @@ class WebSecurityTests(AppTestCase):
         self.module.tahor_db.create_reply_draft('message', 'thread', attack, attack, attack, 'test')
         page = self.client.get('/drafts').get_data(as_text=True)
         self.assertNotIn(attack, page)
-        self.assertIn('&lt;img', page)
+        self.assertNotIn('Draft text', page)
         self.module.tahor_db.upsert_unsubscribe_candidate('example.com', attack, attack, None, 'test@example.com', False)
         page = self.client.get('/unsubscribe').get_data(as_text=True)
         self.assertNotIn(attack, page)

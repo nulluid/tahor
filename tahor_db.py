@@ -88,6 +88,7 @@ def init_db():
         )
         """
     )
+    conn.execute("CREATE TABLE IF NOT EXISTS reply_rule_matches (rule_id TEXT NOT NULL, message_id TEXT NOT NULL, sender TEXT NOT NULL, matched_at TEXT NOT NULL, PRIMARY KEY(rule_id,message_id))")
     reply_cols = {row[1] for row in conn.execute("PRAGMA table_info(reply_drafts)")}
     if "thread_root" not in reply_cols:
         conn.execute("ALTER TABLE reply_drafts ADD COLUMN thread_root TEXT NOT NULL DEFAULT ''")
@@ -265,5 +266,22 @@ def record_sender_sample(sender_email, message_id):
     try:
         with conn:
             conn.execute("INSERT OR IGNORE INTO sender_samples(sender_email,message_id,created_at) VALUES (?,?,?)", (sender_email.strip().lower(), message_id, datetime.now(timezone.utc).isoformat()))
+    finally:
+        conn.close()
+
+
+def record_reply_rule_match(rule_id, message_id, sender):
+    conn = get_db()
+    try:
+        with conn:
+            conn.execute("INSERT OR IGNORE INTO reply_rule_matches VALUES (?,?,?,?)", (rule_id, message_id, sender.lower(), datetime.now(timezone.utc).isoformat()))
+    finally:
+        conn.close()
+
+
+def reply_rule_senders(rule_id):
+    conn = get_db()
+    try:
+        return conn.execute("SELECT sender, COUNT(*) AS messages, MAX(matched_at) AS last_match FROM reply_rule_matches WHERE rule_id=? GROUP BY sender ORDER BY last_match DESC", (rule_id,)).fetchall()
     finally:
         conn.close()

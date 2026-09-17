@@ -39,6 +39,7 @@ whatever the model returns — the system prompt owns that schema, not this
 script. See prompt.example.txt for the schema this project was built around.
 """
 import json
+from http_response import read_bounded, MODEL_RESPONSE_SECONDS
 import os
 import re
 import sys
@@ -129,6 +130,9 @@ def classify_one(url, headers, model, system_prompt, record, retries=3):
         f"{hint_line}"
         f"Body/snippet: {record.get('snippet', '')}"
     )
+    import reply_rules
+    rules = reply_rules.get_rules()
+    system_prompt = reply_rules.classification_prompt(system_prompt, rules)
     payload = {
         "model": model,
         "messages": [
@@ -143,8 +147,9 @@ def classify_one(url, headers, model, system_prompt, record, retries=3):
     for attempt in range(retries + 1):
         try:
             req = urllib.request.Request(url, data=data, headers=headers)
+            deadline = time.monotonic() + MODEL_RESPONSE_SECONDS
             with urllib.request.urlopen(req, timeout=60) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
+                body = json.loads(read_bounded(resp, deadline).decode("utf-8"))
             content = body["choices"][0]["message"]["content"].strip()
             if content.startswith("```"):
                 content = content.strip("`")
@@ -167,6 +172,10 @@ def classify_one(url, headers, model, system_prompt, record, retries=3):
             result.update({field: parsed.get(field, "") for field in SCHEMA_FIELDS})
             if result["action"] == "trash":
                 result.update(category="marketing", retention="transient", expense_type="n/a", needs_attention=False, folder_domain="Other")
+            matches, uncertain = reply_rules.classification_matches(parsed, rules, record.get('from', ''))
+            if rules:
+                result['reply_rule_matches'], result['reply_rule_uncertain'] = matches, uncertain
+                result['reply_rule_versions'] = {r['id']: r.get('revision', r['id']) for r in rules}
             return result
         except urllib.error.HTTPError as e:
             last_err = e
