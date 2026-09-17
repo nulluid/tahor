@@ -52,7 +52,7 @@ VENDOR_BUCKETS_PATH = Path(os.environ.get("VENDOR_BUCKETS_PATH", DATA_DIR / "ven
 PROMPT_PATH = Path(os.environ.get("PROMPT_PATH", DATA_DIR / "prompt.txt"))
 
 RULE_DRAFTING_SYSTEM_PROMPT = """You maintain a personal email-sweep pipeline. A free-text instruction from
-the mailbox's owner can call for one of three kinds of change:
+the mailbox's owner can call for one of four kinds of change:
 
 1. sender_rule -- "block/discard/trash all mail (or all marketing mail)
    from X, and/or unsubscribe me from X". This is the right answer for any
@@ -61,11 +61,11 @@ the mailbox's owner can call for one of three kinds of change:
    from that sender is trashed) or "block_marketing" (only messages the
    classifier already tags as marketing are trashed -- receipts, shipping
    notices, and other transactional mail from the same sender still come
-   through normally). Guess the sender's real email domain from the
-   company/brand name in the instruction (e.g. "Kate Spade" ->
-   katespade.com) -- use your own knowledge of the company, don't guess a
-   generic pattern. If the instruction says or implies "unsubscribe" in
-   addition to blocking, set attempt_unsubscribe to true.
+   through normally). The owner must explicitly name the full exact domain.
+   Never infer a domain from a company name or expand an email address to
+   its whole domain. If the exact domain is missing, use needs_clarification.
+   If the instruction says or implies "unsubscribe" in addition to blocking,
+   set attempt_unsubscribe to true.
 2. vendor_buckets.json / prompt.txt edit -- for instructions about how a
    category of mail should be classified or filed in general (not
    targeting one specific sender), or about adding/renaming a filing
@@ -76,19 +76,21 @@ the mailbox's owner can call for one of three kinds of change:
 3. needs_code_change -- the instruction genuinely can't be satisfied by
    either of the above (it wants new script behavior, not a data/prompt
    change or a sender rule).
+4. needs_clarification -- required scope or details are missing. Ask for the
+   missing information and propose no actions or file changes.
 
 You will be given the current contents of both files and the instruction.
 Respond with ONLY a JSON object, no markdown fences:
 {
-  "kind": "sender_rule" | "file_edit" | "needs_code_change",
+  "kind": "sender_rule" | "file_edit" | "needs_code_change" | "needs_clarification",
   "explanation": "one sentence",
   "sender_rule": null or {"domain": "example.com", "rule": "block_all" | "block_marketing", "attempt_unsubscribe": true | false},
   "vendor_buckets_json": null or the FULL new file contents as a JSON string,
   "prompt_txt": null or the FULL new file contents as a string
 }
 Fill in only the field(s) that match "kind"; leave the rest null. For
-needs_code_change, leave sender_rule/vendor_buckets_json/prompt_txt all
-null and explain what script behavior would need to change.
+needs_code_change or needs_clarification, leave sender_rule/vendor_buckets_json/prompt_txt
+all null and explain the missing capability or information.
 """
 
 
@@ -133,7 +135,10 @@ def rule_model_call(user_content, queue_size=1, work_id=None, validate=None):
         proposal = _rule_model_call(user_content, key)
         validate_rule_proposal(proposal)
         if validate is not None:
-            validate(proposal)
+            try:
+                validate(proposal)
+            except DomainAuthorizationRequired:
+                return {'kind': 'needs_clarification', 'explanation': RULE_CLARIFICATION_QUESTION}
         return proposal
     return ai_routing.run('rule', mailbox_settings.RULE_MODELS,
         generate, queue_size=queue_size, work_id=work_id,
@@ -224,11 +229,41 @@ def validate_rule_proposal(result):
         changes = [result.get('vendor_buckets_json'), result.get('prompt_txt')]
         if all(change is None for change in changes) or any(change is not None and not isinstance(change, str) for change in changes):
             raise ValueError('File proposals must contain text changes')
-    elif kind == 'needs_code_change':
+    elif kind in ('needs_code_change', 'needs_clarification'):
+        if kind == 'needs_clarification' and not str(result.get('explanation', '')).strip():
+            raise ValueError('Clarification requires an explanation')
         if any(result.get(key) is not None for key in ('sender_rule', 'vendor_buckets_json', 'prompt_txt')):
             raise ValueError('Code-change proposals cannot contain actions to apply')
     else:
         raise ValueError('The model did not return an actionable rule')
+
+
+RULE_CLARIFICATION_QUESTION = ('Please provide the full exact sender domain for any blocking or unsubscribe rule, '
+                               'and clarify any other missing scope in your original instruction. '
+                               'A brand name or individual email address does not authorize a domain-wide block.')
+
+
+class DomainAuthorizationRequired(ValueError):
+    pass
+
+
+class RuleClarificationRequired(ValueError):
+    pass
+
+
+def save_rule_clarification(row, context):
+    context.pop('rule_proposal', None)
+    context['rule_clarification'] = {'question': RULE_CLARIFICATION_QUESTION}
+    database = tahor_db.get_db()
+    try:
+        with database:
+            database.execute("UPDATE decisions SET context=?,status='pending' WHERE id=?",
+                             (json.dumps(context), row['id']))
+    finally:
+        database.close()
+    import ai_routing
+    ai_routing.record_result('rule', row['id'], True)
+    raise RuleClarificationRequired(RULE_CLARIFICATION_QUESTION)
 
 
 def validate_explicit_sender_target(instruction, sender_rule):
@@ -238,7 +273,7 @@ def validate_explicit_sender_target(instruction, sender_rule):
     without_addresses = re.sub(r'[\w.+-]+@[\w.-]+', '', instruction)
     explicit = {d.lower() for d in re.findall(r'(?<![\w@.-])(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(?![\w-]|\.[a-zA-Z0-9])', without_addresses)}
     if domain not in explicit:
-        raise ValueError('No exact domain authorization: include the full domain explicitly; email-only or brand-only instructions cannot create domain-wide blocks')
+        raise DomainAuthorizationRequired('No exact domain authorization: include the full domain explicitly; email-only or brand-only instructions cannot create domain-wide blocks')
     if sender_rule.get('rule') not in tahor_db.SENDER_RULES:
         raise ValueError('Model returned an invalid sender action')
 
@@ -271,7 +306,7 @@ def pending_ai_rule_ids(database):
             context = {}
         if not isinstance(context, dict):
             context = {}
-        if not context.get('applied') and not context.get('rule_proposal') and not context.get('manual_code_required'):
+        if not context.get('applied') and not context.get('rule_proposal') and not context.get('manual_code_required') and not context.get('rule_clarification'):
             ids.append(row['id'])
     return ids
 
@@ -294,6 +329,8 @@ def apply_free_text_rule(row, resolution):
         context = {}
     if not isinstance(context, dict):
         context = {}
+    if context.get('rule_clarification'):
+        raise RuleClarificationRequired(RULE_CLARIFICATION_QUESTION)
     proposal = context.get('rule_proposal')
     if proposal:
         result = proposal['result']
@@ -321,9 +358,14 @@ def apply_free_text_rule(row, resolution):
                 if proposal.get('kind') == 'sender_rule' else None)
         validate_rule_proposal(result)
     kind = result.get("kind")
+    if kind == "needs_clarification":
+        save_rule_clarification(row, context)
 
     if kind == "sender_rule" and result.get("sender_rule"):
-        validate_explicit_sender_target(text, result["sender_rule"])
+        try:
+            validate_explicit_sender_target(text, result["sender_rule"])
+        except DomainAuthorizationRequired:
+            save_rule_clarification(row, context)
         require_rule_approval(row, resolution, context, result, current_buckets, current_prompt, text)
         return apply_sender_rule(result["sender_rule"])
 
@@ -387,7 +429,10 @@ def apply_one(decision_id):
             if row["kind"] == "vendor_mapping":
                 outcome = apply_vendor_mapping(row, resolution)
             elif row["kind"] == "free_text_rule":
-                outcome = apply_free_text_rule(row, resolution)
+                try:
+                    outcome = apply_free_text_rule(row, resolution)
+                except RuleClarificationRequired:
+                    return "Waiting for rule clarification"
             elif row["kind"] == "message_review":
                 import keyword_tool
                 action = resolution.get("action")
@@ -414,7 +459,16 @@ def main():
     conn = tahor_db.get_db()
     try:
         pending_ids = pending_ai_rule_ids(conn)
-        ids = list(dict.fromkeys([row['id'] for row in conn.execute("SELECT id FROM decisions WHERE status='resolved' AND resolution IS NOT NULL")] + pending_ids))
+        resolved_ids = []
+        for row in conn.execute("SELECT id,context FROM decisions WHERE status='resolved' AND resolution IS NOT NULL"):
+            try:
+                context = json.loads(row['context'] or '{}')
+            except (ValueError, TypeError):
+                context = {}
+            if isinstance(context, dict) and context.get('rule_clarification'):
+                continue
+            resolved_ids.append(row['id'])
+        ids = list(dict.fromkeys(resolved_ids + pending_ids))
         ai_routing.reconcile_pending('rule', pending_ids)
     finally:
         conn.close()
