@@ -1,5 +1,9 @@
 import contextlib
 import io
+import hashlib
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -72,3 +76,26 @@ class ProviderCheckTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 check_auth({}, retry_settings=True)
             auth.assert_not_called()
+
+    def test_real_persisted_guards_block_fresh_and_settings_checks_without_requests(self):
+        from data_changes import atomic_write
+        from provider_connector.auth import FastmailAuth
+        from test_provider_auth import CREDENTIALS, SESSION
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            credentials = root / 'credentials.json'
+            atomic_write(credentials, json.dumps(CREDENTIALS))
+            auth = FastmailAuth(credentials, root / 'state')
+            revision = hashlib.sha256(json.dumps(CREDENTIALS, sort_keys=True).encode()).hexdigest()
+            auth.session = dict(SESSION)
+            auth.auth_state = {'revision': revision, 'blocked': True, 'next_login': 9999999999,
+                               'user_id': SESSION['userId'],
+                               'settings_attempt': {'revision': revision, 'blocked': True, 'next_attempt': 9999999999}}
+            auth.save()
+            before = (root / 'state/session.json').read_bytes()
+            config = {'credentials': str(credentials), 'state': str(root / 'state')}
+            with patch.object(FastmailAuth, 'request') as request, contextlib.redirect_stdout(io.StringIO()):
+                self.assertFalse(check_auth(config))
+                self.assertFalse(check_auth(config, settings_only=True))
+                request.assert_not_called()
+            self.assertEqual((root / 'state/session.json').read_bytes(), before)
