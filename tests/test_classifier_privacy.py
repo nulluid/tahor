@@ -47,9 +47,21 @@ class ClassifierPrivacyTests(unittest.TestCase):
         self.assertEqual(payload['max_tokens'], 1024)
         self.assertNotIn('reasoning', payload)
 
-    def test_existing_free_and_non_openrouter_routes_are_unchanged(self):
+    def test_free_requires_privacy_and_local_stays_local(self):
         for backend_name in ('openrouter-free', 'local'):
             with self.subTest(backend=backend_name):
                 payload = self.classify_with_capture(backend_name)[0]
-                self.assertNotIn('provider', payload)
+                if backend_name == 'openrouter-free':
+                    self.assertEqual(payload['provider'], {'zdr': True, 'data_collection': 'deny'})
+                else:
+                    self.assertNotIn('provider', payload)
                 self.assertEqual(payload['model'], classify.BACKENDS[backend_name]['default_model'])
+
+    def test_unverified_direct_google_account_sends_no_mail_content(self):
+        backend = classify.BACKENDS['gemini']
+        with patch.object(classify.urllib.request, 'urlopen') as request:
+            result = classify.classify_one(backend['url'], {}, backend['default_model'],
+                                          'Classify.', {'id': 'private-source', 'snippet': 'Private text'})
+        request.assert_not_called()
+        self.assertEqual(result['action'], 'error')
+        self.assertNotIn('Private text', result['reason'])

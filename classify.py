@@ -129,6 +129,9 @@ def free_disabled_results(records):
 
 
 def classify_one(url, headers, model, system_prompt, record, retries=3):
+    if url == BACKENDS["gemini"]["url"]:
+        return {"id": record["id"], "action": "error",
+                "reason": "Direct Google classification is disabled until account privacy is verified"}
     if (url == BACKENDS["openrouter-free"]["url"] and model.endswith(":free")
             and not free_classification_enabled()):
         return free_disabled_results([record])[0]
@@ -155,7 +158,7 @@ def classify_one(url, headers, model, system_prompt, record, retries=3):
         "temperature": 0.1,
         "max_tokens": 1024,
     }
-    if url == BACKENDS["openrouter-paid"]["url"] and not model.endswith(":free"):
+    if url == BACKENDS["openrouter-paid"]["url"]:
         # Enforce endpoint policy on every paid request, including retries;
         # never rely on a provider's current catalog membership alone.
         payload["provider"] = {"zdr": True, "data_collection": "deny"}
