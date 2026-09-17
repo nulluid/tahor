@@ -8,4 +8,4 @@ if [ ! -d venv ]; then
 fi
 venv/bin/python -m pip install --quiet -r requirements.txt
 venv/bin/python setup_tahor.py "$@"
-printf '\nSetup complete. Check configuration with:\n  venv/bin/python run.py doctor\n\nStart the worker with:\n  venv/bin/python run.py worker\n\nWeb app and unattended services: see docs/setup.md.\n'
+printf '\nSetup complete. Check configuration with:\n  venv/bin/python run.py doctor\n\nAfter choosing an enabled processing mode, start the worker with:\n  venv/bin/python run.py worker\n\nWeb app and unattended services: see docs/setup.md.\n'

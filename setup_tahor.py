@@ -111,6 +111,7 @@ def configure(args):
             'TAHOR_DATA_PUSH': '0', 'TAHOR_NOTIFY_DRAFTS': '0',
             'TAHOR_NOTIFY_HEALTH': '0', 'TAHOR_NOTIFY_DIGEST': '0',
             'TAHOR_NOTIFY_TIMEZONE': 'UTC', 'TAHOR_NOTIFY_HOUR': '9',
+            'TAHOR_CLASSIFY_FREE_ENABLED': '0',
         }
         write_new(config_path, '# Private Tahor configuration. Never commit this file.\n' + ''.join(f'{key}={env_value(value)}\n' for key, value in values.items()))
     for source, destination in (('prompt.example.txt', 'prompt.txt'), ('vendor_buckets.example.json', 'vendor_buckets.json')):
@@ -123,6 +124,12 @@ def configure(args):
     print(f'Private mailbox data: {data_dir}')
     print(f'Runtime state: {state_dir}')
     print('Existing configuration and data files were preserved.')
+    print('Choose processing before starting the worker: new configurations disable the experimental free route.')
+    print('Free mode waits without classifying. To use paid inference, explicitly choose Paid in Settings')
+    print('(or --mode paid on first setup); provider charges apply. Setup never enables paid processing implicitly.')
+    print('Experimental free classification requires TAHOR_CLASSIFY_FREE_ENABLED=1 in config.env and Free mode.')
+    print('Its privacy-filtered route showed accuracy limitations; evaluate your mail before enabling it.')
+    print('For local inference, see the standalone classifier in docs/operations.md; the continuous worker uses hosted routes.')
     return config_path
 
 
@@ -135,7 +142,7 @@ def main():
     parser.add_argument('--imap-host', default='imap.fastmail.com')
     parser.add_argument('--smtp-host', default='smtp.fastmail.com')
     parser.add_argument('--base-url', default='http://localhost:8420')
-    parser.add_argument('--mode', choices=('free', 'paid', 'auto'), default='free')
+    parser.add_argument('--mode', choices=('free', 'paid', 'auto'), default='free', help='Initial preference only; free starts disabled pending explicit experimental-route opt-in. Paid permits provider charges.')
     parser.add_argument('--non-interactive', action='store_true')
     configure(parser.parse_args())
 
