@@ -78,12 +78,13 @@ def _preferences(conn):
 
 
 def _context_key(conn):
-    preferences = _preferences(conn)
-    try:
-        import config
-        preferences['current_filing_mappings'] = config.vendor_buckets()
-    except FileNotFoundError:
-        preferences['current_filing_mappings'] = {}
+    preferences = dict(_preferences(conn))
+    # Delivery completion, incoming mail and automatic filing are operational
+    # snapshots, not new owner instructions. Hashing them cancels live jobs.
+    # Explicit submitted intent remains in the two feedback records; private
+    # policy/guidance and each exact decision revision still invalidate results.
+    preferences.pop('prior_subscription_choices', None)
+    preferences.pop('sender_rules', None)
     return hashlib.sha256(json.dumps(preferences,sort_keys=True).encode()).hexdigest()
 
 

@@ -158,3 +158,47 @@ class DecisionBatchTests(AppTestCase):
         self.assertEqual(feedback['action_counts'],{'keep':1,'trash':1,'skip':1,'keep_brief':1})
         self.assertEqual(feedback['recent_explicit_choices'][0]['choice'],{'action':'keep_brief'})
         conn.close()
+
+    def test_background_delivery_and_automatic_filing_do_not_cancel_recommendations(self):
+        import config
+        identifier=self.add()
+        operational={'prior_subscription_choices':[], 'sender_rules':[]}
+        def preferences(conn):
+            return dict(operational, decision_feedback=suggestions.owner_feedback(conn), decision_guidance='Preserve records.')
+        with patch.object(suggestions,'_preferences',side_effect=preferences), patch.object(config,'vendor_buckets',return_value={}):
+            job=suggestions.enqueue()
+            def completing(context,**kwargs):
+                operational.update(prior_subscription_choices=[{'sender_domain':'unrelated.example','status':'unsubscribed'}], sender_rules=[{'sender_domain':'unrelated.example','rule':'block_marketing'}])
+                return self.model(context)
+            with patch.object(config,'vendor_buckets',return_value={'automatically-mapped@example.com':['Business','Vendor']}),patch.object(suggestions,'model_call',side_effect=completing):
+                self.assertEqual(suggestions.run_pending_jobs(),0)
+                complete=suggestions.get_job(job['job_id'])
+            self.assertEqual(complete['status'],'complete')
+            self.assertEqual(complete['error'],'')
+            self.assertEqual([item['decision_id'] for item in complete['recommendations']],[identifier])
+
+    def test_explicit_guidance_and_owner_choices_still_invalidate_results(self):
+        self.add()
+        guidance={'text':'Preserve records.'}
+        def preferences(conn):
+            return {'decision_feedback':suggestions.owner_feedback(conn),'decision_guidance':guidance['text']}
+        with patch.object(suggestions,'_preferences',side_effect=preferences):
+            job=suggestions.enqueue()
+            with patch.object(suggestions,'model_call',side_effect=self.model):suggestions.run_pending_jobs()
+            self.assertEqual(len(suggestions.get_job(job['job_id'])['recommendations']),1)
+            guidance['text']='Prefer brief retention for notices.'
+            self.assertEqual(suggestions.get_job(job['job_id'])['recommendations'],[])
+            second=suggestions.enqueue()
+            with patch.object(suggestions,'model_call',side_effect=self.model):suggestions.run_pending_jobs()
+            self.assertEqual(len(suggestions.get_job(second['job_id'])['recommendations']),1)
+            other=self.add()
+            bulk.enqueue([self.selection(other,'keep_brief')],'changed-owner-intent')
+            self.assertEqual(suggestions.get_job(second['job_id'])['recommendations'],[])
+
+    def test_owner_subscription_intent_remains_part_of_context_revision(self):
+        conn=self.module.tahor_db.get_db()
+        with patch.object(suggestions,'_preferences',return_value={'explicit_choice_feedback':{'revision':1}}):
+            before=suggestions._context_key(conn)
+        with patch.object(suggestions,'_preferences',return_value={'explicit_choice_feedback':{'revision':2}}):
+            self.assertNotEqual(suggestions._context_key(conn),before)
+        conn.close()
