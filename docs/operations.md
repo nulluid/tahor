@@ -565,3 +565,12 @@ limit; interrupted external deliveries remain uncertain rather than being resent
 Email previews use bounded mailbox requests and resume searches for moved mail
 from their saved position. A temporary provider or database delay produces a
 retry message in the modal instead of holding the web worker indefinitely.
+
+
+Submitted subscription choices also guide later recommendations, including choices
+still queued for delivery. Tahor supplies the latest explicit domain-scoped choices
+from a bounded recent history and aggregate action counts across the saved history.
+A newer choice supersedes an older one for the same domain. This is private inference
+context, not model fine-tuning; tracking URLs and delivery response text are excluded.
+Submitting new choices invalidates stale AI suggestions without altering queued owner
+actions. Delivery completion alone does not invalidate another recommendation batch.

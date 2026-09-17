@@ -254,3 +254,58 @@ class SubscriptionSuggestionTests(unittest.TestCase):
             result = suggestions.get_job(job['job_id'])
         self.assertEqual(len(result['recommendations']), 3)
         self.assertEqual(key.call_count, 1)
+
+    def test_queued_owner_choices_are_prompt_feedback_without_private_urls(self):
+        import subscription_bulk
+        identifiers = self.add(3)
+        actions = ['dismiss', 'unsubscribe_block_marketing', 'unsubscribe']
+        subscription_bulk.enqueue([{'candidate_id': identifier, 'action': action} for identifier, action in zip(identifiers, actions)], 'feedback-new-owner-choices')
+        with self.db() as conn:
+            context = suggestions.build_context(conn, conn.execute('SELECT * FROM unsubscribe_candidates').fetchall())
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM subscription_actions WHERE status='queued'").fetchone()[0], 3)
+        feedback = context['trusted_owner_preferences']['explicit_choice_feedback']
+        self.assertEqual(feedback['submitted_action_counts'], {action: 1 for action in actions})
+        self.assertEqual({row['sender_domain']: row['action'] for row in feedback['recent_latest_choices']}, {'shop0.example': 'dismiss', 'shop1.example': 'unsubscribe_block_marketing', 'shop2.example': 'unsubscribe'})
+        self.assertTrue(all(row['scope'] == 'sender_domain' for row in feedback['recent_latest_choices']))
+        self.assertNotIn('SECRET_TOKEN', json.dumps(feedback))
+        self.assertNotIn('unsubscribe_url', json.dumps(feedback))
+
+    def test_latest_owner_intent_wins_and_delivery_does_not_invalidate_again(self):
+        import subscription_bulk
+        identifier = self.add()[0]
+        with self.db() as conn:
+            before = suggestions._context_key(conn)
+        subscription_bulk.enqueue([{'candidate_id': identifier, 'action': 'dismiss'}], 'feedback-first-choice')
+        with self.db() as conn:
+            after_choice = suggestions._context_key(conn)
+            self.assertNotEqual(before, after_choice)
+            conn.execute("UPDATE subscription_actions SET status='done'"); conn.commit()
+            self.assertEqual(after_choice, suggestions._context_key(conn))
+        subscription_bulk.enqueue([{'candidate_id': identifier, 'action': 'unsubscribe'}], 'feedback-second-choice')
+        with self.db() as conn:
+            feedback = suggestions._explicit_choice_feedback(conn)
+            self.assertNotEqual(after_choice, suggestions._context_key(conn))
+        self.assertEqual(len(feedback['recent_latest_choices']), 1)
+        self.assertEqual(feedback['recent_latest_choices'][0]['action'], 'unsubscribe')
+        self.assertEqual(feedback['submitted_action_counts'], {'dismiss': 1, 'unsubscribe': 1})
+
+    def test_feedback_is_bounded_but_counts_include_all_submitted_history(self):
+        import subscription_bulk
+        identifiers = self.add(180)
+        subscription_bulk.enqueue([{'candidate_id': identifier, 'action': 'dismiss'} for identifier in identifiers], 'feedback-many-choices')
+        with self.db() as conn:
+            feedback = suggestions._explicit_choice_feedback(conn)
+        self.assertEqual(feedback['submitted_action_counts'], {'dismiss': 180})
+        self.assertLessEqual(len(feedback['recent_latest_choices']), 120)
+        self.assertLessEqual(sum(len(json.dumps(item).encode()) for item in feedback['recent_latest_choices']), 16000)
+
+    def test_new_submitted_feedback_hides_stale_ai_but_preserves_saved_owner_choices(self):
+        import subscription_bulk
+        identifiers = self.add(2)
+        job = suggestions.enqueue()
+        with patch.object(suggestions, 'model_call', side_effect=self.result):
+            suggestions.run_pending_jobs()
+        self.assertEqual(len(suggestions.get_job(job['job_id'])['recommendations']), 2)
+        saved = subscription_bulk.enqueue([{'candidate_id': identifiers[0], 'action': 'dismiss'}], 'feedback-preserve-manual')
+        self.assertEqual(suggestions.get_job(job['job_id'])['recommendations'], [])
+        self.assertEqual(subscription_bulk.get_job(saved['job_id'])['items'][0]['action'], 'dismiss')

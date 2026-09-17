@@ -30,7 +30,10 @@ Prefer unsubscribe_block_marketing for clearly unwanted commercial marketing.
 Preserve personal, community, missionary/mission updates, interacting organizations,
 security notices, receipts, statements, and owner-wanted offers or coupons. Follow
 supplied owner preferences and prior choices; do not assume all commercial mail is
-unwanted. Dismiss uncertain cases with a candid low-confidence explanation.
+unwanted. explicit_choice_feedback contains owner-submitted choices, even while
+delivery is queued. Its latest domain-scoped choice outweighs generic marketing
+bias. Aggregate choice counts are background context, never authority to block
+an unrelated sender. Dismiss uncertain cases with a candid low-confidence explanation.
 Never recommend block_all merely because a company advertises. It requires explicit
 owner history blocking that exact domain or repeated verified noncompliance and
 confidence at least .95. Shared delivery platforms are not merchant identities;
@@ -97,6 +100,46 @@ def get_job(identifier):
         conn.close()
 
 
+def _explicit_choice_feedback(conn):
+    """Learn from submitted owner intent, independently of delivery completion."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='subscription_actions'").fetchone() is None:
+        return {'revision': 0, 'submitted_action_counts': {}, 'recent_latest_choices': []}
+    counts = {row['action']: row['count'] for row in conn.execute(
+        'SELECT action,COUNT(*) AS count FROM subscription_actions GROUP BY action') if row['action'] in ACTIONS}
+    revision = conn.execute('SELECT COALESCE(MAX(id),0) FROM subscription_actions').fetchone()[0]
+    latest, seen, size = [], set(), 0
+    # Scan a bounded recent window, retaining the newest explicit intent for a
+    # domain. Queued, failed and uncertain delivery still represent owner intent.
+    rows = conn.execute('SELECT id,action,snapshot FROM subscription_actions ORDER BY id DESC LIMIT 1000')
+    for row in rows:
+        if row['action'] not in ACTIONS:
+            continue
+        try:
+            snapshot = json.loads(row['snapshot'])
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(snapshot, dict):
+            continue
+        domain = snapshot.get('sender_domain')
+        sender = snapshot.get('sender_email') or ''
+        if (not isinstance(domain, str) or len(domain) > 253 or not re.fullmatch(r'[a-z0-9.-]+', domain)
+                or any(not part or part.startswith('-') or part.endswith('-') for part in domain.split('.'))):
+            continue
+        if domain in seen:
+            continue
+        seen.add(domain)
+        if (not isinstance(sender, str) or len(sender) > 320 or not re.fullmatch(r'[^\s<>"\\@]+@[^\s<>"\\@]+', sender)
+                or sender.rsplit('@', 1)[-1].lower() != domain):
+            sender = ''
+        item = {'scope': 'sender_domain', 'sender_domain': domain, 'sender_email': sender, 'action': row['action']}
+        length = len(json.dumps(item).encode())
+        if size + length > 16000 or len(latest) >= 120:
+            break
+        latest.append(item)
+        size += length
+    return {'revision': revision, 'submitted_action_counts': counts, 'recent_latest_choices': latest}
+
+
 def _preferences(conn):
     settings = mailbox_settings.load_settings()
     from coupon_expiry import policies
@@ -106,7 +149,7 @@ def _preferences(conn):
             policy = stream.read(16000)
     except FileNotFoundError:
         policy = ''
-    return dict(owner_policy=policy, subscription_guidance=str(settings.get('subscription_guidance', ''))[:12000],
+    return dict(explicit_choice_feedback=_explicit_choice_feedback(conn), owner_policy=policy, subscription_guidance=str(settings.get('subscription_guidance', ''))[:12000],
                 reply_rules=[{key: rule.get(key) for key in ('name','match_type','match','excluded_senders')} for rule in settings.get('reply_rules', []) if isinstance(rule, dict) and rule.get('enabled', True)][:10],
                 coupon_senders=list(policies())[:200],
                 prior_subscription_choices=[dict(row) for row in conn.execute("SELECT sender_domain,status FROM unsubscribe_candidates WHERE status!='pending' ORDER BY last_seen_at DESC LIMIT 100")],
@@ -115,8 +158,8 @@ def _preferences(conn):
 
 def _context_key(conn):
     preferences = _preferences(conn)
-    # New per-sender choices remain useful history, but must not hide all other
-    # recommendations after applying one item. Explicit guidance changes do.
+    # Submitted bulk intent invalidates stale AI via its stable feedback revision.
+    # Delivery/status transitions must not invalidate suggestions or manual choices.
     preferences.pop('prior_subscription_choices', None)
     preferences.pop('sender_rules', None)
     return hashlib.sha256(json.dumps(preferences, sort_keys=True).encode()).hexdigest()
