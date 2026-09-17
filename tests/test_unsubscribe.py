@@ -1,5 +1,8 @@
 from pathlib import Path
 import socket
+import os
+import smtplib
+import urllib.error
 import ssl
 import sys
 import unittest
@@ -55,6 +58,7 @@ class UnsubscribeTests(unittest.TestCase):
     def test_mailto_subject_and_body_are_parsed(self):
         candidate = dict(unsubscribe_url=None, unsubscribe_mailto='leave@example.com?subject=Remove%20me&body=please', one_click=False)
         with patch.object(unsubscribe.smtplib, 'SMTP_SSL') as smtp:
+            smtp.return_value.__enter__.return_value.send_message.return_value = {}
             unsubscribe.execute(candidate, 'owner@example.com', 'secret', 'smtp.example.com', 465)
             message = smtp.return_value.__enter__.return_value.send_message.call_args.args[0]
         self.assertEqual(message['To'], 'leave@example.com')
@@ -62,5 +66,119 @@ class UnsubscribeTests(unittest.TestCase):
         self.assertEqual(message.get_content().strip(), 'please')
 
     def test_no_mechanism_is_not_reported_as_success(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaises(unsubscribe.UnsubscribeError):
             unsubscribe.execute(dict(unsubscribe_url=None, unsubscribe_mailto=None, one_click=False), '', '', '', 465)
+
+    def test_smtp_requires_verified_tls_and_supports_separate_sending_credential(self):
+        candidate = dict(unsubscribe_url=None, unsubscribe_mailto='leave@example.com', one_click=False)
+        with patch.dict(os.environ, {'FASTMAIL_SMTP_USERNAME': 'login@example.com', 'FASTMAIL_SMTP_APP_PASSWORD': 'smtp-only-secret'}), patch.object(unsubscribe.smtplib, 'SMTP_SSL') as smtp:
+            session = smtp.return_value.__enter__.return_value
+            session.send_message.return_value = {}
+            unsubscribe.execute(candidate, 'owner@example.com', 'imap-only-secret', 'smtp.example.com', 465)
+            session.login.assert_called_once_with('login@example.com', 'smtp-only-secret')
+            context = smtp.call_args.kwargs['context']
+            self.assertTrue(context.check_hostname)
+            self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+            self.assertEqual(session.send_message.call_args.args[0]['From'], 'owner@example.com')
+
+    def test_smtp_authentication_failure_is_actionable_without_provider_secrets(self):
+        candidate = dict(unsubscribe_url=None, unsubscribe_mailto='tokenized-address@example.com', one_click=False)
+        with patch.object(unsubscribe.smtplib, 'SMTP_SSL') as smtp:
+            smtp.return_value.__enter__.return_value.login.side_effect = smtplib.SMTPAuthenticationError(535, b'PRIVATE PROVIDER RESPONSE token=secret')
+            with self.assertRaises(unsubscribe.UnsubscribeError) as error:
+                unsubscribe.execute(candidate, 'owner@example.com', 'private-password', 'smtp.example.com', 465)
+            smtp.return_value.__enter__.return_value.send_message.assert_not_called()
+        text = str(error.exception)
+        self.assertIn('Mail (IMAP/POP/SMTP)', text)
+        self.assertNotIn('secret', text)
+        self.assertNotIn('private-password', text)
+        self.assertNotIn('tokenized-address', text)
+
+    def test_explicit_http_403_uses_only_advertised_mailto_alternative(self):
+        candidate = dict(unsubscribe_url='https://example.com/private-token', unsubscribe_mailto='leave@example.com?subject=unsubscribe', one_click=True)
+        rejected = urllib.error.HTTPError(candidate['unsubscribe_url'], 403, 'PRIVATE BODY', {}, None)
+        with patch.object(unsubscribe, 'open_public', side_effect=rejected), patch.object(unsubscribe.smtplib, 'SMTP_SSL') as smtp:
+            smtp.return_value.__enter__.return_value.send_message.return_value = {}
+            result = unsubscribe.execute(candidate, 'owner@example.com', 'secret', 'smtp.example.com', 465)
+            self.assertIn('advertised email method', result)
+            smtp.return_value.__enter__.return_value.send_message.assert_called_once()
+
+    def test_timeout_or_non_403_error_never_sends_second_transport_request(self):
+        candidate = dict(unsubscribe_url='https://example.com/private-token', unsubscribe_mailto='leave@example.com', one_click=True)
+        for error in (TimeoutError('PRIVATE'), urllib.error.HTTPError(candidate['unsubscribe_url'], 500, 'PRIVATE', {}, None)):
+            with self.subTest(error=type(error).__name__), patch.object(unsubscribe, 'open_public', side_effect=error), patch.object(unsubscribe.smtplib, 'SMTP_SSL') as smtp:
+                with self.assertRaises(unsubscribe.UnsubscribeError) as failure:
+                    unsubscribe.execute(candidate, 'owner@example.com', 'secret', 'smtp.example.com', 465)
+                smtp.assert_not_called()
+                self.assertNotIn('PRIVATE', str(failure.exception))
+                self.assertNotIn('private-token', str(failure.exception))
+
+    def test_403_without_mailto_requires_manual_action_and_never_claims_success(self):
+        candidate = dict(unsubscribe_url='https://example.com/private-token', unsubscribe_mailto=None, one_click=True)
+        error = urllib.error.HTTPError(candidate['unsubscribe_url'], 403, 'PRIVATE', {}, None)
+        with patch.object(unsubscribe, 'open_public', side_effect=error), patch.object(unsubscribe.smtplib, 'SMTP_SSL') as smtp:
+            with self.assertRaisesRegex(unsubscribe.UnsubscribeError, 'Open its unsubscribe page'):
+                unsubscribe.execute(candidate, '', '', '', 465)
+            smtp.assert_not_called()
+
+    def test_generic_link_requires_confirmation_without_issuing_get(self):
+        candidate = dict(unsubscribe_url='https://example.com/private-token', unsubscribe_mailto=None, one_click=False)
+        with patch.object(unsubscribe, 'validate_url'), patch.object(unsubscribe, 'open_public') as opener:
+            with self.assertRaises(unsubscribe.UnsubscribeError) as error:
+                unsubscribe.execute(candidate, '', '', '', 465)
+            self.assertEqual(error.exception.code, 'manual_confirmation')
+            opener.assert_not_called()
+
+    def test_mailto_fallback_rejects_header_injection_before_connect(self):
+        candidate = dict(unsubscribe_url='https://example.com/u', unsubscribe_mailto='leave@example.com?subject=unsubscribe%0d%0aBcc%3asecret', one_click=True)
+        rejected = urllib.error.HTTPError(candidate['unsubscribe_url'], 403, 'Forbidden', {}, None)
+        with patch.object(unsubscribe, 'open_public', side_effect=rejected), patch.object(unsubscribe.smtplib, 'SMTP_SSL') as smtp:
+            with self.assertRaises(unsubscribe.UnsubscribeError):
+                unsubscribe.execute(candidate, 'owner@example.com', 'secret', 'smtp.example.com', 465)
+            smtp.assert_not_called()
+
+    def test_smtp_recipient_rejection_is_not_success(self):
+        candidate = dict(unsubscribe_url=None, unsubscribe_mailto='leave@example.com', one_click=False)
+        with patch.object(unsubscribe.smtplib, 'SMTP_SSL') as smtp:
+            smtp.return_value.__enter__.return_value.send_message.return_value = {'leave@example.com': (550, b'PRIVATE')}
+            with self.assertRaisesRegex(unsubscribe.UnsubscribeError, 'address was rejected'):
+                unsubscribe.execute(candidate, 'owner@example.com', 'secret', 'smtp.example.com', 465)
+
+    def test_database_wrapper_uses_configured_smtp_host(self):
+        import tahor_db
+        import config
+        with patch.object(config, 'SMTP_HOST', 'smtp.other.example'), patch.object(unsubscribe, 'execute', return_value='Submitted') as execute:
+            self.assertEqual(tahor_db.execute_unsubscribe({}, 'owner@example.com', 'secret'), 'Submitted')
+        self.assertEqual(execute.call_args.args[-2:], ('smtp.other.example', 465))
+
+    def test_insecure_one_click_uses_advertised_mailto_without_http_request(self):
+        candidate = dict(unsubscribe_url='http://example.com/u', unsubscribe_mailto='leave@example.com', one_click=True)
+        with patch.object(unsubscribe, 'open_public') as opener, patch.object(unsubscribe.smtplib, 'SMTP_SSL') as smtp:
+            smtp.return_value.__enter__.return_value.send_message.return_value = {}
+            self.assertIn('email submitted', unsubscribe.execute(candidate, 'owner@example.com', 'secret', 'smtp.example.com', 465))
+            smtp.return_value.__enter__.return_value.send_message.assert_called_once()
+            opener.assert_not_called()
+
+    def test_insecure_one_click_without_mailto_requires_manual_confirmation(self):
+        candidate = dict(unsubscribe_url='http://example.com/u', unsubscribe_mailto=None, one_click=True)
+        with patch.object(unsubscribe, 'validate_url'), patch.object(unsubscribe, 'open_public') as opener:
+            with self.assertRaises(unsubscribe.UnsubscribeError) as error:
+                unsubscribe.execute(candidate, '', '', '', 465)
+            self.assertEqual(error.exception.code, 'manual_confirmation')
+            self.assertIn('insecure HTTP', str(error.exception))
+            opener.assert_not_called()
+
+    def test_unsafe_one_click_scheme_never_uses_network(self):
+        candidate = dict(unsubscribe_url='file:///etc/passwd', unsubscribe_mailto='leave@example.com', one_click=True)
+        with patch.object(unsubscribe, 'open_public') as opener, patch.object(unsubscribe.smtplib, 'SMTP_SSL') as smtp:
+            with self.assertRaises(unsubscribe.UnsubscribeError):
+                unsubscribe.execute(candidate, 'owner@example.com', 'secret', 'smtp.example.com', 465)
+            opener.assert_not_called()
+            smtp.assert_not_called()
+
+    def test_quit_failure_after_smtp_acceptance_does_not_invite_duplicate_send(self):
+        candidate = dict(unsubscribe_url=None, unsubscribe_mailto='leave@example.com', one_click=False)
+        with patch.object(unsubscribe.smtplib, 'SMTP_SSL') as smtp:
+            smtp.return_value.__enter__.return_value.send_message.return_value = {}
+            smtp.return_value.__exit__.side_effect = smtplib.SMTPServerDisconnected('PRIVATE')
+            self.assertIn('email submitted', unsubscribe.execute(candidate, 'owner@example.com', 'secret', 'smtp.example.com', 465))

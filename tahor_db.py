@@ -188,9 +188,12 @@ def get_unsubscribe_candidate(sender_domain):
     return row
 
 
-def execute_unsubscribe(candidate, from_addr, app_password, smtp_host="smtp.fastmail.com", smtp_port=465):
+def execute_unsubscribe(candidate, from_addr, app_password, smtp_host=None, smtp_port=None):
+    import config
     from unsubscribe import execute
-    return execute(candidate, from_addr, app_password, smtp_host, smtp_port)
+    return execute(candidate, from_addr, app_password,
+                   config.SMTP_HOST if smtp_host is None else smtp_host,
+                   config.SMTP_PORT if smtp_port is None else smtp_port)
 
 
 def queue_message_review(mailbox, message_id, subject, uid=None, uidvalidity=None, metadata=None):
