@@ -85,6 +85,20 @@ class ReplyFallbackTests(unittest.TestCase):
             self.write()
         complete.assert_not_called()
 
+    def test_disabled_backup_makes_no_free_request_and_primary_recovers(self):
+        mailbox_settings.set_reply_backup_model('none')
+        self.assertEqual(mailbox_settings.get_reply_backup_model(), 'none')
+        with patch.object(reply_backend_recovery.time, 'time', return_value=1000), patch.object(draft_replies, 'reply_completion', side_effect=TimeoutError()) as complete, self.assertRaises(ValueError):
+            self.write()
+        self.assertEqual(complete.call_count, 1)
+        self.assertEqual(complete.call_args.args[0]['model'], 'openai/gpt-5.1')
+        with patch.object(reply_backend_recovery.time, 'time', return_value=1100), patch.object(draft_replies, 'reply_completion') as complete, self.assertRaises(ValueError):
+            self.write()
+        complete.assert_not_called()
+        with patch.object(reply_backend_recovery.time, 'time', return_value=1301), patch.object(draft_replies, 'reply_completion', side_effect=[self.generated, self.approved]) as complete:
+            self.write()
+        self.assertTrue(all(call.args[0]['model'] == 'openai/gpt-5.1' for call in complete.call_args_list))
+
     def test_backup_setting_rejects_paid_models_and_corruption_defaults_free(self):
         for key in ('gpt5', 'gpt5-flex', 'gemini-flash', 'missing'):
             with self.subTest(key=key), self.assertRaises(ValueError):

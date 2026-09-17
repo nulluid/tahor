@@ -200,7 +200,7 @@ def draft_reply_body(subject, sender, body_text, rule=None, verification=None):
         else:
             reply_backend_recovery.record_success(primary, primary_backend)
             return result
-    if backup == primary:
+    if backup == 'none' or backup == primary:
         raise ReplyBackendError('Reply provider is unavailable; retry after cooldown')
     if backup not in mailbox_settings.free_reply_models():
         raise ReplyBackendError('Reply fallback must be explicitly free')

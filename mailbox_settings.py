@@ -247,13 +247,13 @@ def free_reply_models():
 
 def get_reply_backup_model():
     key = load_settings().get('reply_backup_model', 'nemotron-free')
-    return key if key in free_reply_models() else 'nemotron-free'
+    return key if key == 'none' or key in free_reply_models() else 'nemotron-free'
 
 
 @locked_update
 def set_reply_backup_model(key):
-    if key not in free_reply_models():
-        raise ValueError('Choose an explicitly free reply model for fallback.')
+    if key != 'none' and key not in free_reply_models():
+        raise ValueError('Choose an explicitly free reply model or disable fallback.')
     settings = load_settings()
     settings['reply_backup_model'] = key
     save_settings(settings)

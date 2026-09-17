@@ -478,7 +478,8 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
   </div>
 </form>
 <h3>Free backup for reply writing</h3>
-<p class="hint">If the primary writer is unavailable, use this free model for both writing and verification. Retry the primary on new drafting work after a five-minute cooldown. A rejected reply stays pending; Tahor never substitutes another paid model.</p>
+<p class="hint">If the primary writer is unavailable, use this free model for both writing and verification. Retry the primary on new drafting work after a five-minute cooldown. A rejected reply stays pending; Tahor never substitutes another paid model. Disable backup to keep work pending until the primary recovers.</p>
+<p class="hint">Free does not imply private: the <a href="https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free" target="_blank" rel="noopener noreferrer">Nemotron free endpoint</a> warns against confidential or personal data and may log requests for provider improvement. Review the provider terms before using it for mail.</p>
 <form method="post" action="/settings">
   <label>Free backup model <select name="reply_backup_model">{reply_backup_options}</select></label>
   <button type="submit">Save free backup</button>
@@ -847,7 +848,7 @@ def settings_page():
         mode_cards=mode_cards,
         rule_model_cards=rule_model_cards,
         reply_model_cards=reply_model_cards,
-        reply_backup_options="".join(f'<option value="{html(key)}"{" selected" if key == mailbox_settings.get_reply_backup_model() else ""}>{html(backend["label"])}</option>' for key, backend in mailbox_settings.free_reply_models().items()),
+        reply_backup_options=('<option value="none"'+(' selected' if mailbox_settings.get_reply_backup_model() == 'none' else '')+'>Disabled — keep replies pending</option>')+"".join(f'<option value="{html(key)}"{" selected" if key == mailbox_settings.get_reply_backup_model() else ""}>{html(backend["label"])}</option>' for key, backend in mailbox_settings.free_reply_models().items()),
         reply_rules_list=render_reply_rules(),
         provider_status=html(provider['label']),
         provider_next_value='0' if provider['enabled'] else '1',

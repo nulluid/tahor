@@ -29,6 +29,9 @@ class WebActionTests(AppTestCase):
         page = self.client.get('/settings').get_data(as_text=True)
         self.assertIn('Free backup for reply writing', page)
         self.assertIn('name="reply_backup_model"', page)
+        self.assertIn('Disabled — keep replies pending', page)
+        self.assertEqual(self.post('/settings', reply_backup_model='none').status_code, 302)
+        self.assertEqual(settings.get_reply_backup_model(), 'none')
 
     def test_successful_unsubscribe_records_request_time(self):
         self.module.tahor_db.upsert_unsubscribe_candidate('example.com', '', '', 'https://example.com/unsubscribe', None, True)
