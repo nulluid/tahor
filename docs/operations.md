@@ -538,7 +538,9 @@ after an interruption, Tahor reports it and does not repeat the request blindly.
 
 Settings has independent paid/free models and spending policy for subscription
 recommendations, a batch size (50 by default), and private written guidance.
-Recommendations use prior decisions and bounded message excerpts. The default
+Recommendations use prior decisions and bounded message excerpts through the
+same privacy-restricted model routes. The guidance and recommendation history
+stay in private instance data and are included in private recovery backups. The default
 policy is paid with free fallback. Email previews on both decision pages stay in
 a modal and preserve your scroll position and selections. Older review cards
 load missing sender/date details in bounded background passes with fair retries.

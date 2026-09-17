@@ -34,6 +34,13 @@ class MessageLookupTests(unittest.TestCase):
         self.assertEqual(message_reviews.locate(self.context)['uid'], '7')
         self.assertEqual(self.client.uid.call_args_list[0].args[0], 'SEARCH')
 
+    def test_deleted_original_never_substitutes_another_copy_in_same_folder(self):
+        self.context.update(uid='6', uidvalidity='42')
+        self.client.uid.side_effect = [('OK', [None]), ('OK', [b'7']), ('OK', [(self.metadata, self.header)])]
+        with self.assertRaisesRegex(RuntimeError, 'different copy'):
+            message_reviews.locate(self.context)
+        self.client.logout.assert_called_once()
+
     def test_missing_or_duplicate_matches_never_pick_arbitrary_message(self):
         for replies in [[('OK', [b''])], [('OK', [b'7 8']), ('OK', [(self.metadata, self.header)]), ('OK', [(self.metadata.replace(b'UID 7', b'UID 8'), self.header)])]]:
             with self.subTest(replies=len(replies)):

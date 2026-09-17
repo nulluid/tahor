@@ -105,6 +105,9 @@ def locate(context, budget_seconds=20, bounded=False):
         original = _folder_matches(client, mailbox, identifier, context)
         if not original and context.get('uid'):
             original = _folder_matches(client, mailbox, identifier)
+            if any(str(item['uidvalidity']) == str(context.get('uidvalidity'))
+                   and str(item['uid']) != str(context['uid']) for item in original):
+                raise RuntimeError('A different copy of this message exists in the original folder; no other message was selected')
         if len(original) == 1:
             context.pop('review_search', None)
             return original[0]
