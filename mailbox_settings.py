@@ -129,7 +129,11 @@ RULE_MODELS['ling-free']['request_options']['max_tokens'] = 4096
 SUBSCRIPTION_MODELS = {key: copy.deepcopy(RULE_MODELS[key]) for key in ("none", "grok-4.6", "gpt5", "ling-free")}
 for backend in SUBSCRIPTION_MODELS.values():
     if backend["model"] != "none":
-        backend.setdefault("request_options", {}).update(max_tokens=4096, response_format={"type": "json_object"})
+        options = backend.setdefault("request_options", {})
+        options["max_tokens"] = 4096
+        # Novita Ling rejects structured-output mode; validate its JSON text locally.
+        if not backend["model"].endswith(":free"):
+            options["response_format"] = {"type": "json_object"}
 
 def ai_model_registry(task):
     return {"reply": REPLY_MODELS, "rule": RULE_MODELS, "subscriptions": SUBSCRIPTION_MODELS}[task]

@@ -211,6 +211,10 @@ class SubscriptionSuggestionTests(unittest.TestCase):
             calls=[]
             def response(request,**kwargs):
                 payload=json.loads(request.data);calls.append(payload['model'])
+                if payload['model'].endswith(':free'):
+                    self.assertNotIn('response_format', payload)
+                else:
+                    self.assertEqual(payload['response_format'], {'type': 'json_object'})
                 if not payload['model'].endswith(':free'):
                     raise OSError('Synthetic paid outage')
                 return io.BytesIO(json.dumps({'choices':[{'message':{'content':json.dumps({'recommendations':self.result(context)})}}]}).encode())
