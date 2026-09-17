@@ -170,6 +170,19 @@ def apply_vendor_mapping(row, resolution):
     if not isinstance(context, dict):
         context = {}
     sender_label = context.get("sender_label") or row["summary"].split(":")[-1].strip().split(" ")[0].lower()
+    routing_key = context.get('routing_key')
+    sender_email = context.get('sender_email')
+    if routing_key is not None or sender_email is not None:
+        if (not isinstance(routing_key, str) or not isinstance(sender_email, str)
+                or routing_key != sender_email or routing_key != routing_key.strip().lower()
+                or not re.fullmatch(r'[^\s<>@"\\]+@[a-z0-9.-]+', routing_key)
+                or len(routing_key) > 320
+                or any(not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', part)
+                       for part in routing_key.rsplit('@', 1)[-1].split('.'))):
+            raise ValueError('Sender identity changed or is invalid; refresh this routing request')
+        sender_label = routing_key
+    elif sender_label.lower() == 'shopifyemail' or sender_label.lower() == 'shopifyemail.com' or sender_label.lower().endswith('.shopifyemail.com'):
+        raise ValueError('Shared delivery domain needs an exact sender; refresh this routing request')
 
     buckets = json.loads(VENDOR_BUCKETS_PATH.read_text()) if VENDOR_BUCKETS_PATH.exists() else {}
     buckets[sender_label.lower()] = [bucket, vendor_name]

@@ -10,11 +10,12 @@ Usage:
   python3 filing_sweep.py [--dry-run]
 
 Vendor routing comes from vendor_buckets.json (see vendor_buckets.example.json):
-registrable-domain label -> [bucket, display name]. An unmapped sender files
+exact sender address or legacy domain label -> [bucket, display name]. An unmapped sender files
 under "<root>/_Unsorted/<label>" instead of blocking, and is printed so the
 table can grow.
 """
 import email.utils
+import email.policy
 import imaplib
 import re
 import sys
@@ -39,6 +40,9 @@ def connect():
 
 def vendor_for(from_header, buckets):
     _, addr = email.utils.parseaddr(from_header or "")
+    addr = addr.strip().lower()
+    if addr in buckets:
+        return buckets[addr]
     domain = re.sub(r"^www\.", "", addr.split("@")[-1].lower() if "@" in addr else "")
     parts = domain.split(".") if domain else []
     # The registrable label is the second-to-last segment, not the leftmost
@@ -180,17 +184,25 @@ def main():
         if uid in reply_destinations:
             by_dest[reply_destinations[uid]].append(uid)
             continue
-        typ, msg_data = conn.uid("FETCH", uid, "(BODY.PEEK[HEADER.FIELDS (FROM)])")
+        typ, msg_data = conn.uid("FETCH", uid, "(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
         if typ != "OK" or not msg_data or not msg_data[0]:
             failures += 1
             continue
-        header_blob = msg_data[0][1].decode(errors="replace")
-        from_header = header_blob.split(":", 1)[-1].strip() if ":" in header_blob else header_blob
+        message = email.message_from_bytes(msg_data[0][1], policy=email.policy.default)
+        from_header = message.get('From', '')
         bucket, vendor = vendor_for(from_header, buckets)
         if bucket == "_Unsorted":
             unsorted_labels.add(vendor)
             if not dry_run and vendor != "Unknown":
-                tahor_db.queue_vendor_mapping(vendor)
+                display_name, sender_email = email.utils.parseaddr(from_header)
+                delivered = re.search(rb'INTERNALDATE "([^"]+)"', msg_data[0][0])
+                tahor_db.queue_vendor_mapping(vendor, metadata={
+                    'sender_email': sender_email.strip().lower(),
+                    'display_name': display_name, 'subject': str(message.get('Subject', '')),
+                    'suggested_vendor': display_name,
+                    'date': str(message.get('Date', '')),
+                    'received_at': delivered[1].decode('ascii', errors='replace') if delivered else '',
+                })
         by_dest[f"{root}/{bucket}/{vendor}"].append(uid)
 
     capabilities = {c.decode().upper() if isinstance(c, bytes) else c.upper() for c in conn.capabilities}
