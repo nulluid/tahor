@@ -106,28 +106,38 @@ class MailboxTests(unittest.TestCase):
             count.assert_called_once_with(['INBOX', 'Imported'])
             save.assert_called_once_with(7453)
 
-    def test_new_folders_join_next_pass_and_only_complete_empty_pass_idles(self):
+    def run_scheduled_loop(self, outcomes, backend_retrying=False):
+        import mailbox_scheduler
+        scheduler = Mock()
+        scheduler.next_mailbox.side_effect = ['INBOX', 'New folder', None]
+        scheduler.snapshot.return_value = {'mailbox_count': 2, 'productive_mailbox_count': 0,
+            'discovery_scanning': False, 'discovery_failed': False, 'backend_retrying': backend_retrying}
         class StopLoop(Exception):
             pass
-        with tempfile.TemporaryDirectory() as directory, patch.object(worker, 'PROCESSED_IDS_PATH', Path(directory) / 'processed'), patch.object(worker.process_batch.tahor_db, 'init_db'), patch.object(worker, 'discover_mailboxes', side_effect=[['INBOX'], ['INBOX', 'New folder']]), patch.object(worker, 'process_one_batch', side_effect=['processed', 'empty', 'empty', 'empty']) as process, patch.object(worker, 'log'), patch.object(worker.runtime_status, 'write_status') as status, patch.object(worker.time, 'sleep', side_effect=[None, StopLoop]) as sleep:
+        scheduler.wait.side_effect = StopLoop
+        discovery = Mock()
+        with tempfile.TemporaryDirectory() as directory, patch.object(worker, 'PROCESSED_IDS_PATH', Path(directory) / 'processed'), patch.object(worker.process_batch.tahor_db, 'init_db'), patch.object(mailbox_scheduler, 'ProductiveMailboxes', return_value=scheduler), patch.object(mailbox_scheduler, 'Discovery', return_value=discovery), patch.object(worker, 'process_one_batch', side_effect=outcomes) as process, patch.object(worker, 'log'), patch.object(worker.runtime_status, 'write_status') as status, patch.object(worker.time, 'sleep') as sleep:
             with self.assertRaises(StopLoop):
                 worker.main()
-            self.assertEqual([call.args[0] for call in process.call_args_list], ['INBOX', 'INBOX', 'New folder', 'INBOX'])
-            self.assertEqual([call.args[0] for call in sleep.call_args_list], [worker.SLEEP_BETWEEN_BATCHES, worker.SLEEP_WHEN_IDLE])
-            self.assertEqual(status.call_args.args, ('idle',))
+        discovery.start.assert_called_once()
+        discovery.stop_event.set.assert_called_once()
+        discovery.join.assert_called_once_with(timeout=2)
+        return scheduler, process, status, sleep
+
+    def test_new_folders_join_queue_and_only_empty_finished_discovery_idles(self):
+        scheduler, process, status, sleep = self.run_scheduled_loop(['processed', 'empty'])
+        self.assertEqual([call.args[0] for call in process.call_args_list], ['INBOX', 'New folder'])
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [worker.SLEEP_BETWEEN_BATCHES])
+        self.assertEqual(status.call_args.args, ('idle',))
 
     def test_one_folder_error_does_not_stop_other_folders(self):
-        class StopLoop(Exception):
-            pass
-        with tempfile.TemporaryDirectory() as directory, patch.object(worker, 'PROCESSED_IDS_PATH', Path(directory) / 'processed'), patch.object(worker.process_batch.tahor_db, 'init_db'), patch.object(worker, 'discover_mailboxes', side_effect=[['INBOX', 'Archive'], StopLoop]), patch.object(worker, 'process_one_batch', side_effect=[RuntimeError('offline'), 'processed', 'empty']) as process, patch.object(worker, 'log'), patch.object(worker.runtime_status, 'write_status'), patch.object(worker.time, 'sleep', side_effect=[None, None, StopLoop]):
-            with self.assertRaises(StopLoop):
-                worker.main()
-            self.assertEqual([call.args[0] for call in process.call_args_list], ['INBOX', 'Archive', 'INBOX'])
+        scheduler, process, status, sleep = self.run_scheduled_loop([RuntimeError('private failure'), 'processed_paid'])
+        self.assertEqual([call.args[:2] for call in scheduler.completed.call_args_list], [('INBOX','error'),('New folder','processed_paid')])
+        self.assertEqual(process.call_count, 2)
+        self.assertNotIn('private failure', str(status.call_args_list))
 
-    def test_paid_success_skips_free_tier_pause_but_outage_still_backs_off(self):
-        class StopLoop(Exception):
-            pass
-        with tempfile.TemporaryDirectory() as directory, patch.object(worker, 'PROCESSED_IDS_PATH', Path(directory) / 'processed'), patch.object(worker.process_batch.tahor_db, 'init_db'), patch.object(worker, 'discover_mailboxes', return_value=['INBOX', 'Archive']), patch.object(worker, 'process_one_batch', side_effect=['processed_paid', 'backend_unavailable', 'empty']), patch.object(worker, 'PAID_BATCH_DELAY', 0), patch.object(worker, 'log'), patch.object(worker.runtime_status, 'write_status'), patch.object(worker.time, 'sleep', side_effect=[None, StopLoop]) as sleep:
-            with self.assertRaises(StopLoop):
-                worker.main()
-            self.assertEqual([call.args[0] for call in sleep.call_args_list], [0, worker.BACKEND_RETRY_SECONDS])
+    def test_paid_success_skips_free_pause_and_outage_defers_to_shared_cooldown(self):
+        scheduler, process, status, sleep = self.run_scheduled_loop(['processed_paid', 'backend_unavailable'], backend_retrying=True)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [worker.PAID_BATCH_DELAY])
+        self.assertEqual(scheduler.completed.call_args.kwargs['backend_retry'], worker.BACKEND_RETRY_SECONDS)
+        self.assertEqual(status.call_args.args, ('retrying',))

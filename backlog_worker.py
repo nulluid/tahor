@@ -588,47 +588,37 @@ def main():
     PROCESSED_IDS_PATH.touch(exist_ok=True)
     log("backlog_worker starting (in-process mode)")
 
-    while True:
-        # "empty" (genuinely no unprocessed mail left) is the only status
-        # that should trigger the idle sleep below -- "backend_unavailable" and
-        # "error" mean real mail is still waiting, just blocked, and should
-        # retry right after their own backoff instead of also being logged
-        # as "no new mail" and sleeping an extra SLEEP_WHEN_IDLE on top.
-        all_empty = True
-        try:
-            mailboxes = discover_mailboxes()
-        except Exception as e:
-            log(f"Mailbox discovery failed: {e!r}; retrying")
-            runtime_status.write_status("error", error=str(e)[:200])
-            time.sleep(SLEEP_BETWEEN_BATCHES)
-            continue
-        runtime_status.write_status("fetching", mailbox_count=len(mailboxes))
-        for mailbox in scheduled_mailboxes(mailboxes):
+    from mailbox_scheduler import ProductiveMailboxes, Discovery
+    scheduler = ProductiveMailboxes(retry_seconds=max(30, SLEEP_BETWEEN_BATCHES))
+    discovery = Discovery(scheduler, fetch_batch.connect, log)
+    discovery.start()
+    try:
+        while True:
+            mailbox = scheduler.next_mailbox()
+            if mailbox is None:
+                snapshot = scheduler.snapshot()
+                state = ('error' if snapshot['discovery_failed'] else 'retrying' if snapshot['backend_retrying']
+                         else 'fetching' if snapshot['discovery_scanning'] or snapshot['productive_mailbox_count'] else 'idle')
+                runtime_status.write_status(state, **snapshot)
+                scheduler.wait()
+                continue
+            runtime_status.write_status('fetching', mailbox=mailbox, **scheduler.snapshot())
             try:
                 status = process_one_batch(mailbox)
-            except Exception as e:
-                log(f"{mailbox}: exception {e!r}, backing off")
-                status = "error"
-                runtime_status.write_status("error", error=str(e)[:200])
-
-            if status != "empty":
-                all_empty = False
-
-            if status == "processed":
+            except Exception:
+                log('Mailbox batch failed; retained for retry')
+                status = 'error'
+                runtime_status.write_status('error', error='Mailbox batch failed; retained for retry')
+            scheduler.completed(mailbox, status, backend_retry=BACKEND_RETRY_SECONDS)
+            if status == 'processed':
                 time.sleep(SLEEP_BETWEEN_BATCHES)
-            elif status == "processed_paid":
+            elif status == 'processed_paid':
                 time.sleep(PAID_BATCH_DELAY)
-            elif status == "backend_unavailable":
-                log(f"{mailbox}: no classifications succeeded -- retrying in {BACKEND_RETRY_SECONDS}s")
-                runtime_status.write_status("retrying", retry_seconds=BACKEND_RETRY_SECONDS)
-                time.sleep(BACKEND_RETRY_SECONDS)
-            elif status == "error":
-                time.sleep(SLEEP_BETWEEN_BATCHES)
-
-        if all_empty:
-            log(f"No new mail in any mailbox -- sleeping {SLEEP_WHEN_IDLE}s")
-            runtime_status.write_status("idle")
-            time.sleep(SLEEP_WHEN_IDLE)
+            elif status == 'backend_unavailable':
+                runtime_status.write_status('retrying', retry_seconds=BACKEND_RETRY_SECONDS)
+    finally:
+        discovery.stop_event.set()
+        discovery.join(timeout=2)
 
 
 if __name__ == "__main__":

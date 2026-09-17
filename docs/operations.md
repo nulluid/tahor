@@ -5,7 +5,24 @@
 ## Know what is running
 
 The continuous worker classifies and tags every selectable folder, with no size limit.
-It checks INBOX between other folders and rediscovers folders on each pass. It deletes explicit trash immediately but does not run age-based retention or
+It gives INBOX three productive batches for each batch from another ordinary folder.
+Trash (identified by the provider's special-use flag or its name) waits until an
+INBOX visit confirms no classification or eligible deletion work remains. New
+inbox work preempts Trash between batches; this never empties Trash wholesale.
+
+One background discovery connection checks every selectable folder with bounded,
+read-only searches, including currently empty folders and newly created folders.
+Sweeps start about five minutes apart, or when the preceding sweep finishes if
+it takes longer. Only folders with work enter the fair processing queue; cold
+folders do not each cause a fetch login and a separate deletion login. Empty
+INBOX is polled after thirty seconds, subject to the current batch finishing.
+Recent classified inbox mail is still scanned for reply-rule changes by the
+independent draft watcher. Ordinary folder failures have their own retry delay;
+a complete model outage pauses classification for five minutes without stopping
+discovery. Failed discovery reconnects after thirty seconds and resumes beyond
+the failed folder so later folders are not permanently starved.
+
+The worker deletes explicit trash immediately on a scheduled folder visit but does not run age-based retention or
 filing itself. Reply drafting has its own watcher. The web app reads the same
 SQLite database and settings file; its Status page reports the worker’s actual
 last batch rather than inferring health from the selected speed.
