@@ -596,3 +596,8 @@ A failed external unsubscribe can still have a successfully saved marketing bloc
 that completed local choice is not offered again as a new bulk action. Network
 failures with an unknown submission outcome retry the same request identifier,
 so retrying cannot queue the same unsubscribe twice.
+
+The subscription toolbar shows an animated working indicator while AI suggestions
+are queued or running, actions are being submitted, or saved batches are still
+processing. Progress text remains visible; reduced-motion preferences disable
+the rotation while retaining the working label.
