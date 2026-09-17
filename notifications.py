@@ -280,9 +280,10 @@ def run(now=None):
                 body = ('Tahor daily summary\n\n'+state.get('health_summary', 'Worker status unavailable.')+
                         f'\nPending decisions: {pending}\nDrafts prepared in the last 24 hours: {drafted}\nDraft preparations awaiting retry: {retrying}\n\nDraft counts are from Tahor’s local journal, not the current mailbox Drafts count. Review replies in Fastmail and rules in Tahor Settings.\n')
                 state['events'][event_id] = dict(kind='digest', status='pending', created_at=now, subject='Tahor daily summary', body=body)
-        # Keep ambiguous outcomes for 90 days and active incidents indefinitely.
+        # Keep sent digest evidence for safe cleanup even after a long outage.
+        # Other old outcomes expire after 90 days; active incidents are retained.
         active_ids = {'health:'+key+':'+row['incident'] for key, row in state.get('problems', {}).items()}
-        state['events'] = {key: value for key, value in state['events'].items() if key in active_ids or now-value['created_at'] < 90*86400}
+        state['events'] = {key: value for key, value in state['events'].items() if key in active_ids or (value.get('kind') == 'digest' and value.get('status') == 'sent') or now-value['created_at'] < 90*86400}
         persist(path, state)
         sent = 0
         for key, event in state['events'].items():

@@ -138,3 +138,5 @@ problem. The timestamp is updated only after the receiver validates its copy,
 not merely when the server creates an archive. Normal health-alert persistence
 and deduplication apply. Check the receiving computer's scheduler, connectivity
 and private status file if an alert arrives.
+
+Sent digest identity and rendered-body evidence remain in the private notification ledger so cleanup still works after a long outage. Preserve this ledger with backups; a missing or mismatched record prevents automatic digest deletion.

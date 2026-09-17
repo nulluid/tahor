@@ -18,6 +18,13 @@ import notification_services
 
 
 class NotificationTests(unittest.TestCase):
+    def test_sent_digest_evidence_survives_long_outage_for_safe_cleanup(self):
+        event = dict(kind='digest', status='sent', created_at=self.now-120*86400,
+                     subject='Tahor daily summary', body='Older summary')
+        self.path.write_text(json.dumps({'events': {'digest:old': event}, 'problems': {}}))
+        notifications.run(self.now)
+        self.assertEqual(json.loads(self.path.read_text())['events']['digest:old'], event)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
