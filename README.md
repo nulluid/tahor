@@ -172,8 +172,10 @@ classification instructions or mailbox safety checks.
 The worker logs fetch, classification, and application timings for tuning.
 Paid classification uses **Gemini 3.8 Flash through Google Vertex**, restricted
 to a zero-retention endpoint with data collection denied and provider fallback
-disabled. It starts at **eight concurrent requests**, configurable for your host
-and provider. The earlier 40-request setting was measured with a different model.
+disabled. It allows **eight concurrent requests**, with request starts spaced
+**three seconds apart**, including retries. Both settings are configurable for your
+provider limits. Concurrency overlaps slow responses; pacing limits request volume.
+The earlier 40-request setting was measured with a different model.
 
 The selected model was evaluated against 24 real messages and ten separate
 synthetic policy cases. Its completed responses made no incorrect trash

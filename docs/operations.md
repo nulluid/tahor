@@ -189,6 +189,7 @@ No shell `source` command is required.
 | `WORKER_SLEEP_BETWEEN_BATCHES` | Optional delay override; defaults to 0 seconds after fully applied paid-only batches, 45 seconds otherwise |
 | `TAHOR_CLASSIFY_FREE_ENABLED` | Default `0`: disables free classification and paid-to-free fallback; messages remain retryable. `1` explicitly enables an experimental free route that has not met accuracy requirements |
 | `TAHOR_PAID_CONCURRENCY` | Concurrent paid classifications; default 8, configurable from 1 to 64; effective concurrency also depends on batch size |
+| `TAHOR_PAID_REQUEST_INTERVAL_SECONDS` | Minimum time between paid Vertex request starts, including retries; default 3 seconds |
 
 Speed and model selections live in `settings.json` and are changed through the
 web app. `CLASSIFY_BACKEND` is for the standalone `classify.py` utility; it does
@@ -201,8 +202,10 @@ The paid model is `google/gemini-3.8-flash`, pinned to
 `google-vertex/global` with provider fallback disabled, zero data retention,
 and data collection denied. Requests use low reasoning effort and a 2,048-token
 output budget. The endpoint does not advertise temperature support; do not
-assume it honors the requested temperature. Eight concurrent requests are a
-conservative starting point; the previous 40-request benchmark applied to
+assume it honors the requested temperature. Up to eight requests overlap, with
+starts paced three seconds apart across worker threads, including retries. The
+unpaced deployment encountered HTTP 429 responses; accuracy benchmarks do not
+establish sustained rate limits. The previous 40-request benchmark applied to
 Nemotron, not this provider/model combination.
 
 The selection was checked on 24 real messages and ten separate synthetic policy
