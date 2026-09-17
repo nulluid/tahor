@@ -87,8 +87,8 @@ class FreeClassifierGateTests(unittest.TestCase):
                 classify.main()
             self.assert_pending(json.loads(output.read_text()))
 
-    def test_default_remains_enabled_and_explicit_one_reenables(self):
+    def test_default_disabled_and_explicit_one_reenables(self):
         with patch.dict(os.environ, {}, clear=True):
-            self.assertTrue(classify.free_classification_enabled())
+            self.assertFalse(classify.free_classification_enabled())
         with patch.dict(os.environ, {'TAHOR_CLASSIFY_FREE_ENABLED': '1'}):
             self.assertTrue(classify.free_classification_enabled())

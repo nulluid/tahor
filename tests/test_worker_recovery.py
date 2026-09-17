@@ -153,7 +153,7 @@ class RecoveryTests(unittest.TestCase):
 class ClassifierTests(unittest.TestCase):
     def test_paid_concurrency_has_bounded_operator_override(self):
         with patch.dict(classifier.os.environ, {}, clear=True):
-            self.assertEqual(classifier.paid_concurrency(), 40)
+            self.assertEqual(classifier.paid_concurrency(), 8)
         for value in ('1', '20', '40', '64'):
             with patch.dict(classifier.os.environ, {'TAHOR_PAID_CONCURRENCY': value}):
                 self.assertEqual(classifier.paid_concurrency(), int(value))

@@ -45,7 +45,7 @@ def _openrouter_key():
 
 
 def paid_concurrency():
-    value = int(os.environ.get("TAHOR_PAID_CONCURRENCY", "40"))
+    value = int(os.environ.get("TAHOR_PAID_CONCURRENCY", "8"))
     if not 1 <= value <= 64:
         raise ValueError("TAHOR_PAID_CONCURRENCY must be between 1 and 64")
     return value
@@ -75,31 +75,37 @@ BACKENDS = {
         "auth_header": lambda: f"Bearer {_openrouter_key()}",
     },
     "openrouter-free": {
-        # Validated against the same 30-message sample as the other
-        # backends: 90% action agreement with the local-model baseline,
-        # no systematic bias, 30/30 reliable -- a genuine free-tier
-        # fallback for when Gemini's daily cap or OpenRouter credit
-        # aren't the right fit. Same URL/auth as "openrouter", different
-        # model, so it rotates in as a drop-in CLASSIFY_BACKEND swap.
+        # Privacy-restricted experimental route. Disabled by default because
+        # the current free candidates did not pass classification evaluation.
         "url": "https://openrouter.ai/api/v1/chat/completions",
-        "default_model": "nvidia/nemotron-3-super-120b-a12b:free",
+        "default_model": "inclusionai/ling-3.0-flash-vl:free",
         "default_concurrency": 2,
         "auth_header": lambda: f"Bearer {_openrouter_key()}",
+        "request_options": {
+            "reasoning": {"enabled": False},
+            "provider": {"only": ["novita"], "allow_fallbacks": False,
+                         "max_price": {"prompt": 0, "completion": 0}},
+        },
     },
     "openrouter-paid": {
-        # Repeated 20/40 comparisons favored 40 on the small production host.
-        # Provider capacity varies; this is a tested default, not a hard limit.
+        # Evaluated on real and synthetic messages; provider capacity must be
+        # measured separately from the previous model's concurrency trials.
         "url": "https://openrouter.ai/api/v1/chat/completions",
-        "default_model": "nvidia/nemotron-3-super-120b-a12b",
+        "default_model": "google/gemini-3.8-flash",
         "default_concurrency": paid_concurrency(),
         "auth_header": lambda: f"Bearer {_openrouter_key()}",
+        "request_options": {
+            "reasoning": {"effort": "low"},
+            "max_tokens": 2048,
+            "provider": {"only": ["google-vertex/global"], "allow_fallbacks": False},
+        },
     },
 }
 SCHEMA_FIELDS = ["category", "retention", "expense_type", "needs_attention", "folder_domain"]
 
 
 def free_classification_enabled():
-    return os.environ.get("TAHOR_CLASSIFY_FREE_ENABLED", "1").strip() == "1"
+    return os.environ.get("TAHOR_CLASSIFY_FREE_ENABLED", "0").strip() == "1"
 
 
 def free_disabled_results(records):

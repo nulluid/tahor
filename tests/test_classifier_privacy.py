@@ -24,7 +24,7 @@ class ClassifierPrivacyTests(unittest.TestCase):
 
         record = {'id': 'sample', 'subject': 'Question', 'from': 'person@example.com',
                   'date': '2026-01-01', 'snippet': 'Can you attend?'}
-        with patch('reply_rules.get_rules', return_value=[]), patch.object(
+        with patch.dict(classify.os.environ, {'TAHOR_CLASSIFY_FREE_ENABLED': '1'}), patch('reply_rules.get_rules', return_value=[]), patch.object(
                 classify.urllib.request, 'urlopen', side_effect=response):
             result = classify.classify_one(backend['url'], {}, backend['default_model'],
                                            'Classify the message.', record, retries=1)
@@ -36,23 +36,26 @@ class ClassifierPrivacyTests(unittest.TestCase):
         self.assertEqual(len(requests), 2)
         self.assertEqual(requests[0], requests[1])
         payload = requests[0]
-        self.assertEqual(payload['provider'], {'zdr': True, 'data_collection': 'deny'})
-        self.assertEqual(payload['model'], 'nvidia/nemotron-3-super-120b-a12b')
+        self.assertEqual(payload['provider'], {'only': ['google-vertex/global'],
+                         'allow_fallbacks': False, 'zdr': True, 'data_collection': 'deny'})
+        self.assertEqual(payload['model'], 'google/gemini-3.8-flash')
         self.assertEqual(payload['messages'][0],
                          {'role': 'system', 'content': 'Classify the message.'})
         self.assertEqual(payload['messages'][1]['content'],
                          'Subject: Question\nFrom: person@example.com\nDate: 2026-01-01\n'
                          'Body/snippet: Can you attend?')
         self.assertEqual(payload['temperature'], 0.1)
-        self.assertEqual(payload['max_tokens'], 1024)
-        self.assertNotIn('reasoning', payload)
+        self.assertEqual(payload['max_tokens'], 2048)
+        self.assertEqual(payload['reasoning'], {'effort': 'low'})
 
     def test_free_requires_privacy_and_local_stays_local(self):
         for backend_name in ('openrouter-free', 'local'):
             with self.subTest(backend=backend_name):
                 payload = self.classify_with_capture(backend_name)[0]
                 if backend_name == 'openrouter-free':
-                    self.assertEqual(payload['provider'], {'zdr': True, 'data_collection': 'deny'})
+                    self.assertEqual(payload['provider'], {'only': ['novita'], 'allow_fallbacks': False,
+                                     'max_price': {'prompt': 0, 'completion': 0},
+                                     'zdr': True, 'data_collection': 'deny'})
                 else:
                     self.assertNotIn('provider', payload)
                 self.assertEqual(payload['model'], classify.BACKENDS[backend_name]['default_model'])
