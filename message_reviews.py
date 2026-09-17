@@ -161,10 +161,14 @@ def refresh(decision_id, database, budget_seconds=None):
     return updated
 
 
-def read_message(context, max_bytes=1024 * 1024):
+def read_message(context, max_bytes=1024 * 1024, budget_seconds=12):
     """Render text only; never load remote content or mark the message read."""
-    details = locate(context)
-    client = fetch_batch.connect()
+    deadline = time.monotonic() + budget_seconds
+    details = locate(context, budget_seconds=min(8, budget_seconds), bounded=True)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise LookupPending('Message details will continue loading when you retry the preview.')
+    client = _DeadlineMailbox(fetch_batch.connect(timeout=max(.1, min(3, remaining / 2))), deadline)
     try:
         if client.select(quote_mailbox(details['mailbox']), readonly=True)[0] != 'OK':
             raise RuntimeError('The message folder is unavailable')

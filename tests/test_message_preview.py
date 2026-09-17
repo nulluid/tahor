@@ -47,6 +47,9 @@ const response=(url,body)=>({ok:true,url,text:async()=>'<main>'+body+'</main>'})
  assert.equal(w.document.querySelector('dialog pre').textContent,'<script>not executable</script>');
  assert.equal(w.document.querySelector('input[name="choice"]').checked,true);
  assert.equal(w.document.querySelector('textarea').value,'unfinished rule');
+ w.document.querySelector('#open').click();
+ calls[3].resolve({ok:false,status:409,url:calls[3].url,text:async()=> 'Searching for this moved message. Reopen to continue from the saved position.'});await settle();
+ assert.match(w.document.querySelector('.email-preview-content').textContent,/saved position/);
  w.document.querySelector('dialog button').click();
  assert.equal(w.document.body.style.overflow,'');assert.equal(scroll.at(-1),700);
  assert.equal(w.document.activeElement.id,'open');assert.ok(calls[2].options.signal.aborted);

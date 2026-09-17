@@ -1454,11 +1454,12 @@ def unsubscribe_page():
 def subscription_messages_page(candidate_id):
     import subscription_messages
     db = get_db()
+    db.execute("PRAGMA busy_timeout=500")
     candidate = db.execute('SELECT * FROM unsubscribe_candidates WHERE id=?', (candidate_id,)).fetchone()
     if candidate is None:
         abort(404)
     notice = ''
-    samples = tahor_db.get_subscription_samples(candidate_id)
+    samples = tahor_db.get_subscription_samples(candidate_id, busy_timeout_ms=500)
     if request.method == 'POST' or not samples:
         try:
             state = subscription_messages.scan(db, candidate_id)
@@ -1467,7 +1468,7 @@ def subscription_messages_page(candidate_id):
             notice = 'An exact sender address is needed before these messages can be searched.'
         except Exception:
             notice = 'The mailbox is temporarily unavailable. Existing messages remain unchanged; you can retry.'
-    samples = tahor_db.get_subscription_samples(candidate_id)
+    samples = tahor_db.get_subscription_samples(candidate_id, busy_timeout_ms=500)
     entries = []
     for sample in samples:
         received = sample.get('received_at') or sample.get('date') or ''
@@ -1488,12 +1489,15 @@ def subscription_messages_page(candidate_id):
 @login_required
 def subscription_message_view(candidate_id, sample_id):
     import message_reviews
-    samples = tahor_db.get_subscription_samples(candidate_id)
+    import subscription_messages
+    samples = tahor_db.get_subscription_samples(candidate_id, busy_timeout_ms=500)
     sample = next((item for item in samples if item['id'] == sample_id), None)
     if sample is None:
         abort(404)
     try:
-        details, body = message_reviews.read_message(sample)
+        details, body = subscription_messages.read_sample(get_db(), sample)
+    except message_reviews.LookupPending:
+        return 'Searching for this moved message. Close and reopen this email preview to continue from the saved position; no message has changed.', 409
     except (ValueError, RuntimeError):
         return 'This message moved or could not be identified safely. Return to its email list and search again, or open it in Fastmail.', 409
     except Exception:

@@ -53,3 +53,10 @@ class ReviewHydrationTests(AppTestCase):
         with patch.object(message_reviews.time,'monotonic',return_value=101),self.assertRaises(message_reviews.LookupPending):
             wrapper.uid('FETCH','7','BODY.PEEK[]')
         self.assertEqual(client.uid.call_count,1)
+
+    def test_body_preview_uses_one_bounded_budget_and_does_not_connect_after_expiry(self):
+        details={'mailbox':'INBOX','uid':'7','uidvalidity':'42'}
+        with patch.object(message_reviews,'locate',return_value=details) as locate,patch.object(message_reviews.fetch_batch,'connect') as connect,patch.object(message_reviews.time,'monotonic',side_effect=[0,13]):
+            with self.assertRaises(message_reviews.LookupPending):message_reviews.read_message({'mailbox':'INBOX','message_id':'<one@example.com>'})
+            locate.assert_called_once_with({'mailbox':'INBOX','message_id':'<one@example.com>'},budget_seconds=8,bounded=True)
+            connect.assert_not_called()

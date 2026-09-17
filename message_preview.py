@@ -36,7 +36,11 @@ SCRIPT = r'''<script data-email-preview>
     try {
       const response = await fetch(url.href, {credentials:'same-origin', ...options, signal:current.signal});
       if (current.signal.aborted) return;
-      if (!response.ok || !destination(response.url)) throw new Error('This email could not be opened. It may have moved or been deleted. Close this preview and try again.');
+      if (!destination(response.url)) throw new Error('Your session may have expired. Close this preview and reload the page.');
+      if (!response.ok) {
+        const reason = (await response.text()).trim();
+        throw new Error(reason && reason.length <= 600 && !/[<>]/.test(reason) ? reason : 'This email could not be opened. Close this preview and try again.');
+      }
       const page = new DOMParser().parseFromString(await response.text(), 'text/html');
       if (current.signal.aborted) return;
       const main = page.querySelector('main');

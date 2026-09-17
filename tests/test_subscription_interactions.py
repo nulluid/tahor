@@ -37,3 +37,23 @@ const settle=()=>new Promise(resolve=>setImmediate(resolve));const respond=(call
         script=subscription_bulk_ui.SCRIPT.removeprefix('<script>').removesuffix('</script>')
         run=subprocess.run([shutil.which('node'),'-e','const SCRIPT='+json.dumps(script)+';const BAR='+json.dumps(subscription_bulk_ui.BAR)+';\n'+harness],capture_output=True,text=True,timeout=15)
         self.assertEqual(run.returncode,0,run.stderr)
+
+    @unittest.skipUnless(shutil.which('node') and os.environ.get('TAHOR_JSDOM_MODULE'), 'Set TAHOR_JSDOM_MODULE for real DOM subscription tests')
+    def test_queued_generation_does_not_claim_any_choices_are_ready(self):
+        harness=r'''const assert=require('node:assert/strict');const {JSDOM}=require(process.env.TAHOR_JSDOM_MODULE);
+const dom=new JSDOM(BAR.replace('<form ','<input name="csrf_token" value="csrf"><form '),{url:'https://example.test/unsubscribe',runScripts:'outside-only'});
+const w=dom.window;const calls=[];const timers=[];
+w.setTimeout=callback=>timers.push(callback);w.fetch=(url,options)=>new Promise(resolve=>calls.push({url,resolve}));w.eval(SCRIPT);
+const settle=()=>new Promise(resolve=>setImmediate(resolve));
+(async()=>{
+ calls[0].resolve({ok:true,json:async()=>[]});await settle();
+ w.document.querySelector('[data-generate]').click();
+ calls[1].resolve({ok:true,json:async()=>({job_id:'job',status:'queued',completed:0,total:50,recommendations:[]})});await settle();
+ const text=w.document.querySelector('[data-bulk-status]').textContent;
+ assert.match(text,/Waiting for the background worker/);assert.match(text,/0 of 50 processed/);assert.match(text,/No suggestions are ready yet/);
+ assert.equal(w.document.querySelector('[data-selected-count]').textContent,'0');
+ assert.doesNotMatch(text,/Completed choices/);w.close();
+})().catch(error=>{console.error(error);process.exitCode=1;});'''
+        script=subscription_bulk_ui.SCRIPT.removeprefix('<script>').removesuffix('</script>')
+        run=subprocess.run([shutil.which('node'),'-e','const SCRIPT='+json.dumps(script)+';const BAR='+json.dumps(subscription_bulk_ui.BAR)+';\n'+harness],capture_output=True,text=True,timeout=15)
+        self.assertEqual(run.returncode,0,run.stderr)

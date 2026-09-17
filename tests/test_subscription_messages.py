@@ -75,3 +75,21 @@ class SubscriptionViewerTests(AppTestCase):
         self.assertEqual([call.args[0] for call in client.select.call_args_list],['"INBOX"','"Archive"','"Receipts"'])
         self.assertTrue(all(call.args[0]=='SEARCH' for call in client.uid.call_args_list))
         db.close()
+
+    def test_moved_preview_resumes_saved_cursor_and_never_changes_sample_identity(self):
+        candidate=self.candidate()
+        identifier=self.module.tahor_db.record_subscription_sample(candidate,dict(mailbox='INBOX',message_id='<moved@example.com>',uid='7',uidvalidity='42',sender_email='news@shop.example',received_at='2026-09-01T12:00:00+00:00'))
+        import message_reviews
+        seen=[]
+        def reading(context,**kwargs):
+            self.assertEqual(kwargs['budget_seconds'],12)
+            seen.append(context.get('review_search',{}).get('next_index',0))
+            context['review_search']={'next_index':4,'folders':'hash','matches':[]}
+            raise message_reviews.LookupPending('Continue')
+        with patch.object(message_reviews,'read_message',side_effect=reading):
+            for _ in range(2):
+                response=self.client.get(f'/subscription-message/{candidate}/{identifier}')
+                self.assertEqual(response.status_code,409)
+                self.assertIn('saved position',response.get_data(as_text=True))
+        self.assertEqual(seen,[0,4])
+        self.assertEqual(self.module.tahor_db.get_subscription_samples(candidate)[0]['mailbox'],'INBOX')

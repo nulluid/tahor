@@ -223,9 +223,11 @@ def _record_subscription_sample(conn, candidate_id, metadata):
     return saved['id'] if saved else None
 
 
-def record_subscription_sample(candidate_id, metadata):
+def record_subscription_sample(candidate_id, metadata, busy_timeout_ms=None):
     """Retain at most three recent exact message identities, never message bodies."""
     conn = get_db()
+    if busy_timeout_ms is not None:
+        conn.execute("PRAGMA busy_timeout=" + str(max(0, min(int(busy_timeout_ms), 30000))))
     try:
         with conn:
             conn.execute('BEGIN IMMEDIATE')
@@ -234,8 +236,10 @@ def record_subscription_sample(candidate_id, metadata):
         conn.close()
 
 
-def get_subscription_samples(candidate_id):
+def get_subscription_samples(candidate_id, busy_timeout_ms=None):
     conn = get_db()
+    if busy_timeout_ms is not None:
+        conn.execute("PRAGMA busy_timeout=" + str(max(0, min(int(busy_timeout_ms), 30000))))
     try:
         rows = conn.execute("""SELECT id,candidate_id,mailbox,message_id,uid,uidvalidity,
             sender_email,display_name,subject,message_date AS date,received_at,captured_at

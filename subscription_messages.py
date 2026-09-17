@@ -15,6 +15,7 @@ from mailbox_paths import list_mailboxes, quote_mailbox
 def scan(database, candidate_id, *, folder_limit=2, header_limit=20, budget_seconds=8):
     """Search only on request, persisting progress between small batches."""
     import tahor_db
+    database.execute("PRAGMA busy_timeout=500")
     row = database.execute('SELECT * FROM unsubscribe_candidates WHERE id=?', (candidate_id,)).fetchone()
     if row is None:
         raise ValueError('This subscription no longer exists')
@@ -91,7 +92,7 @@ def scan(database, candidate_id, *, folder_limit=2, header_limit=20, budget_seco
                 received = datetime.strptime(arrival[1].decode('ascii'), '%d-%b-%Y %H:%M:%S %z').astimezone(timezone.utc).isoformat()
                 tahor_db.record_subscription_sample(candidate_id, dict(mailbox=mailbox, message_id=identifier, uid=uid.decode(), uidvalidity=validity,
                     sender_email=sender, display_name=fetch_batch.decode_str(addresses[0][0]), subject=fetch_batch.decode_str(message.get('Subject', ''))[:500],
-                    date=fetch_batch.decode_str(message.get('Date', ''))[:200], received_at=received))
+                    date=fetch_batch.decode_str(message.get('Date', ''))[:200], received_at=received), busy_timeout_ms=500)
                 matches += 1
                 if matches >= 3:
                     break
@@ -115,3 +116,22 @@ def scan(database, candidate_id, *, folder_limit=2, header_limit=20, budget_seco
                 client.shutdown()
             except Exception:
                 pass
+
+
+def read_sample(database, sample):
+    """Resume a bounded moved-message lookup without holding a web worker open."""
+    import message_reviews
+    database.execute('PRAGMA busy_timeout=500')
+    with database:
+        database.execute('CREATE TABLE IF NOT EXISTS subscription_message_lookups (sample_id INTEGER PRIMARY KEY, source TEXT NOT NULL, context TEXT NOT NULL)')
+    source = json.dumps({key: sample.get(key) for key in ('mailbox', 'message_id', 'uid', 'uidvalidity')}, sort_keys=True)
+    previous = database.execute('SELECT source,context FROM subscription_message_lookups WHERE sample_id=?', (sample['id'],)).fetchone()
+    context = json.loads(previous['context']) if previous and previous['source'] == source else dict(sample)
+    try:
+        details, body = message_reviews.read_message(context, budget_seconds=12)
+        context.update(details)
+        return details, body
+    finally:
+        with database:
+            database.execute('INSERT OR REPLACE INTO subscription_message_lookups(sample_id,source,context) VALUES(?,?,?)', (sample['id'], source, json.dumps(context)))
+            database.execute('DELETE FROM subscription_message_lookups WHERE sample_id NOT IN (SELECT id FROM subscription_message_samples)')
