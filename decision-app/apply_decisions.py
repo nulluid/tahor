@@ -94,7 +94,7 @@ all null and explain the missing capability or information.
 """
 
 
-def _rule_model_call(user_content, selected):
+def _rule_model_call(user_content, selected, system_prompt=None):
     if selected == "none":
         raise ValueError("Rule drafting is disabled; select a private model in Settings")
     backend = mailbox_settings.RULE_MODELS[selected]
@@ -104,7 +104,7 @@ def _rule_model_call(user_content, selected):
     payload = {
         "model": backend["model"],
         "messages": [
-            {"role": "system", "content": RULE_DRAFTING_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt if system_prompt is not None else RULE_DRAFTING_SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
         ],
         "temperature": 0.1,
@@ -129,10 +129,10 @@ def _rule_model_call(user_content, selected):
     return json.loads(content)
 
 
-def rule_model_call(user_content, queue_size=1, work_id=None, validate=None):
+def rule_model_call(user_content, queue_size=1, work_id=None, validate=None, system_prompt=None):
     import ai_routing
     def generate(key):
-        proposal = _rule_model_call(user_content, key)
+        proposal = _rule_model_call(user_content, key, system_prompt=system_prompt)
         validate_rule_proposal(proposal)
         if validate is not None:
             try:

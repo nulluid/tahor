@@ -38,6 +38,9 @@ class Mailbox:
     def logout(self):
         pass
 
+    def response(self, code):
+        return code, [b'123'] if code == 'UIDVALIDITY' else []
+
     def list(self, *args):
         return 'OK', [b'() "/" "Filed/Shopping/Shop"']
 

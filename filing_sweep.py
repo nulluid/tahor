@@ -163,6 +163,9 @@ def main():
     typ, _ = conn.select('"INBOX"', readonly=dry_run)
     if typ != "OK":
         sys.exit("Could not select INBOX.")
+    response = conn.response('UIDVALIDITY')
+    values = response[1] if isinstance(response, tuple) and len(response) == 2 else []
+    uidvalidity = values[0].decode('ascii') if values and isinstance(values[0], bytes) and values[0].isdigit() else ''
 
     read_cutoff = (datetime.now(timezone.utc) - timedelta(days=read_min_age)).strftime("%d-%b-%Y")
     unread_cutoff = (datetime.now(timezone.utc) - timedelta(days=unread_min_age)).strftime("%d-%b-%Y")
@@ -178,13 +181,14 @@ def main():
         raise
 
     by_dest = defaultdict(list)
+    queued_message_ids = {}
     unsorted_labels = set()
     failures = 0
     for uid in candidates:
         if uid in reply_destinations:
             by_dest[reply_destinations[uid]].append(uid)
             continue
-        typ, msg_data = conn.uid("FETCH", uid, "(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
+        typ, msg_data = conn.uid("FETCH", uid, "(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)])")
         if typ != "OK" or not msg_data or not msg_data[0]:
             failures += 1
             continue
@@ -195,11 +199,14 @@ def main():
             unsorted_labels.add(vendor)
             if not dry_run and vendor != "Unknown":
                 display_name, sender_email = email.utils.parseaddr(from_header)
+                queued_message_ids[uid] = str(message.get('Message-ID', ''))
                 delivered = re.search(rb'INTERNALDATE "([^"]+)"', msg_data[0][0])
                 tahor_db.queue_vendor_mapping(vendor, metadata={
                     'sender_email': sender_email.strip().lower(),
                     'display_name': display_name, 'subject': str(message.get('Subject', '')),
                     'suggested_vendor': display_name,
+                    'mailbox': 'INBOX', 'message_id': str(message.get('Message-ID', '')),
+                    'uid': uid.decode('ascii'), 'uidvalidity': uidvalidity,
                     'date': str(message.get('Date', '')),
                     'received_at': delivered[1].decode('ascii', errors='replace') if delivered else '',
                 })
@@ -224,6 +231,8 @@ def main():
             if typ == "OK":
                 total_moved += 1
                 moved_here += 1
+                if queued_message_ids.get(uid):
+                    tahor_db.relocate_vendor_samples('INBOX', dest, [queued_message_ids[uid]])
             else:
                 failures += 1
                 print(f"  FAILED to move uid {uid.decode()} to {dest}")
