@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-NAMES = {'settings.json', 'decisions.db', 'prompt.txt', 'vendor_buckets.json', 'sieve.txt', 'ai_routing_state.json'}
+NAMES = {'settings.json', 'decisions.db', 'prompt.txt', 'vendor_buckets.json', 'sieve.txt', 'ai_routing_state.json', 'free_classifier_guidance.txt'}
 REQUIRED = {'settings.json', 'decisions.db'}
 
 
@@ -220,6 +220,7 @@ def main():
                'prompt.txt': Path(os.environ.get('PROMPT_PATH', data / 'prompt.txt')),
                'vendor_buckets.json': Path(os.environ.get('VENDOR_BUCKETS_PATH', data / 'vendor_buckets.json')),
                'sieve.txt': data / 'sieve.txt',
+               'free_classifier_guidance.txt': Path(os.environ.get('TAHOR_FREE_CLASSIFIER_GUIDANCE_PATH') or data / 'free_classifier_guidance.txt'),
                'ai_routing_state.json': Path(os.environ.get('TAHOR_DB_PATH', ROOT / 'decisions.db')).parent / 'ai_routing_state.json'}
     try:
         path = restore(args.restore, sources, args.destination, args.services_stopped) if args.restore else backup(sources, args.destination)

@@ -25,6 +25,7 @@ class PrivateBackupTests(unittest.TestCase):
         self.sources['settings.json'].write_text(json.dumps({'reply_rules': [{'instructions': 'Private directions', 'signature': 'Private Name', 'excluded_senders': ['skip@example.org']}]}))
         self.sources['vendor_buckets.json'].write_text('{"example.org":"Filed/Example"}')
         self.sources['prompt.txt'].write_text('Private prompt')
+        self.sources['free_classifier_guidance.txt'].write_text('Private model guidance')
         self.sources['sieve.txt'].write_text('# Private rules')
         self.sources['ai_routing_state.json'].write_text(json.dumps({'reply': {'failure_since': 1000, 'tiers': {'paid': {'retry_at': 1300}}}}))
         with closing(sqlite3.connect(str(self.sources['decisions.db']), isolation_level=None)) as db:
@@ -38,10 +39,12 @@ class PrivateBackupTests(unittest.TestCase):
         original = self.sources['settings.json'].read_bytes()
         self.sources['settings.json'].write_text('{"changed":true}')
         self.sources['ai_routing_state.json'].write_text('{}')
+        self.sources['free_classifier_guidance.txt'].write_text('Changed')
         with closing(sqlite3.connect(str(self.sources['decisions.db']), isolation_level=None)) as db:
             db.execute('DELETE FROM decisions')
         safety = module.restore(snapshot, self.sources, self.destination, services_stopped=True)
         self.assertEqual(self.sources['settings.json'].read_bytes(), original)
+        self.assertEqual(self.sources['free_classifier_guidance.txt'].read_text(), 'Private model guidance')
         self.assertEqual(json.loads(self.sources['ai_routing_state.json'].read_text())['reply']['failure_since'], 1000)
         self.assertEqual(json.loads((safety / 'settings.json').read_text()), {'changed': True})
         with closing(sqlite3.connect(str(self.sources['decisions.db']), isolation_level=None)) as db:
@@ -129,8 +132,10 @@ class PrivateBackupTests(unittest.TestCase):
         original = self.sources['settings.json'].read_bytes()
         self.sources['settings.json'].write_text('{"changed":true}')
         self.sources['ai_routing_state.json'].write_text('{}')
+        self.sources['free_classifier_guidance.txt'].write_text('Changed')
         result = subprocess.run(command + arguments + ['--restore', str(snapshot), '--services-stopped'], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Pre-restore safety snapshot:', result.stderr)
         self.assertEqual(self.sources['settings.json'].read_bytes(), original)
+        self.assertEqual(self.sources['free_classifier_guidance.txt'].read_text(), 'Private model guidance')
         self.assertEqual(json.loads(self.sources['ai_routing_state.json'].read_text())['reply']['failure_since'], 1000)

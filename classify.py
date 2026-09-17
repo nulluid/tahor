@@ -26,6 +26,8 @@ import re
 import sys
 import time
 import threading
+import stat
+from pathlib import Path
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -147,6 +149,33 @@ def free_disabled_results(records):
             for record in records]
 
 
+FREE_GUIDANCE_MAX_BYTES = 64 * 1024
+
+
+def free_classifier_prompt(url, model, system_prompt):
+    """Add optional private guidance for the free model; never alter paid prompts."""
+    backend = BACKENDS['openrouter-free']
+    if url != backend['url'] or model != backend['default_model']:
+        return system_prompt
+    override = os.environ.get('TAHOR_FREE_CLASSIFIER_GUIDANCE_PATH')
+    data = Path(os.environ.get('DATA_DIR', Path.home() / '.config/tahor/data'))
+    path = Path(override) if override else data / 'free_classifier_guidance.txt'
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+    except FileNotFoundError:
+        if override:
+            raise
+        return system_prompt
+    with os.fdopen(fd, 'rb') as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError('Guidance must be a regular file')
+        raw = stream.read(FREE_GUIDANCE_MAX_BYTES + 1)
+    if len(raw) > FREE_GUIDANCE_MAX_BYTES:
+        raise ValueError('Guidance exceeds size limit')
+    guidance = raw.decode('utf-8')
+    return system_prompt + '\n\n' + guidance if guidance else system_prompt
+
+
 def classify_one(url, headers, model, system_prompt, record, retries=3):
     if url == BACKENDS["gemini"]["url"]:
         return {"id": record["id"], "action": "error",
@@ -154,6 +183,11 @@ def classify_one(url, headers, model, system_prompt, record, retries=3):
     if (url == BACKENDS["openrouter-free"]["url"] and model.endswith(":free")
             and not free_classification_enabled()):
         return free_disabled_results([record])[0]
+    try:
+        system_prompt = free_classifier_prompt(url, model, system_prompt)
+    except (OSError, ValueError):
+        return {"id": record["id"], "action": "error",
+                "reason": "Private free classifier guidance could not be read; retained for retry"}
     hints = [f"{k[5:]}={v}" if not isinstance(v, bool) else k[5:]
              for k, v in record.items() if k.startswith("hint_") and v]
     hint_line = f"Hints (context only, not decisive): {', '.join(hints)}\n" if hints else ""
