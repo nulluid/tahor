@@ -19,7 +19,7 @@ class ClassifierPrivacyTests(unittest.TestCase):
         def response(request, **kwargs):
             requests.append(json.loads(request.data))
             if fail_first and len(requests) == 1:
-                raise urllib.error.HTTPError(request.full_url, 503, 'Unavailable', {}, None)
+                raise urllib.error.HTTPError(request.full_url, 503, 'Unavailable', {}, io.BytesIO(b''))
             return io.BytesIO(result_body)
 
         record = {'id': 'sample', 'subject': 'Question', 'from': 'person@example.com',

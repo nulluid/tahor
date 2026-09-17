@@ -205,6 +205,10 @@ def classify_one(url, headers, model, system_prompt, record, retries=3):
             return result
         except urllib.error.HTTPError as e:
             last_err = e
+            try:
+                e.close()
+            except Exception:
+                pass  # Cleanup must not interrupt provider recovery.
             if e.code in (400, 401, 402, 403, 404):
                 break  # These need configuration, credit, or a different backend.
             if e.code == 429 and attempt < retries:  # rate limited — back off and retry
