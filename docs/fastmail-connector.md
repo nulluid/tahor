@@ -61,7 +61,11 @@ Never supply passwords or seeds in command arguments, chat, issue reports, or Se
 
 In Fastmail, open **Settings → Privacy & Security → Manage two-step verification →
 Add verification device → Authenticator app**. Keep your existing authenticator enabled.
-The enrollment command asks for your username, then hides password and setup-key input.
+The enrollment command checks your username, then validates the hidden manual setup
+key before asking for the hidden account password. It accepts standard 128-bit
+keys (including 26-character Base32 keys), spaces and grouping hyphens. Invalid
+fields receive a specific explanation and up to three attempts; nothing is saved
+until all fields validate and you confirm the device.
 It displays a current six-digit code so you can confirm the new device in Fastmail and
 name it **Tahor**. Finish that provider step before typing `saved` in the terminal.
 The script encrypts the credential and tests a fresh server-side sign-in, including

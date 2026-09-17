@@ -188,7 +188,8 @@ on retry. This is a small validation set, not a guarantee about every email.
 For an internet-facing server, use the [dedicated service-account setup](docs/service-isolation.md)
 to keep application code read-only and run without administrator privileges.
 
-Failures leave work pending. Tier recovery probes occur after a five-minute
+Policy changes govern new work; a classification batch already running may finish
+under its previous policy. Failures leave work pending. Tier recovery probes occur after a five-minute
 cooldown, and persistent problems trigger the configured health alerts. The
 four-hour threshold is an estimate based on queued work and observed free
 throughput, not a completion guarantee. `TAHOR_CLASSIFY_FREE_ENABLED=0` remains
