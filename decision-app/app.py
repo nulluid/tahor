@@ -642,6 +642,18 @@ def known_buckets(db):
     return sorted(buckets)
 
 
+def observed_rule_domains(db):
+    """Only syntactically valid domains actually observed in this owner's mail."""
+    choices = {}
+    for row in db.execute('SELECT sender_domain,display_name FROM unsubscribe_candidates ORDER BY sender_domain'):
+        try:
+            generate_sieve.domain_test(row['sender_domain'])
+        except (ValueError, TypeError):
+            continue
+        choices[row['sender_domain']] = row['display_name'] or row['sender_domain']
+    return choices
+
+
 @app.route("/")
 @login_required
 def index():
@@ -669,7 +681,10 @@ def index():
                     original = json.loads(row["resolution"] or "{}").get("text", "")
                 except (ValueError, TypeError, AttributeError):
                     original = ""
-                cards.append(f'<div class="card"><div class="summary">Rule needs clarification</div><p>{html(clarification.get("question", "Please clarify your instruction."))}</p><form method="post" action="/clarify-rule/{row["id"]}"><input type="hidden" name="revision" value="{rule_revision(row)}"><label>Full instruction, including the exact sender domain when applicable<textarea name="rule_text" rows="4" required>{html(original)}</textarea></label><p>Use a full domain such as alerts.example.com, not a brand name. Include what you want Tahor to do. The revised proposal still needs your approval.</p><button type="submit">Resubmit instruction</button></form></div>')
+                domains = observed_rule_domains(db)
+                options = ''.join(f'<option value="{html(domain)}">{html(label)}</option>' for domain, label in domains.items())
+                chooser = (f'<label>Choose an observed sender domain (optional)<input name="observed_domain" list="rule-domains-{row["id"]}" placeholder="Search domains or sender names" autocomplete="off"></label><datalist id="rule-domains-{row["id"]}">{options}</datalist><p>These domains came from your mailbox. Selecting one explicitly adds that exact target to this instruction; no domain is selected automatically.</p>' if domains else '')
+                cards.append(f'<div class="card"><div class="summary">Rule needs clarification</div><p>{html(clarification.get("question", "Please clarify your instruction."))}</p><form method="post" action="/clarify-rule/{row["id"]}"><input type="hidden" name="revision" value="{rule_revision(row)}">{chooser}<label>Full instruction, including the exact sender domain when applicable<textarea name="rule_text" rows="4" required>{html(original)}</textarea></label><p>Use a full domain such as alerts.example.com, not a brand name. Include what you want Tahor to do. The revised proposal still needs your approval.</p><button type="submit">Resubmit instruction</button></form></div>')
             elif proposal:
                 result = proposal['result']
                 if result.get('kind') == 'sender_rule':
@@ -1061,6 +1076,11 @@ def clarify_rule(decision_id):
     text = request.form.get('rule_text', '').strip()
     if not text or len(text) > 20000 or '\x00' in text:
         abort(400, 'Enter the complete instruction, up to 20,000 characters.')
+    selected_domain = request.form.get('observed_domain', '').strip().lower()
+    if selected_domain:
+        if selected_domain not in observed_rule_domains(db):
+            abort(400, 'Choose an observed domain from the list, or leave it blank and enter the exact domain in your instruction.')
+        text += '\nExact sender domain: ' + selected_domain + '.'
     context.pop('rule_clarification', None)
     resolution = {'action': 'free_text_rule', 'text': text}
     changed = db.execute("UPDATE decisions SET summary=?, context=?, resolution=?, status='resolved', resolved_at=? WHERE id=? AND context=? AND resolution=? AND status='pending'",

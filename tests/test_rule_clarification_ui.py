@@ -126,3 +126,39 @@ class RuleClarificationUITests(AppTestCase):
                 after = dict(db.execute('SELECT * FROM decisions WHERE id=?', (row['id'],)).fetchone())
                 db.close()
                 self.assertEqual(before, after)
+
+    def test_observed_domain_selection_is_explicit_escaped_and_still_requires_review(self):
+        row = self.seed()
+        self.module.tahor_db.upsert_unsubscribe_candidate('updates.community.example', 'person@updates.community.example', '<img src=x onerror=bad()>', None, None, False)
+        page = self.client.get('/').get_data(as_text=True)
+        self.assertIn('value="updates.community.example"', page)
+        self.assertIn('&lt;img src=x onerror=bad()&gt;', page)
+        self.assertNotIn('<img src=x onerror=bad()>', page)
+        result = {'kind': 'sender_rule', 'sender_rule': {'domain': 'updates.community.example', 'rule': 'block_marketing', 'attempt_unsubscribe': False}}
+        with patch.object(self.module.apply_decisions, 'rule_model_call', return_value=result), patch.object(self.module.apply_decisions, 'apply_sender_rule') as apply:
+            response = self.client.post('/clarify-rule/' + str(row['id']), data={'csrf_token': self.token(), 'revision': self.module.rule_revision(row), 'rule_text': 'Block community marketing; keep receipts.', 'observed_domain': 'updates.community.example'})
+            self.assertEqual(response.status_code, 302)
+            apply.assert_not_called()
+        db = self.module.tahor_db.get_db()
+        stored = db.execute('SELECT * FROM decisions WHERE id=?', (row['id'],)).fetchone()
+        db.close()
+        self.assertEqual(json.loads(stored['resolution'])['text'], 'Block community marketing; keep receipts.\nExact sender domain: updates.community.example.')
+        self.assertEqual(stored['status'], 'pending')
+        self.assertEqual(json.loads(stored['context'])['rule_proposal']['result']['sender_rule']['domain'], 'updates.community.example')
+
+    def test_forged_or_no_longer_observed_selection_cannot_authorize_a_domain(self):
+        row = self.seed()
+        self.module.tahor_db.upsert_unsubscribe_candidate('known.example', 'person@known.example', 'Known', None, None, False)
+        with patch.object(self.module.apply_decisions, 'apply_one') as apply:
+            response = self.post(row, observed_domain='guessed.example')
+            self.assertEqual(response.status_code, 400)
+            apply.assert_not_called()
+        db = self.module.tahor_db.get_db()
+        with db:
+            db.execute("DELETE FROM unsubscribe_candidates WHERE sender_domain='known.example'")
+        with patch.object(self.module.apply_decisions, 'apply_one') as apply:
+            self.assertEqual(self.post(row, observed_domain='known.example').status_code, 400)
+            apply.assert_not_called()
+        stored = db.execute('SELECT * FROM decisions WHERE id=?', (row['id'],)).fetchone()
+        db.close()
+        self.assertEqual(dict(stored), dict(row))
