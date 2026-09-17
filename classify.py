@@ -158,10 +158,16 @@ def classify_one(url, headers, model, system_prompt, record, retries=3):
         "temperature": 0.1,
         "max_tokens": 1024,
     }
+    for backend in BACKENDS.values():
+        if backend['url'] == url and backend['default_model'] == model:
+            payload.update(backend.get('request_options', {}))
+            break
     if url == BACKENDS["openrouter-paid"]["url"]:
-        # Enforce endpoint policy on every paid request, including retries;
+        # Enforce endpoint policy on every hosted request, including retries;
         # never rely on a provider's current catalog membership alone.
-        payload["provider"] = {"zdr": True, "data_collection": "deny"}
+        provider = dict(payload.get('provider', {}))
+        provider.update(zdr=True, data_collection='deny')
+        payload['provider'] = provider
     data = json.dumps(payload).encode("utf-8")
     last_err = None
     for attempt in range(retries + 1):

@@ -65,3 +65,15 @@ class ClassifierPrivacyTests(unittest.TestCase):
         request.assert_not_called()
         self.assertEqual(result['action'], 'error')
         self.assertNotIn('Private text', result['reason'])
+
+    def test_backend_options_cannot_relax_privacy_on_initial_request_or_retry(self):
+        options = {'provider': {'only': ['synthetic-provider'], 'allow_fallbacks': False,
+                                'zdr': False, 'data_collection': 'allow'},
+                   'reasoning': {'enabled': False}, 'max_tokens': 2048}
+        with patch.dict(classify.BACKENDS['openrouter-paid'], {'request_options': options}):
+            requests = self.classify_with_capture('openrouter-paid', fail_first=True)
+        self.assertEqual(requests[0], requests[1])
+        self.assertEqual(requests[0]['provider'], {'only': ['synthetic-provider'],
+                         'allow_fallbacks': False, 'zdr': True, 'data_collection': 'deny'})
+        self.assertEqual(requests[0]['max_tokens'], 2048)
+        self.assertEqual(requests[0]['reasoning'], {'enabled': False})
