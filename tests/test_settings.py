@@ -71,6 +71,18 @@ class SettingsTests(unittest.TestCase):
         settings.set_ai_policy('reply', 'paid_only')
         self.assertEqual(settings.get_ai_policy('reply'), 'paid_only')
 
+    def test_legacy_setters_do_not_reverse_explicit_free_or_disabled_fallback(self):
+        for task in ('reply', 'rule'):
+            settings.set_ai_task_settings(task, 'paid_only', 'grok-4.6', 'ling-free')
+            getattr(settings, 'set_' + task + '_model')('ling-free')
+            self.assertEqual(settings.get_ai_policy(task), 'free')
+        settings.set_ai_task_settings('reply', 'paid', 'grok-4.6', 'ling-free')
+        settings.set_reply_backup_model('none')
+        self.assertEqual(settings.get_ai_policy('reply'), 'paid_only')
+        settings.set_reply_model('ling-free')
+        settings.set_reply_backup_model('none')
+        self.assertEqual(settings.get_ai_policy('reply'), 'free')
+
     def test_auto_backlog_threshold_is_four_hours(self):
         self.assertEqual(settings.ESCALATION_TARGET_SECONDS, 14400)
         self.assertEqual(settings.decide_backend_split(2880, 0.2, 50), (50, 0))

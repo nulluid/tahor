@@ -305,6 +305,10 @@ def set_rule_model(key):
         raise ValueError(f"Unknown rule_model {key!r}, choose from {tuple(RULE_MODELS)}")
     settings = load_settings()
     settings["rule_model"] = key
+    if RULE_MODELS[key]['model'].endswith(':free'):
+        settings['rule_ai_policy'] = 'free'
+    elif key != 'none' and settings.get('rule_ai_policy') == 'free':
+        settings['rule_ai_policy'] = 'paid_only'
     save_settings(settings)
 
 
@@ -329,6 +333,13 @@ def set_reply_backup_model(key):
         raise ValueError('Choose an explicitly free reply model or disable fallback.')
     settings = load_settings()
     settings['reply_backup_model'] = key
+    primary = settings.get('reply_model', 'none')
+    if REPLY_MODELS.get(primary, {}).get('model', '').endswith(':free'):
+        settings['reply_ai_policy'] = 'free'
+    elif key == 'none':
+        settings['reply_ai_policy'] = 'paid_only'
+    else:
+        settings['reply_ai_policy'] = 'paid'
     save_settings(settings)
 
 
@@ -338,6 +349,10 @@ def set_reply_model(key):
         raise ValueError(f"Unknown reply_model {key!r}, choose from {tuple(REPLY_MODELS)}")
     settings = load_settings()
     settings["reply_model"] = key
+    if REPLY_MODELS[key]['model'].endswith(':free'):
+        settings['reply_ai_policy'] = 'free'
+    elif key != 'none' and settings.get('reply_ai_policy') == 'free':
+        settings['reply_ai_policy'] = 'paid' if settings.get('reply_backup_model') in free_reply_models() else 'paid_only'
     save_settings(settings)
 
 
