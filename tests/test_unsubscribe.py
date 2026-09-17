@@ -1,5 +1,6 @@
 from pathlib import Path
 import socket
+import io
 import os
 import smtplib
 import urllib.error
@@ -229,3 +230,20 @@ class UnsubscribeTests(unittest.TestCase):
             smtp.return_value.__enter__.return_value.send_message.return_value = {}
             self.assertIn('email submitted', unsubscribe.execute(candidate, 'owner@example.com', 'secret', 'smtp.example.com', 465))
             opener.assert_not_called()
+
+    def test_http_rejection_closes_real_body_before_permitted_fallback(self):
+        candidate = dict(unsubscribe_url='https://example.com/u', unsubscribe_mailto='leave@example.com', one_click=True)
+        body = io.BytesIO(b'PRIVATE RESPONSE')
+        rejected = urllib.error.HTTPError(candidate['unsubscribe_url'], 403, 'Forbidden', {}, body)
+        with patch.object(unsubscribe, 'open_public', side_effect=rejected), patch.object(unsubscribe.smtplib, 'SMTP_SSL') as smtp:
+            smtp.return_value.__enter__.return_value.send_message.return_value = {}
+            self.assertIn('email submitted', unsubscribe.execute(candidate, 'owner@example.com', 'secret', 'smtp.example.com', 465))
+        self.assertTrue(body.closed)
+
+    def test_http_error_cleanup_failure_does_not_mask_definite_rejection(self):
+        candidate = dict(unsubscribe_url='https://example.com/u', unsubscribe_mailto=None, one_click=True)
+        rejected = urllib.error.HTTPError(candidate['unsubscribe_url'], 403, 'Forbidden', {}, None)
+        with patch.object(rejected, 'close', side_effect=AttributeError('body absent')) as close, patch.object(unsubscribe, 'open_public', side_effect=rejected):
+            with self.assertRaisesRegex(unsubscribe.UnsubscribeError, 'HTTP 403'):
+                unsubscribe.execute(candidate, '', '', '', 465)
+        close.assert_called_once()

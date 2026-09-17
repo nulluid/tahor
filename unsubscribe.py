@@ -202,7 +202,13 @@ def execute(candidate, from_addr, app_password, smtp_host, smtp_port):
                     return f'Unsubscribe request submitted (HTTP {response.status}); the sender may take time to process it'
             except urllib.error.HTTPError as error:
                 status = error.code
-                error.close()
+                try:
+                    error.close()
+                except Exception:
+                    # Some urllib versions cannot close a body-less HTTPError.
+                    # Cleanup failure must not erase a definite rejection or
+                    # prevent its permitted, advertised alternate transport.
+                    pass
                 # Only a definite rejection permits this alternate submission.
                 # Timeout/connection loss may mean the POST succeeded: do not
                 # silently send another request over a second transport.
