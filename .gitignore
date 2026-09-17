@@ -1,5 +1,6 @@
 .env
 prompt.txt
+free_classifier_guidance.txt
 vendor_buckets.json
 *.local.json
 pf_backlog/
@@ -20,6 +21,9 @@ fetch_cursors.json
 processed_message_ids.txt
 worker_status.json
 settings.json
+ai_routing_state.json
+reply_backend_state.json
+notifications.json
 *.lock
 logs/
 venv/
