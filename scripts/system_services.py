@@ -26,9 +26,10 @@ def render(user, config, state, python, root=ROOT, web_name='tahor-web'):
         'tahor-filing': ('filing', ''),
         'tahor-retention': ('retention', ''),
         'tahor-healthcheck': ('status', '--check'),
+        'tahor-decisions': ('decisions', ''),
     }
     for name, (command, suffix) in commands.items():
-        oneshot = command in ('filing', 'retention', 'status')
+        oneshot = command in ('filing', 'retention', 'status', 'decisions')
         units[name+'.service'] = f'''[Unit]
 Description={name}
 After=network-online.target
@@ -60,7 +61,7 @@ LimitCORE=0
 '''
         if not oneshot:
             units[name+'.service'] += '\nRestart=always\nRestartSec=30\n\n[Install]\nWantedBy=multi-user.target\n'
-    for name, schedule in (('tahor-filing','*-*-* 09:00:00 UTC'),('tahor-retention','*-*-* 09:15:00 UTC'),('tahor-healthcheck','*:0/15')):
+    for name, schedule in (('tahor-filing','*-*-* 09:00:00 UTC'),('tahor-retention','*-*-* 09:15:00 UTC'),('tahor-healthcheck','*:0/15'),('tahor-decisions','*:0/5')):
         units[name+'.timer'] = f'''[Unit]
 Description=Schedule {name}
 

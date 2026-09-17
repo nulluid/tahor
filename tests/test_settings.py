@@ -43,6 +43,40 @@ class SettingsTests(unittest.TestCase):
         self.path.write_text('[]')
         self.assertEqual(settings.get_classify_mode(), 'free')
 
+    def test_independent_ai_policies_validate_tiers_and_preserve_other_tasks(self):
+        settings.set_ai_task_settings('reply', 'free', 'grok-4.6', 'ling-free')
+        settings.set_ai_task_settings('rule', 'paid_only', 'grok-4.6', 'ling-free')
+        settings.set_ai_task_settings('classification', 'auto')
+        self.assertEqual(settings.get_ai_policy('reply'), 'free')
+        self.assertEqual(settings.get_ai_policy('rule'), 'paid_only')
+        self.assertEqual(settings.get_ai_policy('classification'), 'auto')
+        self.assertEqual(settings.get_ai_models('reply'), {'paid': 'grok-4.6', 'free': 'ling-free'})
+        before = self.path.read_text()
+        for args in [('reply', 'free', 'ling-free', 'grok-4.6'),
+                     ('rule', 'paid', 'grok-4.6', 'none'),
+                     ('unknown', 'free', None, None), ('reply', 'unknown', None, None)]:
+            with self.assertRaises(ValueError):
+                settings.set_ai_task_settings(*args)
+            self.assertEqual(self.path.read_text(), before)
+        settings.set_ai_task_settings('reply', 'free', 'none', 'ling-free')
+        self.assertFalse(settings.is_ai_enabled('reply'))
+        self.assertTrue(settings.is_ai_enabled('rule'))
+
+    def test_legacy_free_primary_and_paid_backup_keep_their_spending_permission(self):
+        self.path.write_text(json.dumps({'reply_model': 'ling-free'}))
+        self.assertEqual(settings.get_ai_policy('reply'), 'free')
+        self.assertEqual(settings.get_ai_models('reply')['free'], 'ling-free')
+        self.path.write_text(json.dumps({'reply_model': 'grok-4.6', 'reply_backup_model': 'ling-free'}))
+        self.assertEqual(settings.get_ai_policy('reply'), 'paid')
+        settings.set_ai_policy('reply', 'paid_only')
+        self.assertEqual(settings.get_ai_policy('reply'), 'paid_only')
+
+    def test_auto_backlog_threshold_is_four_hours(self):
+        self.assertEqual(settings.ESCALATION_TARGET_SECONDS, 14400)
+        self.assertEqual(settings.decide_backend_split(2880, 0.2, 50), (50, 0))
+        free, paid = settings.decide_backend_split(2881, 0.2, 50)
+        self.assertGreater(paid, 0)
+
     def test_invalid_triggers_rejected(self):
         for value in ('"bad"@example.com', 'x@example.com\r\nINJECT', 'missing-domain'):
             with self.assertRaises(ValueError):

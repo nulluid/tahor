@@ -58,7 +58,7 @@ class SetupTests(unittest.TestCase):
                 self.assertEqual(settings['classify_mode'], 'free')
                 self.assertEqual(settings['rule_model'], 'none')
                 self.assertEqual(settings['reply_model'], 'none')
-                self.assertEqual(os.environ['TAHOR_CLASSIFY_FREE_ENABLED'], '0')
+                self.assertEqual(os.environ['TAHOR_CLASSIFY_FREE_ENABLED'], '1')
                 self.assertEqual(os.environ['TAHOR_NOTIFY_HEALTH'], '0')
                 self.assertEqual(os.environ['TAHOR_NOTIFY_DIGEST'], '0')
                 notify = (root / 'units/tahor-notifications.service').read_text()

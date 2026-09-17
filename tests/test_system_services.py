@@ -14,13 +14,16 @@ spec.loader.exec_module(services)
 class SystemServiceTests(unittest.TestCase):
     def test_services_share_restricted_identity_and_writable_state(self):
         units = services.render('tahor',Path('/etc/tahor/config.env'),Path('/var/lib/tahor'),Path('/opt/tahor/venv/bin/python'),Path('/opt/tahor'))
-        self.assertEqual(len(units),9)
+        self.assertEqual(len(units),11)
         for name,text in units.items():
             if name.endswith('.service'):
                 for setting in ('User=tahor\n','NoNewPrivileges=true','CapabilityBoundingSet=\n','ProtectSystem=strict','ProtectHome=true','ReadWritePaths="/var/lib/tahor"','LimitCORE=0'):
                     self.assertIn(setting,text)
                 self.assertNotIn('/home/',text)
         self.assertIn('09:00:00 UTC',units['tahor-filing.timer'])
+        self.assertIn('OnCalendar=*:0/5', units['tahor-decisions.timer'])
+        self.assertIn(' decisions ', units['tahor-decisions.service'])
+        self.assertIn('Type=oneshot', units['tahor-decisions.service'])
 
     def test_invalid_identity_and_path_injection_rejected(self):
         for user in ('root','tahor\nUser=root','bad user'):

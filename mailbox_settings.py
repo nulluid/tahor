@@ -9,6 +9,7 @@ from the settings page) and backlog_worker.py (reads it every batch) so
 there's a single source of truth for the file format and defaults.
 """
 import json
+import math
 import copy
 import fcntl
 import tempfile
@@ -20,7 +21,8 @@ from pathlib import Path
 # Fixed path, not Path(__file__).parent -- worker and web app run from different directories.
 SETTINGS_PATH = Path(os.environ.get("TAHOR_SETTINGS_PATH", Path.home() / ".config" / "tahor" / "settings.json"))
 
-MODES = ("free", "paid", "auto")
+MODES = ("paid_only", "paid", "auto", "free")
+AI_TASKS = ("classification", "reply", "rule")
 
 # Rule drafting is rare and judgment-heavy, so it's worth a stronger model than routine classification uses.
 RULE_MODELS = {
@@ -118,6 +120,11 @@ REPLY_MODELS = {
     },
 }
 DEFAULT_REPLY_MODEL = "none"
+# A free rule writer is a separate, reviewed choice; its provider constraints
+# match the independently configured reply writer.
+RULE_MODELS['ling-free'] = copy.deepcopy(REPLY_MODELS['ling-free'])
+RULE_MODELS['ling-free']['request_options']['max_tokens'] = 4096
+
 
 DEFAULT_SETTINGS = {
     "classify_mode": "free",
@@ -141,18 +148,12 @@ DEFAULT_FREE_RATE = 50 / (4 * 60)  # ~0.208 msg/sec
 # recount is worth its cost.
 BACKLOG_REFRESH_SECONDS = 15 * 60
 
-# Initial throughput estimate, measured end-to-end at concurrency 20.
-PAID_CONCURRENCY = 40
-PAID_MSG_LATENCY_SECONDS = 2.06
-PAID_RATE_MSGS_PER_SEC = 1 / PAID_MSG_LATENCY_SECONDS  # measured aggregate seconds per message
-
-# Roughly $0.0003/email at current OpenRouter pricing for the paid backend's
-# model at this project's snippet size -- used only for the settings page's
-# "~$/hour" display, never for anything billed.
-COST_PER_PAID_MSG = 0.0003
+# Initial paid throughput estimate follows the default request-start pacing.
+# Real throughput varies with latency and retries; it is a planning estimate.
+PAID_RATE_MSGS_PER_SEC = 1 / 3
 
 # The backlog-clear-time threshold auto mode escalates around.
-ESCALATION_TARGET_SECONDS = 3600
+ESCALATION_TARGET_SECONDS = 4 * 3600
 
 # Batch size used only for the settings page's illustrative split/cost
 # projection (mirrors backlog_worker.py's own default WORKER_BATCH_SIZE).
@@ -217,6 +218,80 @@ def set_classify_mode(mode):
         raise ValueError(f"Unknown classify_mode {mode!r}, choose from {MODES}")
     settings = load_settings()
     settings["classify_mode"] = mode
+    save_settings(settings)
+
+
+def get_ai_policy(task):
+    if task not in AI_TASKS:
+        raise ValueError('Unknown AI task')
+    settings = load_settings()
+    if task == 'classification':
+        return settings['classify_mode']
+    value = settings.get(task + '_ai_policy')
+    if value in MODES:
+        return value
+    # Preserve a legacy free primary or explicitly selected free reply backup.
+    registry = REPLY_MODELS if task == 'reply' else RULE_MODELS
+    primary = settings.get(task + '_model', 'none')
+    if registry.get(primary, {}).get('model', '').endswith(':free'):
+        return 'free'
+    if task == 'reply' and settings.get('reply_backup_model') in free_reply_models():
+        return 'paid'
+    return 'paid_only'
+
+
+def get_ai_models(task):
+    if task not in AI_TASKS:
+        raise ValueError('Unknown AI task')
+    if task == 'classification':
+        return {'paid': 'openrouter-paid', 'free': 'openrouter-free'}
+    settings = load_settings()
+    registry = REPLY_MODELS if task == 'reply' else RULE_MODELS
+    primary = settings.get(task + '_model', 'none')
+    legacy_free = registry.get(primary, {}).get('model', '').endswith(':free')
+    free_key = 'reply_backup_model' if task == 'reply' else 'rule_free_model'
+    free = settings.get(free_key, 'ling-free')
+    if not registry.get(free, {}).get('model', '').endswith(':free'):
+        free = primary if legacy_free else 'ling-free'
+    return {'paid': 'grok-4.6' if legacy_free else primary, 'free': free}
+
+
+def is_ai_enabled(task):
+    if task not in AI_TASKS:
+        raise ValueError('Unknown AI task')
+    return task == 'classification' or load_settings().get(task + '_model', 'none') != 'none'
+
+
+@locked_update
+def set_ai_task_settings(task, policy, paid_model=None, free_model=None):
+    if task not in AI_TASKS or policy not in MODES:
+        raise ValueError('Unknown AI task or policy')
+    settings = load_settings()
+    if task == 'classification':
+        if paid_model not in (None, '', 'openrouter-paid') or free_model not in (None, '', 'openrouter-free'):
+            raise ValueError('Unknown classification model')
+        settings['classify_mode'] = policy
+    else:
+        registry = REPLY_MODELS if task == 'reply' else RULE_MODELS
+        current = get_ai_models(task)
+        paid_model = current['paid'] if paid_model is None else paid_model
+        free_model = current['free'] if free_model is None else free_model
+        if paid_model not in registry or registry[paid_model]['model'].endswith(':free'):
+            raise ValueError('Choose a paid model or disable this task')
+        if free_model not in registry or not registry[free_model]['model'].endswith(':free'):
+            raise ValueError('Choose an explicitly free model')
+        settings[task + '_ai_policy'] = policy
+        settings[task + '_model'] = paid_model
+        settings['reply_backup_model' if task == 'reply' else 'rule_free_model'] = free_model
+    save_settings(settings)
+
+
+@locked_update
+def set_ai_policy(task, policy):
+    if task not in AI_TASKS or policy not in MODES:
+        raise ValueError('Unknown AI task or policy')
+    settings = load_settings()
+    settings['classify_mode' if task == 'classification' else task + '_ai_policy'] = policy
     save_settings(settings)
 
 
@@ -398,7 +473,7 @@ def decide_backend_split(remaining_count, recent_free_rate_msgs_per_sec, batch_s
 
     Not a perfect solver -- batch-size rounding and using this batch's split
     as a stand-in for "ongoing rate" are both approximations -- but it
-    reliably escalates further as the backlog-vs-1-hour gap grows, and backs
+    reliably escalates further as the backlog-vs-4-hour gap grows, and backs
     off toward all-free as that gap closes or clears.
     """
     if remaining_count <= 0 or batch_size <= 0:
@@ -419,7 +494,7 @@ def decide_backend_split(remaining_count, recent_free_rate_msgs_per_sec, batch_s
         paid_fraction = (required_combined_rate - free_rate) / rate_gap
     paid_fraction = max(0.0, min(1.0, paid_fraction))
 
-    paid_count = max(0, min(batch_size, round(batch_size * paid_fraction)))
+    paid_count = max(1, min(batch_size, math.ceil(batch_size * paid_fraction)))
     free_count = batch_size - paid_count
     return free_count, paid_count
 
