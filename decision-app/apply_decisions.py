@@ -33,6 +33,7 @@ import re
 import os
 import subprocess
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -41,6 +42,7 @@ import mailbox_settings
 import tahor_db
 from data_changes import atomic_write, commit_data
 import generate_sieve
+from http_response import read_bounded, MODEL_RESPONSE_SECONDS
 
 DB_PATH = tahor_db.DB_PATH
 
@@ -113,8 +115,9 @@ def rule_model_call(user_content):
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
     )
+    deadline = time.monotonic() + MODEL_RESPONSE_SECONDS
     with urllib.request.urlopen(req, timeout=90) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
+        body = json.loads(read_bounded(resp, deadline).decode("utf-8"))
     content = body["choices"][0]["message"]["content"].strip()
     if content.startswith("```"):
         content = content.strip("`")

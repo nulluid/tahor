@@ -1,10 +1,19 @@
 import io
+import importlib.util
+from pathlib import Path
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
 import http_response
 import classify
 import draft_replies
+
+APP_DIR = Path(__file__).resolve().parents[1] / 'decision-app'
+spec = importlib.util.spec_from_file_location('http_rule_apply', APP_DIR / 'apply_decisions.py')
+rule_apply = importlib.util.module_from_spec(spec)
+with patch.object(sys, 'path', [str(APP_DIR)] + sys.path):
+    spec.loader.exec_module(rule_apply)
 
 
 class ResponseBoundTests(unittest.TestCase):
@@ -50,3 +59,25 @@ class ResponseBoundTests(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 draft_replies._draft_reply_body('Update', 'sender@example.org', 'Private input')
         response.__exit__.assert_called_once()
+
+    def test_rule_writer_dripping_body_hits_deadline_and_closes_response(self):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.read1.return_value = b' '
+        with patch.dict(rule_apply.os.environ, {'OPENROUTER_API_KEY': 'synthetic'}), patch.object(
+                rule_apply.mailbox_settings, 'get_rule_model', return_value='gpt5'), patch.object(
+                rule_apply.urllib.request, 'urlopen', return_value=response), patch.object(
+                rule_apply.time, 'monotonic', side_effect=[0, 1, 91]):
+            with self.assertRaisesRegex(TimeoutError, '^Model response deadline exceeded$'):
+                rule_apply.rule_model_call('Synthetic private directions')
+        response.read.assert_not_called()
+        response.__exit__.assert_called_once()
+
+    def test_rule_writer_oversize_body_is_rejected_and_closed(self):
+        response = io.BytesIO(b'x' * (http_response.MODEL_RESPONSE_BYTES + 1))
+        with patch.dict(rule_apply.os.environ, {'OPENROUTER_API_KEY': 'synthetic'}), patch.object(
+                rule_apply.mailbox_settings, 'get_rule_model', return_value='gpt5'), patch.object(
+                rule_apply.urllib.request, 'urlopen', return_value=response):
+            with self.assertRaisesRegex(ValueError, '^Model response exceeds byte limit$'):
+                rule_apply.rule_model_call('Synthetic private directions')
+        self.assertTrue(response.closed)
