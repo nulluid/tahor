@@ -17,6 +17,9 @@ table can grow.
 import email.utils
 import email.policy
 import imaplib
+import json
+import os
+from pathlib import Path
 import re
 import sys
 from collections import defaultdict
@@ -154,6 +157,70 @@ def reply_filing_destinations(conn, read_criteria, unread_criteria):
     return destinations
 
 
+def refile_unsorted(conn, buckets, root, dry_run=False, state_path=None):
+    """Revisit three staging folders and at most 100 messages each per sweep."""
+    from data_changes import atomic_write
+    from message_expiry import metadata
+    state_path = Path(state_path or Path(os.environ.get('TAHOR_STATE_DIR', Path(__file__).resolve().parent)) / 'refile_cursors.json')
+    try:
+        state = json.loads(state_path.read_text())
+    except FileNotFoundError:
+        state = {}
+    paths = [name for name, flags in list_mailboxes(conn)
+             if name.startswith(root + '/_Unsorted/') and not flags.intersection(SPECIAL_FLAGS)]
+    if not paths:
+        return 0
+    paths.sort()
+    after = state.get('folder', '')
+    ordered = [name for name in paths if name > after] + [name for name in paths if name <= after]
+    moved = 0
+    created = set()
+    grace = mailbox_settings.get_inbox_grace_days()
+    now = datetime.now(timezone.utc)
+    capabilities = {value.decode().upper() if isinstance(value, bytes) else value.upper() for value in conn.capabilities}
+    if not dry_run and 'MOVE' not in capabilities:
+        raise RuntimeError('Refiling requires IMAP MOVE')
+    for source in ordered[:3]:
+        if conn.select(quote_mailbox(source), readonly=dry_run)[0] != 'OK':
+            raise RuntimeError('Could not select unsorted mailbox')
+        candidates = sorted(eligible_uids(conn, ('UNKEYWORD', 'reply-protected')), key=int)
+        previous = int(state.get('uids', {}).get(source, 0))
+        candidates = [uid for uid in candidates if int(uid) > previous] + [uid for uid in candidates if int(uid) <= previous]
+        for uid in candidates[:100]:
+            status, rows = conn.uid('FETCH', uid, '(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM MESSAGE-ID)])')
+            if status != 'OK':
+                raise RuntimeError('Could not fetch unsorted message')
+            _, flags, delivered = metadata(rows, uid, content=True)
+            blocked = {b'needs-attention', b'reply-protected', b'\\flagged', b'\\draft', b'retention-pending-review', b'delete-pending'}
+            if not flags.intersection(blocked) and flags.intersection({key.encode() for key in CATEGORY_KEYWORDS}) and now >= delivered + timedelta(days=grace['read' if b'\\seen' in flags else 'unread']):
+                body = next(row[1] for row in rows if isinstance(row, tuple))
+                message = email.message_from_bytes(body, policy=email.policy.default)
+                bucket, vendor = vendor_for(str(message.get('From', '')), buckets)
+                if bucket != '_Unsorted':
+                    target = f'{root}/{bucket}/{vendor}'
+                    if target != source:
+                        if not dry_run:
+                            ensure_folder(conn, target, created)
+                            status, current_rows = conn.uid('FETCH', uid, '(UID FLAGS INTERNALDATE)')
+                            if status != 'OK':
+                                raise RuntimeError('Could not recheck unsorted message')
+                            _, current, current_date = metadata(current_rows, uid)
+                            if current != flags or current_date != delivered:
+                                continue
+                            # It is already filed, low attention, and past unread grace.
+                            if conn.uid('STORE', uid, '+FLAGS.SILENT', '(\\Seen)')[0] != 'OK':
+                                raise RuntimeError('Could not mark refiled message read')
+                            if conn.uid('MOVE', uid, quote_mailbox(target))[0] != 'OK':
+                                raise RuntimeError('Could not refile message')
+                            tahor_db.relocate_vendor_samples(source, target, [str(message.get('Message-ID', ''))])
+                        moved += 1
+            state.setdefault('uids', {})[source] = int(uid)
+        state['folder'] = source
+        if not dry_run:
+            atomic_write(state_path, json.dumps(state) + '\n')
+    return moved
+
+
 def main():
     dry_run = "--dry-run" in sys.argv
     buckets = config.vendor_buckets()
@@ -255,6 +322,9 @@ def main():
                 failures += 1
                 print(f"{dest}: moved mail needs a read-state retry: {exc}")
     try:
+        refiled = refile_unsorted(conn, buckets, root, dry_run)
+        if refiled:
+            print(f'Refiled vendor mail: {refiled} message(s).')
         _, read_failures = reconcile_filed_mail(conn, dry_run)
         failures += read_failures
     finally:
