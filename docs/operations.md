@@ -561,3 +561,7 @@ durable job leases prevent duplicate recommendation calls or repeated delivery.
 Manual bounded passes use `python run.py subscriptions` and
 `python run.py subscription-actions`. Both service units have a five-minute execution
 limit; interrupted external deliveries remain uncertain rather than being resent.
+
+Email previews use bounded mailbox requests and resume searches for moved mail
+from their saved position. A temporary provider or database delay produces a
+retry message in the modal instead of holding the web worker indefinitely.

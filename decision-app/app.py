@@ -876,13 +876,13 @@ def render_ai_task_settings(task):
             return ''.join(f'<option value="{html(key)}"{" selected" if key == models[tier] else ""}>{html(value["label"])}</option>' for key, value in entries)
         controls = (f'<p><label>Paid model <select name="paid_model">{choices("paid")}</select></label></p>'
                     f'<p><label>Free model <select name="free_model">{choices("free")}</select></label></p>'
-                    '<p class="hint">Selecting Disabled for the paid model disables this writing task, regardless of policy. Choosing a paid model makes it available; Always free still never calls it.</p>')
+                    '<p class="hint">Selecting Disabled for the paid model disables this AI task, regardless of policy. Choosing a paid model makes it available; Always free still never calls it.</p>')
         caution = ('Free reply drafts can contain unsupported promises, incorrect roles, or invented details even after model verification. Review every draft before sending.' if task == 'reply' else
                    'In an eight-instruction test, the free rule model proposed the wrong folder once. Review every proposed action and diff; model validation does not establish your intent.')
     if task == 'subscriptions':
         controls += (f'<p><label>Recommendations per batch <input type="number" name="batch_size" min="1" max="200" value="{mailbox_settings.get_subscription_batch_size()}" required></label></p>'
                      f'<p><label>Your subscription preferences<textarea name="subscription_guidance" rows="5" maxlength="12000">{html(mailbox_settings.load_settings().get("subscription_guidance", ""))}</textarea></label></p>')
-        caution = 'Recommendations only preselect choices for your review. They never unsubscribe or block automatically. Missing history or unclear mail may lead to imperfect suggestions; review each batch before applying it.'
+        caution = 'Recommendations only preselect choices for your review. They never unsubscribe or block automatically. The free model can overlook preferences for wanted coupons; check those choices carefully. Review each batch before applying it.'
     status = 'Enabled' if enabled else 'Disabled'
     return (f'<form method="post" action="/settings" class="ai-task-settings" data-autosave data-ai-task="{task}">'
             f'<input type="hidden" name="ai_task" value="{task}"><p><strong class="ai-enabled-status">{status}</strong></p>'
