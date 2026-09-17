@@ -683,7 +683,7 @@ def index():
                     original = ""
                 domains = observed_rule_domains(db)
                 options = ''.join(f'<option value="{html(domain)}">{html(label)}</option>' for domain, label in domains.items())
-                chooser = (f'<label>Choose an observed sender domain (optional)<input name="observed_domain" list="rule-domains-{row["id"]}" placeholder="Search domains or sender names" autocomplete="off"></label><datalist id="rule-domains-{row["id"]}">{options}</datalist><p>These domains came from your mailbox. Selecting one explicitly adds that exact target to this instruction; no domain is selected automatically.</p>' if domains else '')
+                chooser = (f'<label>Choose an observed sender domain (optional)<input type="text" name="observed_domain" list="rule-domains-{row["id"]}" placeholder="Search domains or sender names" autocomplete="off"></label><datalist id="rule-domains-{row["id"]}">{options}</datalist><p>These domains came from your mailbox. Selecting one explicitly adds that exact target to this instruction; no domain is selected automatically.</p>' if domains else '')
                 cards.append(f'<div class="card"><div class="summary">Rule needs clarification</div><p>{html(clarification.get("question", "Please clarify your instruction."))}</p><form method="post" action="/clarify-rule/{row["id"]}"><input type="hidden" name="revision" value="{rule_revision(row)}">{chooser}<label>Full instruction, including the exact sender domain when applicable<textarea name="rule_text" rows="4" required>{html(original)}</textarea></label><p>Use a full domain such as alerts.example.com, not a brand name. Include what you want Tahor to do. The revised proposal still needs your approval.</p><button type="submit">Resubmit instruction</button></form></div>')
             elif proposal:
                 result = proposal['result']
@@ -1126,7 +1126,7 @@ def review_rule(decision_id):
             db.rollback()
             abort(409, 'This proposal changed; refresh before acting.')
         db.commit()
-        session['flash'] = 'Proposal rejected; no rules changed.' 
+        session['flash'] = 'Proposal rejected; no rules changed.'
     elif action == 'approve':
         resolution['approved_proposal'] = proposal['token']
         changed = db.execute('UPDATE decisions SET resolution=? WHERE id=? AND context=? AND resolution=?', (json.dumps(resolution), decision_id, row['context'], row['resolution']))
