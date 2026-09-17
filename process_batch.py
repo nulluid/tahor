@@ -83,6 +83,10 @@ def main():
                 r.update(action='keep', category='personal-correspondence', retention='standard', expense_type='n/a', needs_attention=False)
             if r.get('retention') in ('transient', 'brief'):
                 r['retention'] = 'standard'
+            if matches and not uncertain:
+                r['action'] = 'keep'
+                if r.get('retention') == 'pending-review':
+                    r['retention'] = 'standard'
             # Draft eligibility is separate from a keep/trash decision. An
             # uncertain reply match protects mail but never creates a review hold.
             r['reply_rule_matches'], r['reply_rule_uncertain'] = matches, uncertain
@@ -171,7 +175,7 @@ def main():
         if r.get('reply_rule_matches') or r.get('reply_rule_uncertain'):
             add.append(reply_rules.PROTECTED_KEYWORD)
             add.extend(reply_rules.keyword(active_reply_rules[key]) for key in r.get('reply_rule_matches', []) if key in active_reply_rules)
-        ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]], "uid": msgid_to_uid.get(msgids[r["id"]]), "add": add, "remove": (["delete-pending", "retention-transient"] if r.get("reply_rule_matches") else []) + (["retention-short-lived"] if r.get("retention") != "brief" else [])})
+        ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]], "uid": msgid_to_uid.get(msgids[r["id"]]), "add": add, "remove": (["delete-pending", "retention-transient"] if r.get("reply_rule_matches") or r.get("reply_rule_uncertain") else []) + (["retention-short-lived"] if r.get("retention") != "brief" else [])})
     for r in trash_final:
         if r["id"] not in unmatched:
             ops.append({"mailbox": mailbox, "message_id": msgids[r["id"]],

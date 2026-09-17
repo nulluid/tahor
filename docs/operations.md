@@ -516,7 +516,7 @@ without Node, with the browser checks explicitly skipped.
 
 ### Inspecting subscription messages
 
-Each subscription card has **View emails**. It opens a separate tab with up to
+Each subscription card has **View emails**. It opens a same-page modal with up to
 three recent captured messages, including the actual sender, subject, delivery
 date, and folder. Open a subject to read escaped plain text; no remote images
 load and the message is not marked read. The classifier records references as
@@ -526,3 +526,19 @@ For older subscriptions without references, opening the viewer searches the Inbo
 first in a small read-only batch. **Find more emails** continues through additional
 folders. The search verifies the full sender address and mailbox identities;
 substring matches do not count. Messages already deleted cannot be displayed.
+
+### Reviewing subscription recommendations
+
+The subscription page uses radio choices and a sticky action bar. **Generate AI
+suggestions** selects the next batch for review without sending unsubscribe
+requests. Manual choices take precedence over suggestions arriving later.
+**Apply selected actions** saves the chosen actions to a durable queue; per-sender
+results show progress while you continue reviewing. If delivery becomes ambiguous
+after an interruption, Tahor reports it and does not repeat the request blindly.
+
+Settings has independent paid/free models and spending policy for subscription
+recommendations, a batch size (50 by default), and private written guidance.
+Recommendations use prior decisions and bounded message excerpts. The default
+policy is paid with free fallback. Email previews on both decision pages stay in
+a modal and preserve your scroll position and selections. Older review cards
+load missing sender/date details in bounded background passes with fair retries.

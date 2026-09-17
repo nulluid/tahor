@@ -241,7 +241,8 @@ health alerts and a daily summary, enable the separate
   There is no web draft editor and no automatic sending.
   Initial matching is bounded to recent inbox mail; the normal three-day read
   and seven-day unread filing windows still govern drafting eligibility.
-  Uncertain matches wait for review rather than generating a reply.
+  Uncertain matches stay protected without generating a reply or creating a
+  keep-or-trash decision solely because drafting eligibility is unclear.
   Reply writing starts disabled. Choose models and a spending policy
   in Settings; reply writing is independent of classification policy.
 - **Free-text rules:** first select an AI rule model in Settings, then submit an

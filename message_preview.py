@@ -44,7 +44,7 @@ SCRIPT = r'''<script data-email-preview>
       main.querySelector('header')?.remove();
       // Navigation within message examples stays in this modal. The page's own
       // navigation is redundant with Close and must not discard current work.
-      main.querySelectorAll('a[href="/unsubscribe"]').forEach(link => link.remove());
+      main.querySelectorAll('a[href="/unsubscribe"], a[href="/"]').forEach(link => link.remove());
       content.replaceChildren(main);
       content.scrollTop = 0;
     } catch (error) {

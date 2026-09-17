@@ -82,7 +82,11 @@ def main():
                 response = client.get(route)
                 if response.status_code != 200:
                     raise RuntimeError(f'Preview failed: {route}')
-                (args.export / (name + '.html')).write_text(response.get_data(as_text=True))
+                # Static exports have no backend; keep the actual rendered UI
+                # without executing polling or mailbox action scripts.
+                import re
+                page = re.sub(r'<script\b[^>]*>.*?</script>', '', response.get_data(as_text=True), flags=re.S | re.I)
+                (args.export / (name + '.html')).write_text(page)
             print(f'Exported synthetic preview pages to {args.export}')
         else:
             print(f'Preview: http://127.0.0.1:{args.port} (sample data; no mail is sent or changed)')

@@ -105,16 +105,17 @@ class ReplyClassificationApplicationTests(unittest.TestCase):
         rule = dict(id='a'*16, match_type='natural_language', match='Community updates', excluded_senders=[])
         with tempfile.TemporaryDirectory() as directory:
             prefix = str(Path(directory) / 'batch')
-            inputs = [dict(id=key, subject='Community update', **{'from': 'person@example.org'}, date='2026-09-16T12:00:00+00:00') for key in ('certain', 'uncertain')]
+            inputs = [dict(id=key, subject='Community update', **{'from': 'person@example.org'}, date='2026-09-16T12:00:00+00:00') for key in ('certain', 'uncertain', 'mixed')]
             outputs = [dict(id=key, action='trash', retention='transient', category='marketing',
-                            reply_rule_matches=[rule['id']] if key == 'certain' else [],
+                            reply_rule_matches=[rule['id']] if key != 'uncertain' else [],
                             reply_rule_uncertain=[rule['id']] if key == 'uncertain' else [],
-                            reply_rule_versions={rule['id']: rule['id']}) for key in ('certain', 'uncertain')]
+                            reply_rule_versions={rule['id']: rule['id']}) for key in ('certain', 'uncertain', 'mixed')]
+            outputs[2].update(action='mixed', retention='pending-review', needs_attention=True)
             envelopes = [dict(message_id=key, uid=str(i), from_email='person@example.org', subject='Community update',
-                              internaldate='16-Sep-2026 12:00:00 +0000') for i, key in enumerate(('certain', 'uncertain'), 1)]
+                              internaldate='16-Sep-2026 12:00:00 +0000') for i, key in enumerate(('certain', 'uncertain', 'mixed'), 1)]
             for suffix, values in [('in', inputs), ('out', outputs), ('env', envelopes)]:
                 Path(prefix+'_'+suffix+'.json').write_text(json.dumps(values))
-            with patch.object(sys, 'argv', ['process_batch.py', prefix, 'INBOX']), patch.object(process_batch.reply_rules, 'get_rules', return_value=[rule]), patch.object(process_batch.tahor_db, 'get_sender_rule', return_value='block_all'), patch.object(process_batch.tahor_db, 'record_reply_rule_match'), patch.object(process_batch.tahor_db, 'queue_message_review') as review:
+            with patch.object(sys, 'argv', ['process_batch.py', prefix, 'INBOX']), patch.object(process_batch.reply_rules, 'get_rules', return_value=[rule]), patch.object(process_batch.tahor_db, 'get_sender_rule', side_effect=['block_all', 'block_all', None]), patch.object(process_batch.tahor_db, 'record_reply_rule_match'), patch.object(process_batch.tahor_db, 'queue_message_review') as review:
                 process_batch.main()
             ops = {row['message_id']: row for row in json.loads(Path(prefix+'_ops.json').read_text())}
             self.assertFalse(any(row.get('delete') for row in ops.values()))
@@ -125,7 +126,11 @@ class ReplyClassificationApplicationTests(unittest.TestCase):
             self.assertIn('retention-standard', ops['uncertain']['add'])
             self.assertNotIn('retention-pending-review', ops['uncertain']['add'])
             self.assertNotIn('needs-attention', ops['uncertain']['add'])
+            self.assertIn('delete-pending', ops['uncertain']['remove'])
             self.assertNotIn('reply-rule-'+rule['id'], ops['uncertain']['add'])
+            self.assertIn('retention-standard', ops['mixed']['add'])
+            self.assertIn('needs-attention', ops['mixed']['add'])
+            self.assertNotIn('retention-pending-review', ops['mixed']['add'])
             review.assert_not_called()
 
     def test_classifier_missing_semantic_fields_fails_closed_even_for_trash(self):

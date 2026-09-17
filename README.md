@@ -149,7 +149,8 @@ afterward. Messages needing attention or review stay protected.
 
 Natural-language matching shares the existing classification request, using up
 to 6,000 characters of message context when such rules are enabled. Uncertain
-matches stay pending review and do not produce a draft. Reply writing is a
+matches remain protected from deletion and do not produce a draft; uncertainty
+about drafting alone does not create a keep-or-trash decision. Reply writing is a
 separate model request. Choose its model and spending policy independently of
 classification: **Grok 4.6** is the recommended paid writer, and **Ling 3.0 Flash VL**
 is the free option. Additional supported choices are available in Settings.
@@ -171,14 +172,20 @@ seven-day unread window, measured from delivery. **Trash** deletes that message;
 
 For subscriptions, **Stop marketing, keep transactions** requests an unsubscribe
 and blocks future marketing in Tahor while allowing receipts and payment notices.
-**View emails** opens recent subjects, dates, and full message text in a separate
-tab without marking mail read. Each sender shows its own progress and result, so
-you can work through other senders while a request runs. Some senders require confirmation on their website;
+**View emails** opens recent subjects, dates, and full message text in a modal
+without leaving the page or marking mail read. The same preview works on review
+cards. Choose radio options for multiple senders, then **Apply selected actions**.
+The action bar stays visible as you scroll, and each sender shows its own result.
+**Generate AI suggestions** selects recommendations for your review using past
+decisions and your private guidance; it never applies them. Each batch covers
+50 senders by default, configurable in Settings. Some senders require confirmation on their website;
 email-based requests require an app password with SMTP sending access.
 
 ## Choose the pace
 
-Choose independently for **classification, reply drafting, and rule drafting**.
+Choose independently for **classification, reply drafting, rule drafting, and
+subscription recommendations**. Subscription recommendations default to paid
+with free fallback.
 Settings save as you change them, with a confirmation beside each section:
 
 | Policy | Behavior | Paid requests |

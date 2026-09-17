@@ -39,6 +39,8 @@ import config
 import reply_rules
 import provider_bridge
 import mailbox_settings
+import message_preview
+import subscription_bulk_ui
 import settings_autosave
 import vendor_review_state
 import decision_interactions
@@ -105,6 +107,8 @@ def secure_response(response):
             field = f'<input type="hidden" name="csrf_token" value="{html(token)}">'
             body = re.sub(r'(<form\b[^>]*method="post"[^>]*>)', lambda match: match[0] + field, body, flags=re.I)
             response.set_data(body)
+        if '</body>' in body and 'data-email-preview' not in body:
+            response.set_data(body.replace('</body>', message_preview.SCRIPT + '</body>'))
     return response
 
 
@@ -453,6 +457,11 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
 {rule_ai_settings}
 </section>
 <section>
+<h2>Subscription recommendations</h2>
+<p class="hint">Choose a separate model and describe which subscriptions you value. Recommendations use recent message samples and your private preferences; you review and apply every choice.</p>
+{subscription_ai_settings}
+</section>
+<section>
 <h2 id="reply-rules">Reply rules</h2>
 <p class="hint">Review, edit and send replies in your mail app. Tahor saves a threaded draft in your mailbox and leaves the original unread. Nothing is sent automatically. Rules only draft messages still within your read/unread inbox timing above; drafting does not extend that window.</p>
 {reply_rules_list}
@@ -560,40 +569,6 @@ CARD_GENERIC = """
 </div>
 """
 
-SUBSCRIPTION_SCRIPT = """<script>
-document.querySelectorAll('.subscription-form').forEach(form => {
-  form.addEventListener('submit', async event => {
-    event.preventDefault();
-    if (form.dataset.busy) return;
-    const button = event.submitter;
-    if (!button) return;
-    const card = form.closest('.card');
-    const result = card.querySelector('.subscription-result');
-    const data = new FormData(form);
-    data.set('action', button.value);
-    form.dataset.busy = 'true';
-    form.setAttribute('aria-busy', 'true');
-    form.querySelectorAll('button').forEach(item => item.disabled = true);
-    result.textContent = 'Working… You can continue with another sender.';
-    try {
-      const response = await fetch(form.getAttribute('action'), {method: 'POST', body: data, headers: {'Accept': 'application/json'}, credentials: 'same-origin'});
-      if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('session');
-      const outcome = await response.json();
-      result.textContent = outcome.message;
-      if (!outcome.pending) {
-        form.hidden = true;
-        card.dataset.resolved = 'true';
-      }
-    } catch (error) {
-      result.textContent = 'The result could not be confirmed. Reload to check this sender before trying again.';
-    } finally {
-      delete form.dataset.busy;
-      form.removeAttribute('aria-busy');
-      form.querySelectorAll('button').forEach(item => item.disabled = false);
-    }
-  });
-});
-</script>"""
 
 
 UNSUBSCRIBE_PAGE_TEMPLATE = """<!doctype html>
@@ -614,6 +589,7 @@ UNSUBSCRIBE_PAGE_TEMPLATE = """<!doctype html>
 {flash}
 <h1>Unsubscribe <span class="count">{count}</span></h1>
 <p class="hint">Choose <strong>Stop marketing, keep transactions</strong> to request removal from this mailing list and have Tahor block future marketing while preserving receipts, payment notices, and other transactional messages. Unsubscribe alone requests removal without adding a block. The sender controls what its subscription covers; a confirmation page may require your attention. Block all mail also blocks transactional messages.</p>
+{bulk_controls}
 {non_compliant_banner}
 {cards}
 <section><h2>Blocked senders</h2>{blocked_senders}</section>
@@ -632,37 +608,22 @@ NON_COMPLIANT_SECTION = """
 """
 
 UNSUBSCRIBE_CARD = """
-<div class="card" id="subscription-{id}">
+<div class="card" id="subscription-{id}" data-subscription-id="{id}">
   <div class="summary">{display_name}</div>
   <p class="subscription-result" role="status" aria-live="polite">{result}</p>
   {manual_link}
   <div class="context">{sender_email} &middot; {message_count} message(s) &middot; {mechanism}</div>
-  <form method="post" action="/unsubscribe/{id}" class="subscription-form">
-    <div class="actions">
-      <button type="submit" name="action" value="unsubscribe_block_marketing" class="primary">Stop marketing, keep transactions</button>
-      <button type="submit" name="action" value="unsubscribe">Unsubscribe</button>
-      <button type="submit" name="action" value="block_all" class="trash">Unsubscribe + block all mail</button>
-      <button type="submit" name="action" value="dismiss">Keep subscription</button>
-    </div>
-  </form>
+  <fieldset><legend>Choose an action</legend>
+    <label><input type="radio" name="choice-{id}" value="" checked> No action yet</label><br>
+    <label><input type="radio" name="choice-{id}" value="unsubscribe_block_marketing"> Stop marketing, keep transactions</label><br>
+    <label><input type="radio" name="choice-{id}" value="unsubscribe"> Unsubscribe only</label><br>
+    <label><input type="radio" name="choice-{id}" value="dismiss"> Keep subscription</label><br>
+    <label><input type="radio" name="choice-{id}" value="block_all"> Unsubscribe and block all mail, including receipts</label>
+  </fieldset>
 </div>
 """
 
-NON_COMPLIANT_CARD = """
-<div class="card warn" id="subscription-{id}">
-  <div class="summary">{display_name}</div>
-  <p class="subscription-result" role="status" aria-live="polite">{result}</p>
-  {manual_link}
-  <div class="context">{sender_email} &middot; {message_count} message(s) &middot; sent again after you unsubscribed</div>
-  <form method="post" action="/unsubscribe/{id}" class="subscription-form">
-    <div class="actions">
-      <button type="submit" name="action" value="unsubscribe_block_marketing" class="primary">Stop marketing, keep transactions</button>
-      <button type="submit" name="action" value="block_all" class="trash">Block all mail, including receipts</button>
-      <button type="submit" name="action" value="dismiss">Leave unsubscribed, don't block</button>
-    </div>
-  </form>
-</div>
-"""
+NON_COMPLIANT_CARD = UNSUBSCRIBE_CARD.replace('class="card"', 'class="card warn"').replace('{mechanism}', 'marketing received after an unsubscribe request')
 
 
 def decision_context(row):
@@ -689,7 +650,7 @@ def decision_context(row):
         parts.append('This rule applies to this exact sender address.' if context.get('routing_key') else 'Sender details have not been captured yet. Confirm the merchant before saving a domain-wide rule.')
         return ' · '.join(parts)
     if row["kind"] == "message_review":
-        parts = [f'From: {context.get("sender") or "Not yet loaded"}']
+        parts = [f'From: {context.get("sender") or ("Not provided in this email" if context.get("details_loaded") else "Loading in the background")}']
         received = context.get('received_at') or context.get('date')
         if received:
             try:
@@ -707,7 +668,7 @@ def decision_context(row):
             except (ValueError, TypeError, AttributeError, OverflowError):
                 parts.append('Date unavailable; refresh message details')
         else:
-            parts.append('Date not yet loaded')
+            parts.append('Date unavailable in this email' if context.get('details_loaded') else 'Date is loading in the background')
         parts.append(f'In {context.get("mailbox", "your mailbox")}. Protected from retention cleanup until you decide.')
         return ' · '.join(parts)
     return str(context.get("outcome") or context.get("explanation") or "Ready for your review.")
@@ -909,7 +870,7 @@ def render_ai_task_settings(task):
         if not classify.free_classification_enabled():
             controls += '<p class="hint">Free classification is disabled by the server configuration. Policies that require it cannot be selected.</p>'
     else:
-        registry = mailbox_settings.REPLY_MODELS if task == 'reply' else mailbox_settings.RULE_MODELS
+        registry = mailbox_settings.ai_model_registry(task)
         def choices(tier):
             entries = [(key, value) for key, value in registry.items() if (key == 'none' and tier == 'paid') or (key != 'none' and value['model'].endswith(':free') == (tier == 'free'))]
             return ''.join(f'<option value="{html(key)}"{" selected" if key == models[tier] else ""}>{html(value["label"])}</option>' for key, value in entries)
@@ -918,6 +879,10 @@ def render_ai_task_settings(task):
                     '<p class="hint">Selecting Disabled for the paid model disables this writing task, regardless of policy. Choosing a paid model makes it available; Always free still never calls it.</p>')
         caution = ('Free reply drafts can contain unsupported promises, incorrect roles, or invented details even after model verification. Review every draft before sending.' if task == 'reply' else
                    'In an eight-instruction test, the free rule model proposed the wrong folder once. Review every proposed action and diff; model validation does not establish your intent.')
+    if task == 'subscriptions':
+        controls += (f'<p><label>Recommendations per batch <input type="number" name="batch_size" min="1" max="200" value="{mailbox_settings.get_subscription_batch_size()}" required></label></p>'
+                     f'<p><label>Your subscription preferences<textarea name="subscription_guidance" rows="5" maxlength="12000">{html(mailbox_settings.load_settings().get("subscription_guidance", ""))}</textarea></label></p>')
+        caution = 'Recommendations only preselect choices for your review. They never unsubscribe or block automatically. Missing history or unclear mail may lead to imperfect suggestions; review each batch before applying it.'
     status = 'Enabled' if enabled else 'Disabled'
     return (f'<form method="post" action="/settings" class="ai-task-settings" data-autosave data-ai-task="{task}">'
             f'<input type="hidden" name="ai_task" value="{task}"><p><strong class="ai-enabled-status">{status}</strong></p>'
@@ -937,7 +902,7 @@ def settings_page():
                 import classify
                 if task == 'classification' and policy in ('auto', 'free') and not classify.free_classification_enabled():
                     raise ValueError('Free classification is disabled by the server configuration.')
-                mailbox_settings.set_ai_task_settings(task, policy, paid_model=request.form.get('paid_model'), free_model=request.form.get('free_model'))
+                mailbox_settings.set_ai_task_settings(task, policy, paid_model=request.form.get('paid_model'), free_model=request.form.get('free_model'), batch_size=request.form.get('batch_size') if task == 'subscriptions' else None, guidance=request.form.get('subscription_guidance') if task == 'subscriptions' else None)
             except ValueError as exc:
                 if request.headers.get('Accept') == 'application/json':
                     return {'saved': False, 'message': str(exc)}, 400
@@ -979,7 +944,7 @@ def settings_page():
             abort(400, "No setting was selected.")
         if request.headers.get('Accept') == 'application/json':
             result = {'saved': True}
-            if request.form.get('ai_task') in ('classification', 'rule', 'reply'):
+            if request.form.get('ai_task') in mailbox_settings.AI_TASKS:
                 result['enabled'] = mailbox_settings.is_ai_enabled(request.form['ai_task'])
             return result
         return redirect("/settings")
@@ -997,6 +962,7 @@ def settings_page():
         status_line=_settings_status_line(current_mode),
         classification_ai_settings=render_ai_task_settings('classification'),
         rule_ai_settings=render_ai_task_settings('rule'),
+        subscription_ai_settings=render_ai_task_settings('subscriptions'),
         reply_ai_settings=render_ai_task_settings('reply'),
         reply_rules_list=render_reply_rules(),
         provider_status=html(provider['label']),
@@ -1421,23 +1387,29 @@ def retry_rule(decision_id):
     return redirect("/")
 
 
-def _unsubscribe_card(row, non_compliant=False):
+def _unsubscribe_card(row, non_compliant=False, suggestion=None):
     mechanism = "one-click unsubscribe" if row["one_click"] else ("unsubscribe link" if row["unsubscribe_url"] else ("email unsubscribe" if row["unsubscribe_mailto"] else "no unsubscribe mechanism found"))
     template = NON_COMPLIANT_CARD if non_compliant else UNSUBSCRIBE_CARD
-    return template.format(
+    rendered = template.format(
         id=row["id"],
         display_name=html(row["display_name"] or row["sender_domain"]),
         sender_email=html(row["sender_email"] or row["sender_domain"]),
         message_count=row["message_count"],
         mechanism=mechanism,
-        manual_link=(f'<p><a href="/subscription-messages/{row["id"]}" target="_blank" rel="noopener noreferrer">View emails</a></p>' + (f'<p><a href="/unsubscribe-link/{row["id"]}" target="_blank" rel="noopener noreferrer">Open sender’s unsubscribe page</a> <span class="hint">Complete any confirmation there.</span></p>' if row['unsubscribe_url'] else '')),
+        manual_link=(f'<p><a href="/subscription-messages/{row["id"]}">View emails</a></p>' + (f'<p><a href="/unsubscribe-link/{row["id"]}" target="_blank" rel="noopener noreferrer">Open sender’s unsubscribe page</a> <span class="hint">Complete any confirmation there.</span></p>' if row['unsubscribe_url'] else '')),
         result=html(session.pop("subscription_result_" + str(row["id"]), "")),
     )
+    if suggestion and suggestion.get('action') in ('unsubscribe_block_marketing', 'unsubscribe', 'block_all', 'dismiss'):
+        rendered = rendered.replace('value="" checked', 'value=""').replace('value="' + suggestion['action'] + '"', 'value="' + suggestion['action'] + '" checked')
+        rendered = rendered.replace('</fieldset>', '</fieldset><p class="ai-suggestion">AI suggestion: ' + html(suggestion.get('reason', '')) + '</p>')
+    return rendered
 
 
 @app.route("/unsubscribe")
 @login_required
 def unsubscribe_page():
+    import subscription_suggestions
+    suggestions = {item['candidate_id']: item for item in subscription_suggestions.latest_recommendations()}
     db = get_db()
     non_compliant_rows = db.execute(
         "SELECT * FROM unsubscribe_candidates WHERE status = 'pending' AND non_compliant = 1 ORDER BY last_seen_at DESC"
@@ -1449,16 +1421,17 @@ def unsubscribe_page():
     non_compliant_banner = ""
     if non_compliant_rows:
         non_compliant_banner = NON_COMPLIANT_SECTION.format(
-            cards="".join(_unsubscribe_card(r, non_compliant=True) for r in non_compliant_rows)
+            cards="".join(_unsubscribe_card(r, non_compliant=True, suggestion=suggestions.get(r["id"])) for r in non_compliant_rows)
         )
-    body = "".join(_unsubscribe_card(r) for r in pending_rows) if pending_rows else '<p class="empty">No unsubscribe candidates pending.</p>'
+    body = "".join(_unsubscribe_card(r, suggestion=suggestions.get(r["id"])) for r in pending_rows) if pending_rows else '<p class="empty">No unsubscribe candidates pending.</p>'
     return UNSUBSCRIBE_PAGE_TEMPLATE.format(
         icon=TAHOR_ICON,
         style=STYLE_BLOCK,
         header=tahor_header("unsubscribe"),
-        interaction_script=SUBSCRIPTION_SCRIPT,
+        interaction_script=subscription_bulk_ui.SCRIPT,
         flash=FLASH_BANNER.format(message=html(session.pop("flash", ""))) if session.get("flash") else "",
         count=len(non_compliant_rows) + len(pending_rows),
+        bulk_controls=subscription_bulk_ui.BAR,
         non_compliant_banner=non_compliant_banner,
         blocked_senders="".join(
             f'<div class="card"><div class="summary">{html(row["sender_domain"])}</div>'
@@ -1525,6 +1498,50 @@ def subscription_message_view(candidate_id, sample_id):
         '</p><p>This text view does not mark the email read. Remote images and attachments are not displayed.</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">' + html(body) + '</pre></main></body></html>')
 
 
+@app.route('/unsubscribe/batches', methods=['GET', 'POST'])
+@login_required
+def unsubscribe_batches():
+    import subscription_bulk
+    if request.method == 'GET':
+        return jsonify(subscription_bulk.recent_jobs())
+    try:
+        selections = json.loads(request.form.get('selections', '[]'))
+        return jsonify(subscription_bulk.enqueue(selections, request.form.get('request_key', ''))), 202
+    except (ValueError, TypeError):
+        return jsonify(error='A selected subscription changed or already has a queued request. Reload to review its current state.'), 409
+
+
+@app.route('/unsubscribe/batches/<job_id>')
+@login_required
+def unsubscribe_batch_status(job_id):
+    import subscription_bulk
+    try:
+        return jsonify(subscription_bulk.get_job(job_id))
+    except ValueError:
+        abort(404)
+
+
+@app.route('/unsubscribe/suggestions', methods=['POST'])
+@login_required
+def unsubscribe_suggest():
+    import subscription_suggestions
+    try:
+        excluded = json.loads(request.form.get('exclude_ids', '[]'))
+        return jsonify(subscription_suggestions.enqueue(exclude_ids=excluded)), 202
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+
+
+@app.route('/unsubscribe/suggestions/<job_id>')
+@login_required
+def unsubscribe_suggestion_status(job_id):
+    import subscription_suggestions
+    try:
+        return jsonify(subscription_suggestions.get_job(job_id))
+    except ValueError:
+        abort(404)
+
+
 @app.route("/unsubscribe-link/<int:candidate_id>")
 @login_required
 def unsubscribe_link(candidate_id):
@@ -1544,6 +1561,9 @@ def unsubscribe_link(candidate_id):
 @app.route("/unsubscribe/<int:candidate_id>", methods=["POST"])
 @login_required
 def unsubscribe_action(candidate_id):
+    import subscription_bulk
+    if subscription_bulk.active_candidate(candidate_id):
+        abort(409, 'This subscription has a queued or unconfirmed request. Check its current result first.')
     db = get_db()
     row = db.execute("SELECT * FROM unsubscribe_candidates WHERE id = ?", (candidate_id,)).fetchone()
     action = request.form.get("action")
