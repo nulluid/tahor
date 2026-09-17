@@ -216,9 +216,9 @@ class WebActionTests(AppTestCase):
 
     def test_message_keep_and_trash_apply_keywords_before_resolution(self):
         import keyword_tool
-        for action, keyword in [('keep', 'retention-standard'), ('trash', 'retention-transient')]:
+        for action, keyword in [('keep', 'retention-standard'), ('keep_brief', 'retention-short-lived'), ('trash', 'retention-transient')]:
             id = self.decision('message_review', {'mailbox': 'INBOX', 'message_id': '<review@example.com>'})
-            with patch.object(keyword_tool, 'apply_ops', return_value={'applied': {'<review@example.com>'}}) as apply:
+            with patch('message_reviews.locate', return_value={'uid': '12', 'uidvalidity': '8', 'sender': 'Sender <sender@example.com>', 'received_at': '2026-09-01T12:30:00+00:00'}), patch.object(keyword_tool, 'apply_ops', return_value={'applied': {'<review@example.com>'}}) as apply:
                 self.assertEqual(self.post(f'/resolve/{id}', action=action).status_code, 302)
             operation = apply.call_args.args[0][0]
             self.assertIn(keyword, operation['add'])

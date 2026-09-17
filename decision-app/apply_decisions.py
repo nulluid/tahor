@@ -426,6 +426,7 @@ def apply_one(decision_id):
     with (DATA_DIR / ".decisions.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         conn = tahor_db.get_db()
+        row = None
         try:
             row = conn.execute("SELECT * FROM decisions WHERE id=?", (decision_id,)).fetchone()
             if row is None or not row["resolution"]:
@@ -437,6 +438,8 @@ def apply_one(decision_id):
             if not isinstance(context, dict):
                 context = {"note": row["context"]}
             if context.get("applied"):
+                with conn:
+                    conn.execute("UPDATE decisions SET status='resolved' WHERE id=?", (decision_id,))
                 return context.get("outcome", "Already applied")
             resolution = json.loads(row["resolution"])
             if row["kind"] == "vendor_mapping":
@@ -448,27 +451,58 @@ def apply_one(decision_id):
                     return "Waiting for rule clarification"
             elif row["kind"] == "message_review":
                 import keyword_tool
+                if row['status'] == 'pending':
+                    with conn:
+                        claimed = conn.execute("UPDATE decisions SET status='resolved' WHERE id=? AND status='pending' AND resolution=?", (decision_id, row['resolution']))
+                    if claimed.rowcount != 1:
+                        raise RuntimeError('The owner changed this decision before it could be applied')
                 action = resolution.get("action")
-                if action not in ("keep", "trash"):
-                    raise ValueError("Choose Keep or Trash for this message")
-                add = ["retention-standard"] if action == "keep" else ["retention-transient", "category-marketing", "delete-pending"]
-                result = keyword_tool.apply_ops([{"mailbox": context["mailbox"], "message_id": context["message_id"], "uid": context.get("uid"), "uidvalidity": context.get("uidvalidity"), "add": add, "delete": action == "trash", "remove": ["retention-pending-review", "needs-attention"] + (["delete-pending"] if action == "keep" else [])}])
+                if action not in ("keep", "keep_brief", "trash"):
+                    raise ValueError("Choose Keep, Keep briefly, or Trash for this message")
+                import message_reviews
+                context.setdefault('subject', row['summary'] or '')
+                try:
+                    details = message_reviews.locate(context)
+                except Exception:
+                    with conn:
+                        conn.execute("UPDATE decisions SET context=? WHERE id=?", (json.dumps(context), decision_id))
+                    raise
+                context.update(details)
+                add = ["retention-standard"] if action in ("keep", "keep_brief") else ["retention-transient", "category-marketing", "delete-pending"]
+                if action == "keep_brief":
+                    add.append("retention-short-lived")
+                result = keyword_tool.apply_ops([{"mailbox": context["mailbox"], "message_id": context["message_id"], "uid": context.get("uid"), "uidvalidity": context.get("uidvalidity"), "add": add, "delete": action == "trash", "remove": ["retention-pending-review", "needs-attention"] + (["delete-pending", "retention-transient"] if action in ("keep", "keep_brief") else []) + (["retention-short-lived"] if action != "keep_brief" else [])}])
                 if context["message_id"] not in result["applied"]:
                     raise RuntimeError("Message operation could not be completed; it remains available for retry")
-                outcome = "Message kept" if action == "keep" else "Message deleted"
+                outcome = "Message kept with short-lived retention" if action == "keep_brief" else ("Message kept with normal retention" if action == "keep" else "Message deleted")
             else:
                 raise ValueError("This decision needs manual review; no mailbox action was applied")
-            commit_and_push_data("apply mailbox decision")
+            if row["kind"] != "message_review":
+                commit_and_push_data("apply mailbox decision")
             context.update(applied=True, outcome=outcome)
             with conn:
-                conn.execute("UPDATE decisions SET context=? WHERE id=?", (json.dumps(context), decision_id))
+                conn.execute("UPDATE decisions SET context=?, status='resolved' WHERE id=?", (json.dumps(context), decision_id))
             return outcome
+        except Exception:
+            # Keep authorized message work visible and retryable. Compare the
+            # saved choice so an older failure cannot overwrite a newer action.
+            if row is not None and row['kind'] == 'message_review':
+                current = conn.execute('SELECT context FROM decisions WHERE id=?', (decision_id,)).fetchone()
+                try:
+                    applied = json.loads(current['context'] or '{}').get('applied') if current else False
+                except (ValueError, TypeError, AttributeError):
+                    applied = False
+                if not applied:
+                    with conn:
+                        conn.execute("UPDATE decisions SET status='pending' WHERE id=? AND resolution=?", (decision_id, row['resolution']))
+            raise
         finally:
             conn.close()
 
 
 def main():
     import ai_routing
+    import vendor_suggestions
     conn = tahor_db.get_db()
     try:
         pending_ids = pending_ai_rule_ids(conn)
@@ -481,8 +515,17 @@ def main():
             if isinstance(context, dict) and context.get('rule_clarification'):
                 continue
             resolved_ids.append(row['id'])
+        # An explicit owner choice remains authorized after a temporary IMAP
+        # failure. Retry it without requiring another click; Skip has no action.
+        for row in conn.execute("SELECT id,resolution FROM decisions WHERE kind='message_review' AND status='pending' AND resolution IS NOT NULL"):
+            try:
+                choice = json.loads(row['resolution'])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(choice, dict) and choice.get('action') in ('keep', 'keep_brief', 'trash'):
+                resolved_ids.append(row['id'])
         ids = list(dict.fromkeys(resolved_ids + pending_ids))
-        ai_routing.reconcile_pending('rule', pending_ids)
+        ai_routing.reconcile_pending('rule', pending_ids + vendor_suggestions.pending_work_ids(conn))
     finally:
         conn.close()
     failures = 0
@@ -493,6 +536,7 @@ def main():
         except Exception as exc:
             failures += 1
             print(f"{decision_id}: could not apply ({type(exc).__name__}); work remains pending", file=sys.stderr)
+    failures += vendor_suggestions.suggest_pending(rule_model_call)
     if failures:
         raise SystemExit(1)
 

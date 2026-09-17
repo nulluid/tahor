@@ -518,6 +518,7 @@ CARD_VENDOR_MAPPING = """
 <div class="card">
   <div class="summary">{summary}</div>
   <div class="context">{context}</div>
+  {sample_actions}
   <form method="post" action="/resolve/{id}">
     <div class="fields">
       <select name="bucket">
@@ -525,7 +526,7 @@ CARD_VENDOR_MAPPING = """
         {bucket_options}
       </select>
       <input type="text" name="bucket_custom" placeholder="or new bucket, e.g. Shopping/Retail">
-      <input type="text" name="vendor_name" placeholder="Display name, e.g. Kate Spade">
+      <input type="text" name="vendor_name" value="{suggested_vendor}" placeholder="Display name, e.g. Store name">
     </div>
     <div class="actions">
       <button type="submit" name="action" value="map" class="primary">Save routing rule</button>
@@ -539,13 +540,18 @@ CARD_GENERIC = """
 <div class="card">
   <div class="summary">{summary}</div>
   <div class="context">{context}</div>
+  {details}
+  <p><a href="/message/{id}">View email</a></p>
+  <p class="context">Keep uses normal retention. Keep briefly deletes after the configured read/unread inbox window. Trash deletes permanently. Skip leaves this message protected and pending.</p>
   <form method="post" action="/resolve/{id}">
     <div class="actions">
       <button type="submit" name="action" value="keep" class="primary">Keep</button>
+      <button type="submit" name="action" value="keep_brief">Keep briefly</button>
       <button type="submit" name="action" value="trash" class="trash">Trash</button>
       <button type="submit" name="action" value="skip">Skip for now</button>
     </div>
   </form>
+  <form method="post" action="/message-details/{id}"><button type="submit">Refresh message details</button></form>
 </div>
 """
 
@@ -621,17 +627,56 @@ def decision_context(row):
         return raw
     if not isinstance(context, dict):
         return str(context)
-    if context.get("note"):
+    if context.get("note") and row["kind"] != "message_review":
         return str(context["note"])
     if row["kind"] == "vendor_mapping":
-        return f'Sender: {context.get("sender_label", "unknown")}. Choose where future receipts should be filed.'
+        sender = context.get('sender_email') or context.get('sender_label', 'unknown')
+        parts = [f'Sender: {sender}']
+        if context.get('display_name'):
+            parts.append('Name: ' + str(context['display_name']))
+        samples = context.get('samples') or [context]
+        for sample in samples[-3:] if isinstance(samples, list) else []:
+            if isinstance(sample, dict) and sample.get('subject'):
+                parts.append('Example: ' + str(sample['subject']) + (' · ' + str(sample.get('received_at') or sample.get('date')) if sample.get('received_at') or sample.get('date') else ''))
+        if context.get('suggestion_source') == 'ai':
+            parts.append('Suggested action: ' + str(context.get('suggested_action', 'review')) + '. ' + str(context.get('suggestion_reason', ''))[:500])
+        parts.append('This rule applies to this exact sender address.' if context.get('routing_key') else 'Sender details have not been captured yet. Confirm the merchant before saving a domain-wide rule.')
+        return ' · '.join(parts)
     if row["kind"] == "message_review":
-        return f'In {context.get("mailbox", "your mailbox")}. Protected from retention cleanup until you decide.'
+        parts = [f'From: {context.get("sender") or "Not yet loaded"}']
+        received = context.get('received_at') or context.get('date')
+        if received:
+            try:
+                from email.utils import parsedate_to_datetime
+                try:
+                    instant = datetime.fromisoformat(received.replace('Z', '+00:00'))
+                except ValueError:
+                    instant = parsedate_to_datetime(received)
+                if instant.tzinfo is None:
+                    raise ValueError()
+                instant = instant.astimezone(timezone.utc)
+                seconds = max(0, (datetime.now(timezone.utc) - instant).total_seconds())
+                age = f'{int(seconds // 86400)} days old' if seconds >= 86400 else (f'{int(seconds // 3600)} hours old' if seconds >= 3600 else 'less than an hour old')
+                parts.append(('Received: ' if context.get('received_at') else 'Message date: ') + instant.strftime('%Y-%m-%d %H:%M UTC') + f' ({age})')
+            except (ValueError, TypeError, AttributeError, OverflowError):
+                parts.append('Date unavailable; refresh message details')
+        else:
+            parts.append('Date not yet loaded')
+        parts.append(f'In {context.get("mailbox", "your mailbox")}. Protected from retention cleanup until you decide.')
+        return ' · '.join(parts)
     return str(context.get("outcome") or context.get("explanation") or "Ready for your review.")
 
 
 def known_buckets(db):
+    import config
     buckets = set()
+    try:
+        saved_buckets = config.vendor_buckets()
+    except FileNotFoundError:
+        saved_buckets = {}
+    for value in saved_buckets.values():
+        if isinstance(value, (list, tuple)) and len(value) == 2 and isinstance(value[0], str) and value[0].strip():
+            buckets.add(value[0].strip())
     for row in db.execute("SELECT resolution FROM decisions WHERE resolution IS NOT NULL"):
         try:
             value = json.loads(row["resolution"])
@@ -698,13 +743,42 @@ def index():
             else:
                 cards.append(f'<div class="card"><div class="summary">{html(row["summary"])}</div><form method="post" action="/retry-rule/{row["id"]}"><button type="submit">Retry rule</button></form></div>')
         elif row["kind"] == "vendor_mapping":
+            try:
+                vendor_context = json.loads(row['context'] or '{}')
+            except (ValueError, TypeError):
+                vendor_context = {}
+            if not isinstance(vendor_context, dict):
+                vendor_context = {}
+            suggested_bucket = vendor_context.get('suggested_bucket')
+            vendor_buckets = set(buckets)
+            if isinstance(suggested_bucket, str) and suggested_bucket.strip():
+                vendor_buckets.add(suggested_bucket)
+            vendor_options = ''.join(f'<option value="{html(bucket)}"' + (' selected' if bucket == suggested_bucket else '') + f'>{html(bucket)}</option>' for bucket in sorted(vendor_buckets))
+            sample_actions = []
+            for sample_index, sample in enumerate(vendor_context.get('samples', [])):
+                if not isinstance(sample, dict) or not sample.get('mailbox') or not sample.get('message_id'):
+                    continue
+                sample_actions.append(f'<div><a href="/message/{row["id"]}/{sample_index}">View email: {html(sample.get("subject") or "(No subject)")}</a><form method="post" action="/vendor-message/{row["id"]}/{sample_index}"><button name="action" value="keep_brief">Keep this email briefly</button><button name="action" value="trash" class="trash">Trash this email</button></form></div>')
             cards.append(
                 CARD_VENDOR_MAPPING.format(
-                    id=row["id"], summary=html(row["summary"]), context=html(ctx), bucket_options=bucket_options
+                    id=row["id"], summary=html(row["summary"]), context=html(ctx), bucket_options=vendor_options, suggested_vendor=html(vendor_context.get("suggested_vendor") or vendor_context.get("display_name") or ""), sample_actions="".join(sample_actions)
                 )
             )
         else:
-            cards.append(CARD_GENERIC.format(id=row["id"], summary=html(row["summary"]), context=html(ctx)))
+            try:
+                details_context = json.loads(row['context'] or '{}')
+            except (ValueError, TypeError):
+                details_context = {}
+            snippet = details_context.get('snippet') if isinstance(details_context, dict) else None
+            details = ('<details><summary>Message excerpt</summary><p>' + html(snippet[:500]) + '</p></details>') if isinstance(snippet, str) and snippet.strip() else ''
+            try:
+                saved_action = json.loads(row['resolution'] or '{}').get('action')
+            except (ValueError, TypeError, AttributeError):
+                saved_action = None
+            if saved_action in ('keep', 'keep_brief', 'trash'):
+                label = {'keep': 'Keep', 'keep_brief': 'Keep briefly', 'trash': 'Trash'}[saved_action]
+                ctx += f' Your choice ({label}) is saved and will retry automatically. Skip pauses this retry.'
+            cards.append(CARD_GENERIC.format(id=row["id"], summary=html(row["summary"] or '(No subject)'), context=html(ctx), details=details))
 
     body = "".join(cards) if cards else '<p class="empty">Nothing pending — all caught up.</p>'
 
@@ -978,6 +1052,92 @@ def dismiss_sieve(decision_id):
     return redirect("/")
 
 
+def _review_context(decision_id, sample_index=None):
+    row = get_db().execute('SELECT * FROM decisions WHERE id=?', (decision_id,)).fetchone()
+    if row is None:
+        abort(404)
+    try:
+        context = json.loads(row['context'] or '{}')
+        if sample_index is not None:
+            if row['kind'] != 'vendor_mapping':
+                abort(400)
+            context = context['samples'][sample_index]
+        elif row['kind'] != 'message_review':
+            abort(400)
+        if not isinstance(context, dict) or not context.get('mailbox') or not context.get('message_id'):
+            abort(409, 'Message details have not been captured yet. Let the filing scan refresh this sender.')
+    except (ValueError, TypeError, KeyError, IndexError):
+        abort(409, 'Message details have not been captured yet. Let the filing scan refresh this sender.')
+    return row, context
+
+
+@app.route('/message/<int:decision_id>')
+@app.route('/message/<int:decision_id>/<int:sample_index>')
+@login_required
+def view_message(decision_id, sample_index=None):
+    import message_reviews
+    _, context = _review_context(decision_id, sample_index)
+    try:
+        details, body = message_reviews.read_message(context)
+    except (ValueError, RuntimeError):
+        return 'The message could not be read safely. Return to Pending decisions and refresh its details, or open it in your mail client.', 409
+    except Exception:
+        return 'The mailbox is temporarily unavailable. Your message remains unread and unchanged.', 503
+    return ('<!doctype html><html><head><meta charset="utf-8"><title>Tahor — message</title>' + STYLE_BLOCK + '</head><body><main>' + tahor_header('') +
+            '<p><a href="/">Back to pending decisions</a></p><h1>' + html(details.get('subject') or '(No subject)') +
+            '</h1><p>From: ' + html(details.get('sender', '')) + '</p><p>Received: ' + html(details.get('received_at', '')) +
+            '</p><p>This read-only text view does not mark the email read. Remote images and attachments are not displayed.</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">' + html(body) + '</pre></main></body></html>')
+
+
+@app.route('/vendor-message/<int:decision_id>/<int:sample_index>', methods=['POST'])
+@login_required
+def review_vendor_message(decision_id, sample_index):
+    row, context = _review_context(decision_id, sample_index)
+    action = request.form.get('action')
+    if row['status'] != 'pending' or action not in ('keep_brief', 'trash'):
+        abort(400)
+    # This choice concerns one sample; it never blocks the sender or saves a
+    # filing rule. Reuse the same durable per-message operation path.
+    tahor_db.queue_message_review(context['mailbox'], context['message_id'], context.get('subject', ''), context.get('uid'), context.get('uidvalidity'), metadata=context)
+    db = get_db()
+    review = None
+    for candidate in db.execute("SELECT * FROM decisions WHERE kind='message_review'"):
+        try:
+            identity = json.loads(candidate['context'] or '{}')
+        except (ValueError, TypeError):
+            continue
+        if isinstance(identity, dict) and identity.get('mailbox') == context['mailbox'] and identity.get('message_id') == context['message_id']:
+            review = candidate
+            break
+    if review is None or review['status'] != 'pending':
+        abort(409, 'This message already has a completed decision. Refresh the page.')
+    with db:
+        changed = db.execute("UPDATE decisions SET status='resolved',resolution=?,resolved_at=? WHERE id=? AND status='pending'", (json.dumps({'action': action}), datetime.now(timezone.utc).isoformat(), review['id']))
+    if changed.rowcount != 1:
+        abort(409, 'This message changed. Refresh the page.')
+    try:
+        session['flash'] = apply_decisions.apply_one(review['id'])
+    except Exception:
+        with db:
+            db.execute("UPDATE decisions SET status='pending' WHERE id=?", (review['id'],))
+        session['flash'] = 'Your choice is saved and will retry automatically. No sender-wide rule was added.'
+    return redirect('/')
+
+
+@app.route('/message-details/<int:decision_id>', methods=['POST'])
+@login_required
+def refresh_message_details(decision_id):
+    import message_reviews
+    try:
+        message_reviews.refresh(decision_id, get_db())
+        session['flash'] = 'Message details refreshed without marking it read.'
+    except (ValueError, RuntimeError) as exc:
+        session['flash'] = str(exc)
+    except Exception:
+        session['flash'] = 'Message details could not be loaded. The message remains protected; try again when the mailbox is available.'
+    return redirect('/')
+
+
 @app.route("/resolve/<int:decision_id>", methods=["POST"])
 @login_required
 def resolve(decision_id):
@@ -987,11 +1147,15 @@ def resolve(decision_id):
         abort(404)
     if row['kind'] not in ('vendor_mapping', 'message_review'):
         abort(400, 'Use the review action for this decision type.')
+    if row["status"] != "pending":
+        abort(409, "This decision has already been submitted. Refresh the page.")
     action = request.form.get("action")
-    allowed = ("map", "skip") if row["kind"] == "vendor_mapping" else ("keep", "trash", "skip")
+    allowed = ("map", "skip") if row["kind"] == "vendor_mapping" else ("keep", "keep_brief", "trash", "skip")
     if action not in allowed:
         abort(400, "Unknown decision action.")
     if action == "skip" and row["kind"] != "vendor_mapping":
+        db.execute("UPDATE decisions SET resolution=NULL WHERE id=? AND status='pending'", (decision_id,))
+        db.commit()
         return redirect("/")
     resolution = {"action": action}
     if action == "map":
@@ -1000,8 +1164,10 @@ def resolve(decision_id):
         if not bucket or not vendor or any(c in bucket + vendor for c in '\r\n"\\'):
             abort(400, "Enter a folder and vendor name without quotes or control characters.")
         resolution.update(bucket=bucket, vendor_name=vendor)
-    db.execute("UPDATE decisions SET status='resolved', resolution=?, resolved_at=? WHERE id=?", (json.dumps(resolution), datetime.now(timezone.utc).isoformat(), decision_id))
+    changed = db.execute("UPDATE decisions SET status='resolved', resolution=?, resolved_at=? WHERE id=? AND status='pending' AND context=?", (json.dumps(resolution), datetime.now(timezone.utc).isoformat(), decision_id, row["context"]))
     db.commit()
+    if changed.rowcount != 1:
+        abort(409, "This decision changed. Refresh the page before trying again.")
     try:
         context = json.loads(row['context'] or '{}')
     except (ValueError, TypeError):

@@ -193,18 +193,29 @@ def execute_unsubscribe(candidate, from_addr, app_password, smtp_host="smtp.fast
     return execute(candidate, from_addr, app_password, smtp_host, smtp_port)
 
 
-def queue_message_review(mailbox, message_id, subject, uid=None, uidvalidity=None):
+def queue_message_review(mailbox, message_id, subject, uid=None, uidvalidity=None, metadata=None):
     values = {"mailbox": mailbox, "message_id": message_id}
     if uid and uidvalidity:
         values.update(uid=uid, uidvalidity=uidvalidity)
-    context = json.dumps(values)
+    for key in ('sender', 'date', 'received_at', 'snippet'):
+        value = (metadata or {}).get(key)
+        if isinstance(value, str) and value.strip():
+            values[key] = value.strip()[:500]
+    values['subject'] = subject or ''
     conn = get_db()
     try:
         with conn:
             conn.execute("BEGIN IMMEDIATE")
-            exists = conn.execute("SELECT 1 FROM decisions WHERE kind='message_review' AND context=?", (context,)).fetchone()
-            if exists is None:
-                conn.execute("INSERT INTO decisions(kind,summary,context,status,created_at) VALUES ('message_review',?,?, 'pending',?)", (subject, context, datetime.now(timezone.utc).isoformat()))
+            # Applied rows gain outcome fields and metadata can improve later;
+            # neither changes the identity of the owner's original decision.
+            for row in conn.execute("SELECT id,context FROM decisions WHERE kind='message_review'"):
+                try:
+                    previous = json.loads(row['context'] or '{}')
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(previous, dict) and previous.get('mailbox') == mailbox and previous.get('message_id') == message_id:
+                    return
+            conn.execute("INSERT INTO decisions(kind,summary,context,status,created_at) VALUES ('message_review',?,?, 'pending',?)", (subject or '', json.dumps(values), datetime.now(timezone.utc).isoformat()))
     finally:
         conn.close()
 
@@ -235,20 +246,48 @@ def finish_reply_draft(thread_root):
         conn.close()
 
 
-def queue_vendor_mapping(sender_domain):
-    context = json.dumps({"sender_label": sender_domain})
+def queue_vendor_mapping(sender_domain, metadata=None):
+    metadata = metadata or {}
+    values = {'sender_label': sender_domain}
+    sender = str(metadata.get('sender_email') or '').strip().lower()
+    if sender and sender.count('@') == 1 and not any(c.isspace() or ord(c) < 32 for c in sender):
+        values.update(sender_email=sender, routing_key=sender)
+    for key in ('display_name', 'subject', 'date', 'received_at', 'suggested_bucket', 'suggested_vendor'):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            values[key] = value.strip()[:500]
+    sample = {key: values[key] for key in ('subject', 'date', 'received_at') if values.get(key)}
+    for key in ('mailbox', 'message_id', 'uid', 'uidvalidity'):
+        value = metadata.get(key)
+        if isinstance(value, (str, int)) and str(value):
+            sample[key] = str(value)
+    if sample:
+        values['samples'] = [sample]
     conn = get_db()
     try:
         with conn:
-            conn.execute("BEGIN IMMEDIATE")
-            for row in conn.execute("SELECT context FROM decisions WHERE kind='vendor_mapping'"):
+            conn.execute('BEGIN IMMEDIATE')
+            for row in conn.execute("SELECT id,context,status FROM decisions WHERE kind='vendor_mapping'"):
                 try:
                     previous = json.loads(row['context'] or '{}')
                 except (TypeError, ValueError):
                     continue
-                if isinstance(previous, dict) and previous.get('sender_label') == sender_domain:
+                if not isinstance(previous, dict):
+                    continue
+                same = previous.get('routing_key', previous.get('sender_label')) == values.get('routing_key', sender_domain)
+                upgrade = (sender and row['status'] == 'pending' and not previous.get('routing_key') and previous.get('sender_label') == sender_domain)
+                if same or upgrade:
+                    if row['status'] == 'pending' and metadata:
+                        samples = previous.get('samples', []) if isinstance(previous.get('samples', []), list) else []
+                        if sample and sample not in samples:
+                            samples.append(sample)
+                        previous.update(values)
+                        previous['samples'] = samples[-3:]
+                        label = values.get('display_name') or sender or sender_domain
+                        conn.execute('UPDATE decisions SET context=?, summary=? WHERE id=?', (json.dumps(previous), f'Choose a filing folder for {label}', row['id']))
                     return
-            conn.execute("INSERT INTO decisions(kind,summary,context,status,created_at) VALUES ('vendor_mapping',?,?, 'pending',?)", (f"Choose a filing folder for {sender_domain}", context, datetime.now(timezone.utc).isoformat()))
+            label = values.get('display_name') or sender or sender_domain
+            conn.execute("INSERT INTO decisions(kind,summary,context,status,created_at) VALUES ('vendor_mapping',?,?, 'pending',?)", (f'Choose a filing folder for {label}', json.dumps(values), datetime.now(timezone.utc).isoformat()))
     finally:
         conn.close()
 
@@ -283,5 +322,34 @@ def reply_rule_senders(rule_id):
     conn = get_db()
     try:
         return conn.execute("SELECT sender, COUNT(*) AS messages, MAX(matched_at) AS last_match FROM reply_rule_matches WHERE rule_id=? GROUP BY sender ORDER BY last_match DESC", (rule_id,)).fetchall()
+    finally:
+        conn.close()
+
+
+def relocate_vendor_samples(source, destination, message_ids):
+    """Keep queued sample links accurate after a confirmed IMAP MOVE."""
+    identifiers = set(message_ids)
+    if not identifiers:
+        return
+    conn = get_db()
+    try:
+        with conn:
+            conn.execute('BEGIN IMMEDIATE')
+            for row in conn.execute("SELECT id,context FROM decisions WHERE kind='vendor_mapping' AND status='pending'"):
+                try:
+                    context = json.loads(row['context'] or '{}')
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(context, dict) or not isinstance(context.get('samples'), list):
+                    continue
+                changed = False
+                for sample in context['samples']:
+                    if isinstance(sample, dict) and sample.get('mailbox') == source and sample.get('message_id') in identifiers:
+                        sample['mailbox'] = destination
+                        sample.pop('uid', None)
+                        sample.pop('uidvalidity', None)
+                        changed = True
+                if changed:
+                    conn.execute('UPDATE decisions SET context=? WHERE id=?', (json.dumps(context), row['id']))
     finally:
         conn.close()
