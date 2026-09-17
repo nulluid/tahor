@@ -44,6 +44,10 @@ def main():
                 ('message_review', 'Your membership renewal needs a second look', {'mailbox': 'INBOX', 'message_id': '<demo@example.com>', 'note': 'An ambiguous message stays protected until you decide.'}),
             ]:
                 db.execute("INSERT INTO decisions(kind,summary,context,status,created_at) VALUES (?,?,?,'pending',?)", (kind, summary, json.dumps(context), now))
+            db.execute("INSERT INTO decisions(kind,summary,context,status,resolution,created_at) VALUES (?,?,?,'pending',?,?)", (
+                'free_text_rule', 'Clarify a marketing rule',
+                json.dumps({'rule_clarification': {'question': 'Which exact sender domain should this rule cover? Include the full domain in your instruction; a company name alone is not enough to authorize a domain-wide rule.'}}),
+                json.dumps({'action': 'free_text_rule', 'text': 'Trash marketing from Northstar Outdoors, unsubscribe, and keep purchase receipts.'}), now))
         db.close()
         for domain, name, count in [('papertrail.example', 'Papertrail Weekly', 8), ('northstar.example', 'Northstar Outdoors', 5), ('brightday.example', 'Brightday Offers', 12)]:
             ui.tahor_db.upsert_unsubscribe_candidate(domain, 'news@' + domain, name, 'https://' + domain + '/unsubscribe', None, True)
