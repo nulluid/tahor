@@ -234,6 +234,17 @@ class ReviewActionTests(AppTestCase):
         self.assertFalse(apply.call_args.args[0][0]['delete'])
         self.assertEqual(json.loads(self.row(identifier)['resolution'])['action'], 'keep')
 
+    def test_automatic_vendor_work_does_not_appear_as_manual_questions(self):
+        module = self.module.tahor_db
+        module.queue_vendor_mapping('shop.example', metadata={'sender_email': 'orders@shop.example', 'subject': 'Receipt'})
+        with patch.object(self.module.mailbox_settings, 'is_ai_enabled', return_value=True):
+            page = self.client.get('/').get_data(as_text=True)
+        self.assertIn('Automatic filing is processing 1 sender(s)', page)
+        self.assertNotIn('Save routing rule', page)
+        with patch.object(self.module.mailbox_settings, 'is_ai_enabled', return_value=False):
+            page = self.client.get('/').get_data(as_text=True)
+        self.assertIn('Save routing rule', page)
+
     def test_keep_brief_and_skip_mean_different_things(self):
         identifier = self.decision()
         self.post(f'/resolve/{identifier}', action='skip')

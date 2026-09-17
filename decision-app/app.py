@@ -639,7 +639,7 @@ def decision_context(row):
             if isinstance(sample, dict) and sample.get('subject'):
                 parts.append('Example: ' + str(sample['subject']) + (' · ' + str(sample.get('received_at') or sample.get('date')) if sample.get('received_at') or sample.get('date') else ''))
         if context.get('suggestion_source') == 'ai':
-            parts.append('Suggested action: ' + str(context.get('suggested_action', 'review')) + '. ' + str(context.get('suggestion_reason', ''))[:500])
+            parts.append('Tahor needs your review for this sender. Suggested action: ' + str(context.get('suggested_action', 'review')) + '. ' + str(context.get('suggestion_reason', ''))[:500])
         parts.append('This rule applies to this exact sender address.' if context.get('routing_key') else 'Sender details have not been captured yet. Confirm the merchant before saving a domain-wide rule.')
         return ' · '.join(parts)
     if row["kind"] == "message_review":
@@ -710,6 +710,9 @@ def index():
     buckets = known_buckets(db)
     bucket_options = "".join(f'<option value="{html(b)}">{html(b)}</option>' for b in buckets)
 
+    import vendor_suggestions
+    automatic_ids = set(vendor_suggestions.pending_work_ids(db)) if mailbox_settings.is_ai_enabled('rule') else set()
+    automatic_count = 0
     cards = []
     for row in pending:
         ctx = decision_context(row)
@@ -749,6 +752,9 @@ def index():
                 vendor_context = {}
             if not isinstance(vendor_context, dict):
                 vendor_context = {}
+            if ('vendor:' + str(row['id']) in automatic_ids or vendor_context.get('automatic_vendor_mapping')):
+                automatic_count += 1
+                continue
             suggested_bucket = vendor_context.get('suggested_bucket')
             vendor_buckets = set(buckets)
             if isinstance(suggested_bucket, str) and suggested_bucket.strip():
@@ -780,7 +786,10 @@ def index():
                 ctx += f' Your choice ({label}) is saved and will retry automatically. Skip pauses this retry.'
             cards.append(CARD_GENERIC.format(id=row["id"], summary=html(row["summary"] or '(No subject)'), context=html(ctx), details=details))
 
-    body = "".join(cards) if cards else '<p class="empty">Nothing pending — all caught up.</p>'
+    review_count = len(cards)
+    body = "".join(cards) if cards else '<p class="empty">No decisions need your attention.</p>'
+    if automatic_count:
+        body = (f'<div class="card"><div class="summary">Automatic filing is processing {automatic_count} sender(s)</div><p>Confident routine matches are filed automatically. Only uncertain cases need your review. Temporary failures retry automatically.</p></div>' + body)
 
     sieve_row = db.execute(
         "SELECT * FROM decisions WHERE kind = 'sieve_update' AND status = 'pending' "
@@ -803,7 +812,7 @@ def index():
         style=STYLE_BLOCK,
         header=tahor_header("decisions"),
         worker_summary=html(runtime_status.describe_status()),
-        count=len(pending),
+        count=review_count,
         flash=flash,
         sieve_banner=sieve_banner,
         cards=body,
