@@ -99,6 +99,22 @@ class ReplyFallbackTests(unittest.TestCase):
             self.write()
         self.assertTrue(all(call.args[0]['model'] == 'openai/gpt-5.1' for call in complete.call_args_list))
 
+    def test_grok_writer_and_verifier_require_private_route_without_paid_fallback(self):
+        from unittest.mock import MagicMock
+        response = MagicMock()
+        response.__enter__.return_value.read1.side_effect = [
+            json.dumps({'choices': [{'message': {'content': self.generated}}]}).encode(), b'',
+            json.dumps({'choices': [{'message': {'content': self.approved}}]}).encode(), b'']
+        with patch.object(draft_replies.urllib.request, 'urlopen', return_value=response) as request:
+            draft_replies._draft_reply_body('Update', 'person@example.org', 'The project is complete.', self.rule, key='grok-4.6')
+        self.assertEqual(request.call_count, 2)
+        for call in request.call_args_list:
+            payload = json.loads(call.args[0].data)
+            self.assertEqual(payload['model'], 'x-ai/grok-4.6')
+            self.assertEqual(payload['provider'], {'only': ['xai/zdr'], 'allow_fallbacks': False, 'zdr': True, 'data_collection': 'deny'})
+            self.assertEqual(payload['reasoning'], {'effort': 'low'})
+            self.assertEqual(payload['max_tokens'], 2048)
+
     def test_backup_setting_rejects_paid_models_and_corruption_defaults_free(self):
         for key in ('gpt5', 'gpt5-flex', 'gemini-flash', 'missing'):
             with self.subTest(key=key), self.assertRaises(ValueError):

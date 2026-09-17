@@ -71,7 +71,7 @@ REPLY_MODELS = {
             "reasoning": {"effort": "low"},
             "max_tokens": 2048,
             "response_format": {"type": "json_object"},
-            "provider": {"only": ["xai/zdr"], "allow_fallbacks": False},
+            "provider": {"only": ["xai/zdr"], "allow_fallbacks": False, "zdr": True, "data_collection": "deny"},
         },
     },
     "gemini-flash": {
