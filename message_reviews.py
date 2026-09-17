@@ -18,7 +18,10 @@ def _folder_matches(client, mailbox, identifier, saved=None):
     if client.select(quote_mailbox(mailbox), readonly=True)[0] != 'OK':
         raise RuntimeError('A folder is unavailable; the message search will retry')
     validity = fetch_batch.mailbox_uidvalidity(client)
-    if saved and saved.get('uid') and str(saved.get('uidvalidity')) == validity:
+    shortcut = saved and saved.get('uid') and str(saved.get('uidvalidity')) == validity
+    if any(ord(c) < 32 or ord(c) == 127 for c in identifier) and not shortcut:
+        raise ValueError('A folded message identity requires its verified original UID; no header search was attempted')
+    if shortcut:
         candidates = [str(saved['uid']).encode('ascii')]
     else:
         escaped = identifier.replace('\\', '\\\\').replace('"', '\\"')
@@ -95,14 +98,22 @@ def locate(context, budget_seconds=20, bounded=False):
     authorize a mutation. The caller must persist context on LookupPending.
     """
     mailbox, identifier = context['mailbox'], context['message_id']
-    if not isinstance(identifier, str) or not identifier or any(ord(c) < 32 for c in identifier):
+    if not isinstance(identifier, str) or not identifier:
         raise ValueError('Message identity needs repair before this decision can be applied')
+    opaque = any(ord(c) < 32 or ord(c) == 127 for c in identifier)
+    # Malformed folded Message-ID headers occur in real mail. Treat the entire
+    # header as opaque comparison data only; never interpolate it into SEARCH.
+    if opaque and not all(re.fullmatch(r'[1-9][0-9]{0,9}', str(context.get(key, '')))
+                          and int(context[key]) <= 4294967295 for key in ('uid', 'uidvalidity')):
+        raise ValueError('A folded message identity requires its verified original UID')
     deadline = time.monotonic() + budget_seconds
     client = fetch_batch.connect(timeout=max(.1, min(5, budget_seconds / 2))) if bounded else fetch_batch.connect()
     if bounded:
         client = _DeadlineMailbox(client, deadline)
     try:
         original = _folder_matches(client, mailbox, identifier, context)
+        if opaque and len(original) != 1:
+            raise ValueError('The original message with a folded identity could not be verified; no other copy was selected')
         if not original and context.get('uid'):
             original = _folder_matches(client, mailbox, identifier)
             if any(str(item['uidvalidity']) == str(context.get('uidvalidity'))
