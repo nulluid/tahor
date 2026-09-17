@@ -242,8 +242,9 @@ class UnsubscribeTests(unittest.TestCase):
 
     def test_http_error_cleanup_failure_does_not_mask_definite_rejection(self):
         candidate = dict(unsubscribe_url='https://example.com/u', unsubscribe_mailto=None, one_click=True)
-        rejected = urllib.error.HTTPError(candidate['unsubscribe_url'], 403, 'Forbidden', {}, None)
+        rejected = urllib.error.HTTPError(candidate['unsubscribe_url'], 403, 'Forbidden', {}, io.BytesIO())
         with patch.object(rejected, 'close', side_effect=AttributeError('body absent')) as close, patch.object(unsubscribe, 'open_public', side_effect=rejected):
             with self.assertRaisesRegex(unsubscribe.UnsubscribeError, 'HTTP 403'):
                 unsubscribe.execute(candidate, '', '', '', 465)
         close.assert_called_once()
+        rejected.close()
