@@ -176,6 +176,11 @@ Widespread failures start a five-minute cooldown, followed by a single-message
 paid recovery probe at the next batch. If both tiers fail, messages stay pending
 and the worker retries after five minutes. Your selected speed does not change.
 
+AI-generated rule changes appear as proposals in the decision queue. Review the
+exact sender action or file diff before approving. Domain blocks require the exact
+domain in your instruction; a brand name or single email address cannot authorize
+a whole-domain block. Changed underlying rules invalidate an older proposal.
+
 ### A setup without an added inference bill
 
 Use a vetted free classification route and choose the optional free reply writer

@@ -2,6 +2,8 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "decision-app"))
 import unittest
 from unittest.mock import patch, MagicMock
 import draft_replies

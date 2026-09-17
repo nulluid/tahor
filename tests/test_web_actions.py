@@ -125,6 +125,13 @@ class WebActionTests(AppTestCase):
         db.close()
         with patch.object(self.module.apply_decisions, 'rule_model_call', return_value={'kind': 'file_edit', 'prompt_txt': 'Keep receipts.', 'explanation': 'Keep receipts'}):
             self.assertEqual(self.post(f'/retry-rule/{id}').status_code, 302)
+        self.assertIn('Approve these changes', self.client.get('/').get_data(as_text=True))
+        db = self.module.tahor_db.get_db()
+        token = json.loads(db.execute('SELECT context FROM decisions WHERE id=?', (id,)).fetchone()['context'])['rule_proposal']['token']
+        db.close()
+        with patch.object(self.module.apply_decisions, 'rule_model_call') as model:
+            self.post(f'/review-rule/{id}', action='approve', proposal=token)
+            model.assert_not_called()
         self.assertEqual((self.root / 'prompt.txt').read_text(), 'Keep receipts.')
         self.assertNotIn('Retry rule', self.client.get('/').get_data(as_text=True))
 

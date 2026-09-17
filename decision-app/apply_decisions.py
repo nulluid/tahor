@@ -12,7 +12,8 @@ Read resolved rows out of decisions.db and act on them.
     "unsubscribe me from Y") becomes a real sender_rule, enforced
     immediately by process_batch.py -- no file edit needed. A
     classification-judgment instruction becomes a vendor_buckets.json/
-    prompt.txt edit, applied and pushed the same as above. If it says the
+    prompt.txt proposal. All model-generated proposals require explicit review
+    before application; sender targets must match an explicit domain. If it says the
     change touches actual script logic, flag it instead -- changing code
     is a deliberate, reviewed step, not something this script does alone.
 
@@ -26,6 +27,9 @@ a configured push remote (SSH deploy key or credential helper) if you
 want the commit/push step to work.
 """
 import json
+import hashlib
+import difflib
+import re
 import os
 import subprocess
 import sys
@@ -177,6 +181,41 @@ def apply_sender_rule(sender_rule):
     return outcome
 
 
+def rule_base_hash(buckets, prompt, instruction):
+    return hashlib.sha256(json.dumps([buckets, prompt, instruction]).encode()).hexdigest()
+
+
+def validate_explicit_sender_target(instruction, sender_rule):
+    domain = sender_rule.get('domain', '').strip().lower()
+    generate_sieve.domain_test(domain)
+    # Email addresses authorize a sender, not every address at its domain.
+    without_addresses = re.sub(r'[\w.+-]+@[\w.-]+', '', instruction)
+    explicit = {d.lower() for d in re.findall(r'(?<![\w@.-])(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(?![\w-]|\.[a-zA-Z0-9])', without_addresses)}
+    if domain not in explicit:
+        raise ValueError('No exact domain authorization: include the full domain explicitly; email-only or brand-only instructions cannot create domain-wide blocks')
+    if sender_rule.get('rule') not in tahor_db.SENDER_RULES:
+        raise ValueError('Model returned an invalid sender action')
+
+
+def require_rule_approval(row, resolution, context, result, buckets, prompt, instruction):
+    base_hash = context.get('rule_proposal', {}).get('base_hash') or rule_base_hash(buckets, prompt, instruction)
+    token = hashlib.sha256(json.dumps([base_hash, result], sort_keys=True).encode()).hexdigest()
+    if resolution.get('approved_proposal') == token and context.get('rule_proposal', {}).get('token') == token:
+        return
+    diffs = []
+    for filename, before, after in [('vendor_buckets.json', buckets, result.get('vendor_buckets_json')), ('prompt.txt', prompt, result.get('prompt_txt'))]:
+        if after is not None:
+            diffs.append(''.join(difflib.unified_diff(before.splitlines(True), after.splitlines(True), fromfile=filename+' (current)', tofile=filename+' (proposed)')))
+    context['rule_proposal'] = {'token': token, 'base_hash': base_hash, 'result': result, 'base_files': {'buckets': buckets, 'prompt': prompt}, 'diff': '\n'.join(diffs)}
+    conn = tahor_db.get_db()
+    try:
+        with conn:
+            conn.execute("UPDATE decisions SET context=?, status='pending' WHERE id=?", (json.dumps(context), row['id']))
+    finally:
+        conn.close()
+    raise ValueError('Proposal ready: review the exact changes and approve them on the decisions page')
+
+
 def apply_free_text_rule(row, resolution):
     text = resolution.get("text", "").strip()
     if not text:
@@ -189,10 +228,34 @@ def apply_free_text_rule(row, resolution):
         f"Current prompt.txt:\n{current_prompt}\n\n"
         f"Instruction: {text}"
     )
-    result = rule_model_call(user_content)
+    try:
+        context = json.loads(row["context"] or "{}")
+    except (ValueError, TypeError):
+        context = {}
+    if not isinstance(context, dict):
+        context = {}
+    proposal = context.get('rule_proposal')
+    if proposal:
+        result = proposal['result']
+        if proposal.get('base_hash') != rule_base_hash(current_buckets, current_prompt, text):
+            original = proposal.get('base_files', {})
+            approved = resolution.get('approved_proposal') == proposal.get('token')
+            target_buckets = result.get('vendor_buckets_json')
+            if target_buckets is not None:
+                target_buckets = json.dumps(json.loads(target_buckets), indent=2) + '\n'
+            retry_safe = (approved
+                and proposal.get('base_hash') == rule_base_hash(original.get('buckets'), original.get('prompt'), text)
+                and current_buckets in (original.get('buckets'), target_buckets)
+                and current_prompt in (original.get('prompt'), result.get('prompt_txt')))
+            if not retry_safe:
+                raise ValueError('Rules changed since this preview; reject it and submit a fresh instruction')
+    else:
+        result = rule_model_call(user_content)
     kind = result.get("kind")
 
     if kind == "sender_rule" and result.get("sender_rule"):
+        validate_explicit_sender_target(text, result["sender_rule"])
+        require_rule_approval(row, resolution, context, result, current_buckets, current_prompt, text)
         return apply_sender_rule(result["sender_rule"])
 
     if kind == "needs_code_change" or result.get("needs_code_change"):
@@ -215,6 +278,7 @@ def apply_free_text_rule(row, resolution):
             raise ValueError("Model returned invalid vendor mappings")
     if new_prompt is not None and (not isinstance(new_prompt, str) or not new_prompt.strip()):
         raise ValueError("Model returned an invalid prompt")
+    require_rule_approval(row, resolution, context, result, current_buckets, current_prompt, text)
     if new_buckets is not None:
         atomic_write(VENDOR_BUCKETS_PATH, json.dumps(parsed_buckets, indent=2) + "\n")
         changed.append("vendor_buckets.json")

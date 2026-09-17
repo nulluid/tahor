@@ -673,7 +673,16 @@ def index():
     for row in pending:
         ctx = decision_context(row)
         if row["kind"] == "free_text_rule":
-            cards.append(f'<div class="card"><div class="summary">{html(row["summary"])}</div><form method="post" action="/retry-rule/{row["id"]}"><button type="submit">Retry rule</button></form></div>')
+            try:
+                proposal = json.loads(row['context'] or '{}').get('rule_proposal')
+            except (ValueError, TypeError, AttributeError):
+                proposal = None
+            if proposal:
+                result = proposal['result']
+                details = proposal['diff'] or json.dumps(result.get('sender_rule'), indent=2)
+                cards.append(f'<div class="card"><div class="summary">{html(row["summary"])}</div><p>Review this model proposal before changing your rules.</p><pre style="white-space:pre-wrap">{html(details)}</pre><form method="post" action="/review-rule/{row["id"]}"><input type="hidden" name="proposal" value="{html(proposal["token"])}"><button name="action" value="approve">Approve these changes</button><button name="action" value="reject">Reject proposal</button></form></div>')
+            else:
+                cards.append(f'<div class="card"><div class="summary">{html(row["summary"])}</div><form method="post" action="/retry-rule/{row["id"]}"><button type="submit">Retry rule</button></form></div>')
         elif row["kind"] == "vendor_mapping":
             cards.append(
                 CARD_VENDOR_MAPPING.format(
@@ -771,6 +780,9 @@ def settings_page():
         elif "classify_mode" in request.form:
             mode = request.form.get("classify_mode", "")
             if mode in mailbox_settings.MODES:
+                import classify
+                if mode in ("free", "auto") and not classify.free_classification_enabled():
+                    abort(400, "Free classification is disabled by the server configuration.")
                 mailbox_settings.set_classify_mode(mode)
             else:
                 abort(400, "Choose Free, Paid, or Auto.")
@@ -796,12 +808,14 @@ def settings_page():
         return redirect("/settings")
 
     current_mode = mailbox_settings.get_classify_mode()
+    import classify
+    free_available = classify.free_classification_enabled()
     mode_cards = "".join(
         MODE_OPTION.format(
             field="classify_mode",
             value=m,
             label=MODE_LABELS[m],
-            description=MODE_DESCRIPTIONS[m],
+            description=MODE_DESCRIPTIONS[m] + (" Free classification is disabled by the server configuration." if m in ("free", "auto") and not free_available else ""),
             active_class=" active" if m == current_mode else "",
             checked=" checked" if m == current_mode else "",
             active_badge='<span class="count">current</span>' if m == current_mode else "",
@@ -1043,6 +1057,47 @@ def add_rule():
                 "Use Retry on the decisions page."
             )
     return redirect("/")
+
+
+@app.route("/review-rule/<int:decision_id>", methods=["POST"])
+@login_required
+def review_rule(decision_id):
+    db = get_db()
+    row = db.execute("SELECT * FROM decisions WHERE id=? AND kind='free_text_rule'", (decision_id,)).fetchone()
+    if row is None:
+        abort(404)
+    try:
+        context = json.loads(row['context'])
+        proposal = context['rule_proposal']
+        resolution = json.loads(row['resolution'])
+    except (ValueError, TypeError, KeyError):
+        abort(400, 'No proposal is ready for review.')
+    if request.form.get('proposal') != proposal['token']:
+        abort(409, 'This proposal changed; refresh before approving.')
+    if context.get('applied'):
+        session['flash'] = context.get('outcome', 'Already handled')
+        return redirect('/')
+    action = request.form.get('action')
+    if action == 'reject':
+        if resolution.get('approved_proposal'):
+            abort(409, 'This proposal was approved; retry completion before making another change.')
+        context.update(applied=True, outcome='Proposal rejected; no rules changed')
+        db.execute("UPDATE decisions SET context=?, status='resolved' WHERE id=?", (json.dumps(context), decision_id))
+        db.commit()
+        session['flash'] = 'Proposal rejected; no rules changed.'
+    elif action == 'approve':
+        resolution['approved_proposal'] = proposal['token']
+        db.execute('UPDATE decisions SET resolution=? WHERE id=?', (json.dumps(resolution), decision_id))
+        db.commit()
+        try:
+            session['flash'] = apply_decisions.apply_one(decision_id)
+            db.execute("UPDATE decisions SET status='resolved' WHERE id=?", (decision_id,))
+            db.commit()
+        except Exception as exc:
+            session['flash'] = f'Changes were not completed: {exc}. The proposal remains pending.'
+    else:
+        abort(400, 'Choose Approve or Reject.')
+    return redirect('/')
 
 
 @app.route("/retry-rule/<int:decision_id>", methods=["POST"])

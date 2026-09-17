@@ -367,3 +367,18 @@ Tahor is designed around a single mailbox owner and tested primarily against
 Fastmail. It does not support arbitrary IMAP servers without checking their
 capabilities and folder conventions first. Tests cover failure paths and expected
 behavior; they are not a guarantee that a mailbox or provider can never fail.
+
+### Reviewing generated rules
+
+AI rule generation creates a pending proposal rather than immediately changing
+mail policy. The decision queue shows escaped file diffs or the exact sender action.
+Approval uses the saved proposal without generating another answer. A hash binds
+approval to its instruction, proposed result, and original files. Changes made
+since preview require a fresh proposal; retries of an approved partial write accept
+only the original or exactly approved file content. Repeated approval does not
+reapply a completed decision. Rejection leaves unapplied rules unchanged.
+
+Generated sender blocks must match a domain written explicitly in the instruction.
+Brand inference, parent-domain broadening, and treating a single email address as
+a whole-domain authorization are rejected. Manually selected sender controls and
+vendor mappings retain their existing behavior.

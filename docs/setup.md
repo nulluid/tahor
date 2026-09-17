@@ -235,7 +235,9 @@ health alerts and a daily summary, enable the separate
   in Settings; reply-model billing is separate from classification mode.
 - **Free-text rules:** first select an AI rule model in Settings, then submit an
   instruction from the decision queue. A model can
-  update routing or classification rules; failures stay visible for retry.
+  propose routing or classification changes. Review the displayed diff or sender
+  action and explicitly approve it before application; failures stay visible for retry.
+  Domain blocks require an explicit full domain, not only a brand or email address.
   Instructions that require new code stay pending and are recorded for manual
   implementation; submitting one does not change application code.
 - **Sender blocks:** apply in the worker immediately. For earlier provider-side
