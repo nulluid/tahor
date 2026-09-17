@@ -27,14 +27,16 @@ def main():
         settings = (temporary / 'pages/settings.html').read_text()
         focus_style = '''<style>
 main > section:not(:has(#reply-rules)), main > h1, main > form,
-main > p:not(:first-child), section:has(#reply-rules) > form:last-child,
+main > p:not(:first-child), section:has(#reply-rules) > form,
+section:has(#reply-rules) > h3, section:has(#reply-rules) > p:not(:first-of-type),
 section:has(#reply-rules) > details + p { display: none; }
 section:has(#reply-rules) { margin-top: 0; padding-top: 0; border-top: 0; }
 </style>'''
         (temporary / 'pages/reply-rules.html').write_text(settings.replace('</head>', focus_style+'</head>'))
+        settings_height = 3300 + 140 * settings.count('name="reply_model"')
         output = ROOT / 'docs/screenshots'
         output.mkdir(parents=True, exist_ok=True)
-        for page, filename, height in [('index', 'decisions', 1080), ('unsubscribe', 'subscriptions', 1080), ('settings', 'settings', 3700), ('reply-rules', 'reply-rules', 1000), ('status', 'status', 850)]:
+        for page, filename, height in [('index', 'decisions', 1080), ('unsubscribe', 'subscriptions', 1080), ('settings', 'settings', settings_height), ('reply-rules', 'reply-rules', 1000), ('status', 'status', 850)]:
             shot = temporary / (filename + '.png')
             process = subprocess.Popen([args.chrome, '--headless', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--hide-scrollbars', '--user-data-dir=' + str(temporary / ('profile-' + filename)), '--window-size=1120,' + str(height), '--screenshot=' + str(shot), '--virtual-time-budget=3000', (temporary / 'pages' / (page + '.html')).as_uri()], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             try:

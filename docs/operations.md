@@ -79,10 +79,43 @@ and the fresh-install writing default remains free.
 
 The verifier also identifies personal questions or requests needing the owner's
 answer. Those messages receive `needs-attention` before the draft is saved, and
-that decision persists across append retries. Routine newsletters do not receive
+that decision persists across append retries. A draft containing an owner-fillable
+`[please add ...]` placeholder also receives that flag even if the model misses
+the need for attention. Routine newsletters do not receive
 this extra hold, so ordinary inbox timing still applies. Cached text prepared
 before verification was introduced is regenerated and checked before any new
 append; an already existing draft is reconciled without being rewritten.
+
+### Free backup and automatic recovery
+
+Choose the **Free backup for reply writing** model in Settings. Only explicitly
+free OpenRouter variants are accepted as backups; a paid model or a provider's
+promotional quota cannot be selected here. Choose **Disabled — keep replies
+pending** (`reply_backup_model: "none"`) to wait for primary recovery without
+calling any backup. Writer and verifier use the same
+backend for a given attempt. Defaults keep both primary and backup free.
+
+Review provider data-handling terms before sending mail. The
+[Nemotron free endpoint](https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free)
+warns against confidential or personal information and may log requests for
+provider improvement. A zero-price endpoint is not necessarily appropriate for
+private correspondence; disable fallback when its terms do not fit your data.
+
+Credit, authentication, quota, connection, and backend-response failures record
+a five-minute cooldown in the private `reply_backend_state.json` next to the
+database. While the primary is cooling down, new drafting work tries the free
+backup. After cooldown, the next queued request probes the primary again; a
+successful verified reply clears its hold. A failing free backup is also given
+a bounded cooldown. Restarts preserve these holds. There is no fallback to a
+different paid model, including when a requested Flex tier is unavailable.
+
+Content rejection is distinct from a provider outage: unsupported facts or a
+failed instruction check never become a successful draft just because fallback
+is available. If both providers fail, the source remains available for retry and
+an empty `preparing` journal entry makes the pending work visible to daily
+summaries. The journal is created before model requests; text is stored only after
+verification. New drafts still require the source to remain within normal inbox
+age limits.
 
 ## Failure and recovery
 

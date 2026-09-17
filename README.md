@@ -116,12 +116,20 @@ milestone, while answering personal questions according to their actual content.
 Expand the rule’s matched-sender list to opt individual senders out.
 
 Tahor saves a threaded reply in your mailbox’s **Drafts** folder and leaves the
-original unread. A separate check with your selected writing model verifies the
+original unread. A separate check with your selected writing model reviews the
 reply against the source and your instructions; a rejected reply is revised once
-and checked again. Unverified text is not added to Drafts. Personal questions
+and checked again. Rejected text is not added to Drafts. Model checks can still
+miss mistakes; review every reply before sending. Personal questions
 that need your answer also receive an attention flag. Edit and send it in your
 usual email client; there is no separate
-web draft editor and **Tahor never sends these replies automatically**. A reply
+web draft editor and **Tahor never sends these replies automatically**. Select a
+free backup writer in Settings: provider or credit failures switch both writing
+and verification to that free model, then retry your primary on later work after
+a five-minute cooldown. A failed quality check still leaves the reply pending. Choose
+**Disabled — keep replies pending** if no free provider has suitable data terms.
+The [Nemotron free endpoint](https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free)
+warns against confidential or personal data and may log requests for provider
+improvement; free pricing is not a privacy guarantee. A reply
 address must pass syntax and DNS checks. Those checks cannot prove that the
 recipient’s mailbox accepts delivery.
 
@@ -260,7 +268,8 @@ small deployment: one mailbox owner and one host, with SQLite and local file loc
   grants it full account-login authority; Fastmail's unpublished interface can change.
 - **Hosted models receive mail content.** Classification sends sender, subject,
   date, and a body excerpt (up to 6,000 characters with natural-language reply
-  rules). Reply drafting sends a longer excerpt and your writing instructions. Rule
+  rules). Reply drafting and verification send a longer excerpt, your mailbox identity,
+  signature, and writing instructions. Rule
   drafting sends the instruction and current routing/prompt configuration.
 
 Retention defaults are seven days for transient mail and three years for standard
