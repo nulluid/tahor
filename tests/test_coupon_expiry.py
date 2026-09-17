@@ -101,9 +101,17 @@ class CouponTests(unittest.TestCase):
             envelopes = [dict(message_id='coupon', uid='10', subject='An offer', from_email='offers@example.com', internaldate='01-Sep-2026 00:00:00 +0000')]
             for suffix, rows in [('in', inputs), ('out', outputs), ('env', envelopes)]:
                 Path(prefix + '_' + suffix + '.json').write_text(json.dumps(rows))
-            with patch.object(sys, 'argv', ['process_batch.py', prefix, 'INBOX']), patch.object(coupon, 'policies', return_value=self.POLICY), patch.object(process_batch.reply_rules, 'get_rules', return_value=[]), patch.object(process_batch.tahor_db, 'get_sender_rule', return_value=None), patch.object(process_batch.tahor_db, 'has_sender_sample', return_value=False):
+            with patch.object(sys, 'argv', ['process_batch.py', prefix, 'INBOX']), patch.object(coupon, 'policies', return_value=self.POLICY), patch.object(process_batch.reply_rules, 'get_rules', return_value=[]), patch.object(process_batch.tahor_db, 'get_sender_rule', return_value=None) as sender_rule, patch.object(process_batch.tahor_db, 'get_unsubscribe_candidate', return_value=None) as unsubscribe, patch.object(process_batch.tahor_db, 'has_sender_sample', return_value=False):
                 process_batch.main()
-            operations = json.loads(Path(prefix + '_ops.json').read_text())
+                normal_ops = json.loads(Path(prefix + '_ops.json').read_text())
+                for block_rule, status in [('block_all', None), ('block_marketing', None), (None, {'status': 'unsubscribed'})]:
+                    sender_rule.return_value = block_rule
+                    unsubscribe.return_value = status
+                    process_batch.main()
+                    blocked_ops = json.loads(Path(prefix + '_ops.json').read_text())
+                    self.assertTrue(blocked_ops[0].get('delete'))
+                    self.assertNotIn('retention-coupon', blocked_ops[0]['add'])
+            operations = normal_ops
             self.assertEqual(len(operations), 1)
             self.assertFalse(operations[0].get('delete'))
             self.assertTrue({'retention-standard', 'retention-coupon', 'coupon-expiry-20260930'} <= set(operations[0]['add']))
@@ -117,3 +125,25 @@ class CouponTests(unittest.TestCase):
         self.assertIn(coupon.KEYWORD, args)
         for term in ('UNSEEN', 'BEFORE', '10-Sep-2026', 'category-marketing', 'needs-attention', 'reply-protected', 'UNFLAGGED'):
             self.assertIn(term, args)
+
+    def test_global_opt_in_requires_coupon_language_and_derives_safe_folder(self):
+        policies = {'*': {'folder': 'Shopping/Coupons'}}
+        policy = coupon.policy_for('Offers <news@example.org>', policies)
+        self.assertEqual(policy['folder'], 'Shopping/Coupons/example.org')
+        self.assertIsNone(coupon.policy_for('news@../Trash', policies))
+        for source in ('Here is your coupon.', 'Use promo code SAVE20', 'Your voucher expires 2026-12-31'):
+            result = dict(action='trash', category='marketing', retention='transient')
+            coupon.protect_result(result, 'news@example.org', source, policies)
+            self.assertEqual(result['action'], 'keep')
+            self.assertIn('retention-coupon', result['coupon_keywords'])
+        for source in ('Our weekly newsletter', 'Sale ends 2026-12-31. Everything 20% off.'):
+            result = dict(action='trash', category='marketing', retention='transient')
+            original = dict(result)
+            coupon.protect_result(result, 'news@example.org', source, policies)
+            self.assertEqual(result, original)
+        configured = dict(policies, **self.POLICY)
+        self.assertEqual(coupon.policy_for('offers@example.com', configured)['folder'], 'Shopping/Coupons/Example')
+        self.assertNotIn('detect_coupon', coupon.policy_for('offers@example.com', configured))
+        result = dict(action='trash', category='marketing', retention='transient')
+        coupon.protect_result(result, 'news@example.org', 'Coupon expires 2026-09-30. ' + 'x' * 131072, policies)
+        self.assertEqual(result['coupon_keywords'], ['retention-coupon'])

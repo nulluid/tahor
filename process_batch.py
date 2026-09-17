@@ -70,8 +70,10 @@ def main():
             r["action"] = "trash"
             r["reason"] = f"sender rule: {rule}"
 
-        if rule not in ('block_all', 'block_marketing'):
-            coupon_expiry.protect_result(r, rec.get('from'), rec.get('coupon_source', ''), coupon_policies)
+        if rule not in ('block_all', 'block_marketing') and coupon_expiry.policy_for(rec.get('from'), coupon_policies) and r.get('category') == 'marketing':
+            unsubscribe = tahor_db.get_unsubscribe_candidate(domain)
+            if not unsubscribe or unsubscribe['status'] != 'unsubscribed':
+                coupon_expiry.protect_result(r, rec.get('from'), rec.get('coupon_source', ''), coupon_policies)
 
         matches = [key for key in r.get('reply_rule_matches', []) if key in active_reply_rules]
         uncertain = [key for key in r.get('reply_rule_uncertain', []) if key in active_reply_rules]

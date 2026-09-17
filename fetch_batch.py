@@ -200,8 +200,8 @@ def main():
             import coupon_expiry
             coupon_source = {}
             if coupon_expiry.policy_for(from_email):
-                full_source = extract_body_text(body_bytes)
-                coupon_source['coupon_source'] = full_source if len(full_source) <= 131072 else ''
+                full_source = subject + '\n' + extract_body_text(body_bytes)
+                coupon_source['coupon_source'] = full_source[:131073]
 
             in_records.append(
                 {"id": message_id, "subject": subject, "from": from_email, "date": date, "snippet": snippet, **coupon_source}

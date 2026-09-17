@@ -36,8 +36,7 @@ def policies():
     if not isinstance(value, dict):
         raise ValueError('Invalid coupon policy')
     for sender, policy in value.items():
-        if (not isinstance(sender, str) or sender != sender.lower() or not re.fullmatch(r'[a-z0-9_.+@-]+', sender)
-                or '.' not in sender or not isinstance(policy, dict) or set(policy) - {'folder', 'date_order'}
+        if (not isinstance(sender, str) or sender != sender.lower() or (sender != '*' and (not re.fullmatch(r'[a-z0-9_.+@-]+', sender) or '.' not in sender)) or not isinstance(policy, dict) or set(policy) - {'folder', 'date_order'}
                 or policy.get('date_order') not in (None, 'mdy', 'dmy')):
             raise ValueError('Invalid coupon policy')
         folder = policy.get('folder')
@@ -51,7 +50,22 @@ def policies():
 def policy_for(sender, configured=None):
     configured = policies() if configured is None else configured
     address = parseaddr(sender or '')[1].lower()
-    return configured.get(address) or configured.get(address.rsplit('@', 1)[-1]) if '@' in address else None
+    if '@' not in address:
+        return None
+    domain = address.rsplit('@', 1)[-1]
+    if not re.fullmatch(r'[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?', domain) or '..' in domain:
+        return None
+    explicit = configured.get(address) or configured.get(domain)
+    if explicit:
+        return explicit
+    generic = configured.get('*')
+    return dict(generic, folder=generic['folder'] + '/' + domain, detect_coupon=True) if generic else None
+
+
+def is_coupon(source):
+    # A sale or newsletter alone is not a coupon. No model-provided date is trusted.
+    return isinstance(source, str) and bool(re.search(
+        r'\b(?:coupons?|vouchers?|(?:promo(?:tional)?|discount|coupon)\s+codes?)\b', source[:131073], re.I))
 
 
 def parse_date(value, order=None):
@@ -138,7 +152,8 @@ def sweep(conn, path, dry_run, delete_uids, now=None):
 def protect_result(result, sender, source, configured):
     """Opted-in marketing is retained without weakening review or forever flags."""
     policy = policy_for(sender, configured)
-    if not policy or result.get('category') != 'marketing' or result.get('action') == 'error':
+    if (not policy or result.get('category') != 'marketing' or result.get('action') == 'error'
+            or (policy.get('detect_coupon') and not is_coupon(source))):
         return
     if result.get('action') == 'trash':
         result['action'] = 'keep'
