@@ -23,6 +23,20 @@ class SubscriptionSchedulingTests(unittest.TestCase):
         with patch.object(subscription_suggestions, 'run_pending_jobs', return_value=1):
             self.assertEqual(subscription_suggestions.main(), 1)
 
+    def test_standalone_action_entry_can_refresh_the_trusted_sieve_module(self):
+        import sys
+        import importlib.util
+        expected = Path(subscription_bulk.__file__).resolve().parent / 'decision-app' / 'generate_sieve.py'
+        original = list(sys.path)
+        self.addCleanup(lambda: sys.path.__setitem__(slice(None), original))
+        sys.path[:] = [entry for entry in sys.path if not entry.endswith('/decision-app')]
+        def process(**kwargs):
+            self.assertEqual(kwargs, {'limit': 10})
+            self.assertEqual(Path(importlib.util.find_spec('generate_sieve').origin).resolve(), expected)
+            return {'processed': 0}
+        with patch.object(subscription_bulk, 'run_pending', side_effect=process):
+            subscription_bulk.main()
+
     def test_dispatch_loads_private_environment_and_chooses_only_requested_queue(self):
         for command, script in [('subscriptions', 'subscription_suggestions.py'), ('subscription-actions', 'subscription_bulk.py')]:
             with patch.object(run.sys, 'argv', ['run.py', '--env', '/private/config.env', command]), patch.object(run, 'load_environment') as load, patch('tahor_db.init_db'), patch.object(run.os, 'execv') as execute:

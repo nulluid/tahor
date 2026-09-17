@@ -167,6 +167,10 @@ def active_candidate(candidate_id):
 
 def main():
     """Process one bounded pass independently of slower rule/filing work."""
+    # The standalone worker needs the same trusted Sieve module as the web app.
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent / 'decision-app'))
     run_pending(limit=10)
     return 0
 
