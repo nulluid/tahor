@@ -94,11 +94,16 @@ If approved, issues must be empty. Do not quote private source passages in your 
 
 
 def reply_completion(backend, api_key, payload):
-    request = urllib.request.Request(backend['url'], data=json.dumps(payload).encode(),
+    request_payload = dict(payload)
+    request_payload.update(backend.get('request_options', {}))
+    request = urllib.request.Request(backend['url'], data=json.dumps(request_payload).encode(),
               headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {api_key}'})
     deadline = time.monotonic() + MODEL_RESPONSE_SECONDS
     with urllib.request.urlopen(request, timeout=60) as response:
         result = json.loads(read_bounded(response, deadline).decode())
+    expected_tier = backend.get('expected_service_tier')
+    if expected_tier is not None and result.get('service_tier') != expected_tier:
+        raise ValueError('Reply provider did not confirm the required service tier')
     content = result['choices'][0]['message']['content']
     if not isinstance(content, str):
         raise ValueError('Reply model response is invalid')
@@ -291,7 +296,7 @@ def _process_new_mail(conn):
             if not source_still_eligible(conn, uid, message_id, current):
                 continue
             location = location or draft_exists(draft_id)
-            if verification.get('needs_attention'):
+            if verification.get('needs_attention') and location != 'Sent':
                 store_checked(conn, uid, '+FLAGS.SILENT', '(needs-attention)')
             if not location:
                 append_draft(conn, message_id, references, recipient, subject, body, draft_id)

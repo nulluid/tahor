@@ -209,6 +209,43 @@ class DraftTests(unittest.TestCase):
             model.assert_called_once()
         self.assertEqual(draft_replies.tahor_db.get_reply_draft_for_thread('<one@example.com>')['draft_body'], 'Verified replacement.')
 
+    def test_flex_options_apply_to_both_generation_and_verification(self):
+        from unittest.mock import MagicMock
+        response = MagicMock()
+        generated = {'sentences': ['Thank you for the update.']}
+        verdict = {'approved': True, 'issues': [], 'needs_attention': False}
+        response.__enter__.return_value.read1.side_effect = [
+            json.dumps({'service_tier': 'flex', 'choices': [{'message': {'content': json.dumps(value)}}]}).encode()
+            if index % 2 == 0 else b'' for index, value in enumerate([generated, None, verdict, None])]
+        with patch.dict(draft_replies.os.environ, {'OPENROUTER_API_KEY': 'test-only'}), patch.object(draft_replies.mailbox_settings, 'get_reply_model', return_value='gpt5-flex'), patch.object(draft_replies.urllib.request, 'urlopen', return_value=response) as request:
+            body = draft_replies.draft_reply_body('Update', 'person@example.com', 'A community update.', self.rule)
+        self.assertIn('Thank you', body)
+        self.assertEqual(request.call_count, 2)
+        for call in request.call_args_list:
+            payload = json.loads(call.args[0].data)
+            self.assertEqual(payload['service_tier'], 'flex')
+            self.assertEqual(payload['provider'], {'only': ['openai/flex'], 'allow_fallbacks': False})
+            self.assertEqual(payload['reasoning'], {'effort': 'none'})
+            self.assertEqual(payload['response_format'], {'type': 'json_object'})
+
+    def test_flex_rejects_missing_or_default_actual_tier_including_verification(self):
+        from unittest.mock import MagicMock
+        for actual_tier, verify_stage in ((None, False), ('default', False), (None, True), ('default', True)):
+            with self.subTest(actual_tier=actual_tier, verify_stage=verify_stage):
+                generated = {'sentences': ['Thank you.']}
+                verdict = {'approved': True, 'issues': [], 'needs_attention': False}
+                responses = []
+                if verify_stage:
+                    responses += [json.dumps({'service_tier': 'flex', 'choices': [{'message': {'content': json.dumps(generated)}}]}).encode(), b'']
+                bad = {'choices': [{'message': {'content': json.dumps(verdict if verify_stage else generated)}}]}
+                if actual_tier is not None:
+                    bad['service_tier'] = actual_tier
+                responses += [json.dumps(bad).encode(), b'']
+                response = MagicMock()
+                response.__enter__.return_value.read1.side_effect = responses
+                with patch.dict(draft_replies.os.environ, {'OPENROUTER_API_KEY': 'test-only'}), patch.object(draft_replies.mailbox_settings, 'get_reply_model', return_value='gpt5-flex'), patch.object(draft_replies.urllib.request, 'urlopen', return_value=response), self.assertRaisesRegex(ValueError, 'required service tier'):
+                    draft_replies.draft_reply_body('Update', 'person@example.com', 'An update.', self.rule)
+
     def test_read_and_unread_windows_use_server_delivery_date(self):
         now = datetime(2026, 9, 16, 12, tzinfo=timezone.utc)
         for age, seen, expected in ((2, True, True), (4, True, False), (6, False, True), (8, False, False)):
@@ -226,6 +263,15 @@ class DraftTests(unittest.TestCase):
         self.conn.append.assert_not_called()
         self.assertFalse(any(call.args[0] == 'STORE' and call.args[2] == '-FLAGS.SILENT' for call in self.conn.uid.call_args_list))
         self.assertEqual(draft_replies.tahor_db.get_reply_draft_for_thread('<one@example.com>')['status'], 'pending')
+
+    def test_already_sent_personal_reply_is_not_held_for_attention_again(self):
+        context = json.dumps({'verified_reply': 1, 'needs_attention': True})
+        draft_replies.tahor_db.prepare_reply_draft('<one@example.com>', '<one@example.com>', 'person@example.com', 'Question', 'Previously verified.', context)
+        with patch.object(draft_replies, 'draft_exists', return_value='Sent'), patch.object(draft_replies, 'draft_reply_body') as generate:
+            self.assertEqual(draft_replies.process_new_mail(self.conn), [])
+        generate.assert_not_called()
+        self.conn.append.assert_not_called()
+        self.assertFalse(any(call.args[0] == 'STORE' and call.args[-1] == '(needs-attention)' for call in self.conn.uid.call_args_list))
 
     def test_rule_edit_during_generation_defers_append_then_regenerates(self):
         self.rule['revision'] = 'old'
