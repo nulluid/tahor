@@ -10,7 +10,7 @@ login. Before changing provider rules, it also performs Fastmail's separate sett
 reauthentication, supplying the password and TOTP when requested. It caches only the
 provider's explicit authorization expiry and rereads rule state after authentication.
 This flow has its own persistent 15-minute attempt cooldown; rejected credentials stop
-further attempts until administrator enrollment. It does not assume a permission error
+further attempts until corrected enrollment or an explicit administrator settings retry. It does not assume a permission error
 means an earlier rule write is safe to replay. A fresh login does not clear a rejected
 settings-authentication attempt. Session refresh is a convenience, not a guarantee of
 permanent access. A rejected
@@ -99,7 +99,7 @@ domains first, or disable synchronization and remove the named Tahor rules in Fa
 Do not delete the connector's ownership journal while its rules are installed.
 
 If credentials are rejected, correct or re-enroll them with the terminal command above;
-that explicit administrator operation allows a new test. A protocol or rule conflict
+changed credentials allow a new test; simply repeating a check does not reset rejection or cooldown guards. A protocol or rule conflict
 requires investigation rather than repeated destructive retries. Status contains no
 provider response body or authentication secret:
 
@@ -107,6 +107,8 @@ provider response body or authentication secret:
 systemctl status tahor-provider
 journalctl -u tahor-provider --since today
 ```
+
+Authentication checks print only fixed phase/error labels, HTTP status integers and allowlisted challenge-shape details. They never print response bodies or credentials. `--check-auth` preserves durable rejection and cooldown guards. If login succeeded but settings authorization failed, diagnose that phase without repeating the full login: the service CLI supports `--check-settings-auth` using the existing session. After correcting the problem, an administrator may additionally pass `--retry-settings-auth` to reset only the settings attempt guard. This flag requires the settings-only check and preserves session identity and login guards. Run these checks under the same hardened unit identity and systemd credential loading as the installed check service; do not run them as root with copied plaintext credentials.
 
 For revocation, disable synchronization, stop/disable `tahor-provider`, revoke its session
 and named verification device in Fastmail, and remove its encrypted credential and private

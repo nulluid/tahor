@@ -108,6 +108,7 @@ class FastmailAuth:
         self.http = transport or requests.Session()
         self.http.trust_env = False  # Ignore proxy and .netrc credential injection.
         self.session = None
+        self.diagnostic = {}
         self.auth_state = {}
         self.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         info = self.state_dir.stat()
@@ -141,6 +142,7 @@ class FastmailAuth:
             with self.http.request(method, url, json=body, headers=headers,
                                    allow_redirects=False, timeout=(10, 45), stream=True) as response:
                 status = response.status_code
+                self.diagnostic["http_status"] = status if type(status) is int and 100 <= status <= 599 else 0
                 if status in (401, 403, 410, 423):
                     raise AuthenticationRequired()
                 if status == 429:
@@ -249,8 +251,15 @@ class FastmailAuth:
         body = {'type': 'start'}
         try:
             for step in ('start', 'password', 'totp'):
+                self.diagnostic = {'phase': 'settings_' + step}
                 status, data = self.request('POST', endpoint(url, '/auth/sudo'), body,
                                             token=self.session['accessToken'])
+                self.diagnostic.update(response_object=isinstance(data, dict),
+                    login_id_present=isinstance(data, dict) and isinstance(data.get('loginId'), str),
+                    expiry_present=isinstance(data, dict) and 'sudoUntil' in data,
+                    methods=[name for name in ('username', 'password', 'totp', 'sms', 'webauthn')
+                             if isinstance(data, dict) and isinstance(data.get('methods'), list)
+                             and any(isinstance(m, dict) and m.get('type') == name for m in data['methods'])])
                 if status == 201:
                     if not isinstance(data, dict):
                         raise ProtocolError()
@@ -276,8 +285,10 @@ class FastmailAuth:
                 body = {'type': next_step, 'loginId': data['loginId'], 'remember': False,
                         'value': credentials['password'] if next_step == 'password' else totp(credentials['totp_seed'], self.clock())}
             raise ProtocolError()
-        except (AuthenticationRequired, ProtocolError):
-            attempt['blocked'] = True
+        except ConnectorError as error:
+            if isinstance(error, (AuthenticationRequired, ProtocolError)):
+                attempt['blocked'] = True
+            attempt['diagnostic'] = dict(self.diagnostic, error=error.code)
             self.save()
             raise
 

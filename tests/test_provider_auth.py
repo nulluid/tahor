@@ -145,6 +145,17 @@ class SettingsAuthenticationTests(unittest.TestCase):
                 self.auth.ensure_settings_auth()
             self.assertEqual(self.auth.auth_state['settings_until'], 3600)
 
+    def test_rejected_settings_saves_only_fixed_diagnostic_fields(self):
+        with patch.object(self.auth, 'request', return_value=(200, {'loginId': 'PRIVATE-ID',
+                'methods': [{'type': 'sms'}, {'type': 'PRIVATE-METHOD'}], 'secret': 'PRIVATE-BODY'})):
+            with self.assertRaises(AuthenticationRequired):
+                self.auth.ensure_settings_auth()
+        diagnostic = self.auth.auth_state['settings_attempt']['diagnostic']
+        self.assertEqual(diagnostic['phase'], 'settings_start')
+        self.assertEqual(diagnostic['methods'], ['sms'])
+        self.assertNotIn('PRIVATE', json.dumps(diagnostic))
+        self.assertTrue(self.auth.auth_state['settings_attempt']['blocked'])
+
     def test_expiry_requires_new_settings_auth(self):
         self.auth.auth_state['settings_until'] = 100
         with patch.object(self.auth, 'request', side_effect=self.sequence()) as request:

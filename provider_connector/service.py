@@ -62,12 +62,62 @@ def once(config):
     return result
 
 
+def check_auth(config, settings_only=False, retry_settings=False):
+    """Admin check with fixed diagnostics; ordinary checks preserve rejection guards."""
+    if retry_settings and not settings_only:
+        raise ValueError('Settings retry requires a settings-only check')
+    phase = 'load_state'
+    auth = None
+    try:
+        auth = FastmailAuth(config['credentials'], config['state'])
+        if retry_settings:
+            auth.auth_state.pop('settings_attempt', None)
+            auth.auth_state.pop('settings_until', None)
+            auth.save()
+        if not settings_only:
+            phase = 'login'
+            auth.session = None
+            auth.http.cookies.clear()
+            # Do not clear durable blocked/cooldown guards on routine checks.
+            auth.ensure_session()
+        phase = 'settings'
+        auth.ensure_settings_auth()
+    except Exception as error:
+        code = error.code if isinstance(error, ConnectorError) else 'local_error'
+        if code not in ('provider_unavailable', 'authentication_required', 'protocol_changed', 'rate_limited', 'credentials_required'):
+            code = 'local_error'
+        diagnostic = {'phase': phase, 'error': code}
+        if auth is not None:
+            details = auth.diagnostic
+            if details.get('phase') in ('settings_start', 'settings_password', 'settings_totp'):
+                diagnostic['phase'] = details['phase']
+            status = details.get('http_status')
+            if type(status) is int and 100 <= status <= 599:
+                diagnostic['http_status'] = status
+            for key in ('response_object', 'login_id_present', 'expiry_present'):
+                if type(details.get(key)) is bool:
+                    diagnostic[key] = details[key]
+            diagnostic['methods'] = [name for name in ('username', 'password', 'totp', 'sms', 'webauthn')
+                                     if name in details.get('methods', [])]
+        print('Fastmail authentication check failed: ' + json.dumps(diagnostic, sort_keys=True), flush=True)
+        return False
+    print('Fastmail settings authentication verified.' if settings_only else 'Fresh Fastmail sign-in and settings reauthentication verified.')
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--once', action='store_true')
     parser.add_argument('--check-auth', action='store_true')
+    parser.add_argument('--check-settings-auth', action='store_true')
+    parser.add_argument('--retry-settings-auth', action='store_true',
+                        help='Explicit admin retry of rejected settings authorization; use only after diagnosis/correction')
     args = parser.parse_args()
+    if args.retry_settings_auth and not args.check_settings_auth:
+        parser.error("--retry-settings-auth requires --check-settings-auth")
+    if args.check_auth and args.check_settings_auth:
+        parser.error("Choose one authentication check")
     config = private_json(args.config)
     if os.environ.get('CREDENTIALS_DIRECTORY'):
         config['credentials'] = str(Path(os.environ['CREDENTIALS_DIRECTORY']) / 'fastmail')
@@ -75,18 +125,9 @@ def main():
     with lock_path.open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         while True:
-            if args.check_auth:
-                try:
-                    auth = FastmailAuth(config['credentials'], config['state'])
-                    auth.session = None
-                    auth.http.cookies.clear()
-                    auth.auth_state = {'user_id': auth.auth_state.get('user_id')}
-                    auth.ensure_session()
-                    auth.ensure_settings_auth()
-                except Exception:
-                    print('Fastmail sign-in failed. Check protected enrollment and connector status.')
+            if args.check_auth or args.check_settings_auth:
+                if not check_auth(config, args.check_settings_auth, args.retry_settings_auth):
                     raise SystemExit(1)
-                print('Fresh Fastmail sign-in and settings reauthentication verified.')
                 return
             result = once(config)
             print('Fastmail connector: ' + result['state'], flush=True)
