@@ -28,6 +28,16 @@ class AuthTests(unittest.TestCase):
         for timestamp, expected in [(59, '287082'), (1111111109, '081804'), (1111111111, '050471'), (1234567890, '005924'), (2000000000, '279037'), (20000000000, '353130')]:
             self.assertEqual(totp(SEED, timestamp), expected)
 
+    def test_manual_seed_grouping_and_128_bit_issuer_keys(self):
+        seed = base64.b32encode(b'1234567890123456').decode().rstrip('=')
+        grouped = '-'.join(seed.lower()[i:i+4] for i in range(0, len(seed), 4))
+        self.assertEqual(totp('  ' + grouped + '\t\n', 59), totp(seed, 59))
+        self.assertEqual(len(totp(seed, 59)), 6)
+        for invalid in ('123456', 'otpauth://totp/example?secret=' + seed,
+                        base64.b32encode(b'too-short').decode(), seed + '!'):
+            with self.assertRaises(CredentialError):
+                totp(invalid, 59)
+
     def test_endpoint_rejects_secret_exfiltration_and_redirects(self):
         for url in ('http://api.fastmail.com/auth/login', 'https://api.fastmail.com.evil.test/auth/login',
                     'https://api.fastmail.com@evil.test/auth/login', 'https://api.fastmail.com/auth/login?next=evil',

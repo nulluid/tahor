@@ -76,9 +76,10 @@ def totp(seed, now=None):
     try:
         if not isinstance(seed, str) or len(seed) > 256:
             raise ValueError()
-        normalized = seed.replace(' ', '').upper().rstrip('=')
+        normalized = ''.join(c for c in seed if not c.isspace() and c != '-').upper().rstrip('=')
         key = base64.b32decode(normalized + '=' * (-len(normalized) % 8), casefold=True)
-        if len(key) < 20:
+        # RFC 4226 requires at least 128 bits; 160 bits is recommended, not mandatory.
+        if len(key) < 16:
             raise ValueError()
         counter = struct.pack('>Q', int(time.time() if now is None else now) // 30)
     except (ValueError, TypeError, struct.error):
