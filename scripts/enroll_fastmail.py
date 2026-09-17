@@ -7,11 +7,53 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import warnings
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from provider_connector.auth import validate_credentials, totp, CredentialError
 
 DESTINATION = Path('/etc/credstore.encrypted/tahor-fastmail')
+
+
+def hidden_input(prompt):
+    # getpass otherwise falls back to echoed stdin if terminal controls fail.
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', getpass.GetPassWarning)
+        try:
+            return getpass.getpass(prompt)
+        except getpass.GetPassWarning:
+            raise SystemExit('Hidden terminal input is unavailable; nothing saved.') from None
+
+
+def collect_credentials():
+    def read_field(prompt, valid, message, hidden=False):
+        for _ in range(3):
+            value = hidden_input(prompt) if hidden else input(prompt).strip()
+            try:
+                accepted = valid(value)
+            except CredentialError:
+                accepted = False
+            if accepted:
+                return value
+            print(message)
+        raise SystemExit('Enrollment cancelled after invalid input; nothing saved.')
+    try:
+        username = read_field('Fastmail username: ',
+            lambda value: isinstance(value, str) and 0 < len(value) <= 4096 and '@' in value and not any(c in value for c in '\r\n\0'),
+            'Username is invalid. Enter the full Fastmail sign-in email address.')
+        seed = read_field('New authenticator manual setup key (hidden; not the six-digit code): ',
+            lambda value: bool(totp(value)),
+            'Authenticator setup key is invalid or unsupported. Copy the manual setup key from the new Fastmail device, not a verification code, password, or QR address.', hidden=True)
+        password = read_field('Fastmail account password (hidden; not an app password): ',
+            lambda value: isinstance(value, str) and 0 < len(value) <= 4096 and '\0' not in value,
+            'Account password is invalid. Enter your account sign-in password; it cannot be empty.', hidden=True)
+        value = {'username': username, 'password': password, 'totp_seed': seed}
+        validate_credentials(value)
+        return value
+    except (EOFError, KeyboardInterrupt):
+        raise SystemExit('Enrollment cancelled; nothing saved.') from None
+    except CredentialError:
+        raise SystemExit('Credential validation failed; nothing saved.') from None
 
 
 def main():
@@ -23,13 +65,8 @@ def main():
           'Credentials stay on this host; do not paste them into chat or a web app.\n'
           'This grants this isolated service full account-login authority. Root on this\n'
           'host can still access it. The stored credential is encrypted with systemd.\n')
-    value = {'username': input('Fastmail username: ').strip(),
-             'password': getpass.getpass('Fastmail account password (hidden): '),
-             'totp_seed': getpass.getpass('New authenticator setup key (hidden): ').strip()}
-    try:
-        validate_credentials(value)
-    except CredentialError:
-        raise SystemExit('Invalid enrollment input; nothing saved.') from None
+    print('Each field is checked separately. Press Ctrl-C to cancel without saving.\n')
+    value = collect_credentials()
     while True:
         print('Current verification code for the new Fastmail device: ' + totp(value['totp_seed']))
         answer = input('Save the named device in Fastmail; type saved, refresh, or cancel: ').strip()
