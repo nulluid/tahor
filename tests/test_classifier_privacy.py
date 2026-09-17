@@ -24,7 +24,7 @@ class ClassifierPrivacyTests(unittest.TestCase):
 
         record = {'id': 'sample', 'subject': 'Question', 'from': 'person@example.com',
                   'date': '2026-01-01', 'snippet': 'Can you attend?'}
-        with patch.object(classify, 'wait_for_paid_request'), patch.dict(classify.os.environ, {'TAHOR_CLASSIFY_FREE_ENABLED': '1'}), patch('reply_rules.get_rules', return_value=[]), patch.object(
+        with patch.object(classify, 'wait_for_model_request'), patch.dict(classify.os.environ, {'TAHOR_CLASSIFY_FREE_ENABLED': '1'}), patch('reply_rules.get_rules', return_value=[]), patch.object(
                 classify.urllib.request, 'urlopen', side_effect=response):
             result = classify.classify_one(backend['url'], {}, backend['default_model'],
                                            'Classify the message.', record, retries=1)

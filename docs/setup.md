@@ -20,15 +20,16 @@ Then:
 ```bash
 git clone https://github.com/nulluid/tahor.git
 cd tahor
-./install.sh --mode paid
+./install.sh --mode paid_only
 ```
 
 The interactive installer asks for the mailbox email, IMAP app password, and
 OpenRouter key. Passwords are hidden while entered. Nothing starts automatically.
-The example explicitly selects paid classification. Omitting `--mode paid`
-leaves a new instance in Free mode, with processing pending because the free
-classifier is disabled by default. No free candidate currently meets the tested
-accuracy requirements for automatic mailbox actions.
+The example explicitly selects always-paid classification. Omitting `--mode paid_only`
+uses always-free classification, which never incurs paid requests. Review the
+free-model disclosures before processing: the original evaluation included
+incorrect trash decisions on important messages. Settings provides four separate
+policies for classification, reply writing, and rule writing.
 
 For a different mail provider:
 
@@ -52,8 +53,10 @@ Useful options:
 | :--- | :--- |
 | `--config-dir /path/to/instance` | Put credentials and runtime state in a different directory |
 | `--data-dir /path/to/private-repo` | Keep prompts and mappings in a separate private checkout |
-| `--mode free` | No paid requests; default for new installations, currently pending while the experimental free route is disabled |
-| `--mode paid` / `--mode auto` | Explicitly enable paid classification capacity |
+| `--mode free` | Always free; default for new installations, with known model limitations |
+| `--mode paid_only` | Always paid; retry failures without free fallback |
+| `--mode paid` | Paid with free fallback during failures |
+| `--mode auto` | Free first; allow paid for failures or a projected backlog over four hours |
 | `--base-url https://mail-tools.example.com` | Set the review app’s public URL |
 | `--systemd-dir ~/.config/systemd/user` | Generate unattended user services and timers |
 
@@ -211,7 +214,7 @@ When the previews match your intent:
 
 ```bash
 systemctl --user enable --now tahor-filing.timer tahor-retention.timer
-systemctl --user enable --now tahor-healthcheck.timer
+systemctl --user enable --now tahor-healthcheck.timer tahor-decisions.timer
 systemctl --user list-timers 'tahor-*'
 ```
 
@@ -235,8 +238,8 @@ health alerts and a daily summary, enable the separate
   Initial matching is bounded to recent inbox mail; the normal three-day read
   and seven-day unread filing windows still govern drafting eligibility.
   Uncertain matches wait for review rather than generating a reply.
-  Reply writing starts disabled. Select a private model and an optional free backup
-  in Settings; reply-model billing is separate from classification mode.
+  Reply writing starts disabled. Choose models and a spending policy
+  in Settings; reply writing is independent of classification policy.
 - **Free-text rules:** first select an AI rule model in Settings, then submit an
   instruction from the decision queue. A model can
   propose routing or classification changes. Review the displayed diff or sender

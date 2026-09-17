@@ -52,8 +52,8 @@ def paid_concurrency():
     return value
 
 
-_paid_pacing_lock = threading.Lock()
-_paid_next_start = {}
+_request_pacing_lock = threading.Lock()
+_next_request_start = {}
 
 
 def paid_request_interval():
@@ -63,19 +63,25 @@ def paid_request_interval():
     return value
 
 
-def wait_for_paid_request(url, model, provider):
-    if (url != 'https://openrouter.ai/api/v1/chat/completions'
-            or model != 'google/gemini-3.8-flash'):
+def wait_for_model_request(url, model, provider):
+    if url != 'https://openrouter.ai/api/v1/chat/completions':
         return
-    interval = paid_request_interval()
+    if model == 'google/gemini-3.8-flash':
+        interval = paid_request_interval()
+    elif model == 'inclusionai/ling-3.0-flash-vl:free':
+        interval = float(os.environ.get('TAHOR_FREE_REQUEST_INTERVAL_SECONDS', '5'))
+        if not 1 <= interval <= 60:
+            raise ValueError('TAHOR_FREE_REQUEST_INTERVAL_SECONDS must be between 1 and 60')
+    else:
+        return
     route = (url, model, tuple(provider.get('only', [])))
     # Serialize start reservations, not network requests. Holding this lock
     # through the wait prevents delayed callers from releasing a queued burst.
-    with _paid_pacing_lock:
-        delay = _paid_next_start.get(route, 0) - time.monotonic()
+    with _request_pacing_lock:
+        delay = _next_request_start.get(route, 0) - time.monotonic()
         if delay > 0:
             time.sleep(delay)
-        _paid_next_start[route] = time.monotonic() + interval
+        _next_request_start[route] = time.monotonic() + interval
 
 
 # Hosted and local models share the OpenAI-compatible request shape.
@@ -186,7 +192,7 @@ def classify_one(url, headers, model, system_prompt, record, retries=3):
     for attempt in range(retries + 1):
         try:
             req = urllib.request.Request(url, data=data, headers=headers)
-            wait_for_paid_request(url, model, payload.get('provider', {}))
+            wait_for_model_request(url, model, payload.get('provider', {}))
             deadline = time.monotonic() + MODEL_RESPONSE_SECONDS
             with urllib.request.urlopen(req, timeout=60) as resp:
                 body = json.loads(read_bounded(resp, deadline).decode("utf-8"))

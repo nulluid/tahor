@@ -71,7 +71,7 @@ retention requires `UIDPLUS`. The setup check reports these capabilities.
 ```bash
 git clone https://github.com/nulluid/tahor.git
 cd tahor
-./install.sh --mode paid
+./install.sh --mode paid_only
 ```
 
 The installer creates a virtual environment, asks for credentials without
@@ -79,9 +79,9 @@ echoing them, and writes private configuration outside the checkout. New setups
 leave AI rule and reply writing **disabled until you select a model in Settings**. Rerunning setup preserves your existing
 configuration, prompt, and routing rules.
 
-This command explicitly enables paid classification. Without `--mode paid`, a
-new installation stays in Free mode and waits: free classification is disabled
-by default while a sufficiently accurate private route is still being evaluated.
+This command explicitly selects always-paid classification. Without `--mode paid_only`,
+a new installation uses always-free classification. Read the free-model limitations
+below before processing your mailbox; free mode never silently incurs paid charges.
 
 Check the connection, then start processing:
 
@@ -126,14 +126,14 @@ and checked again. Rejected text is not added to Drafts. Model checks can still
 miss mistakes; review every reply before sending. Personal questions
 that need your answer also receive an attention flag. Edit and send it in your
 usual email client; there is no separate
-web draft editor and **Tahor never sends these replies automatically**. Select a
-free backup writer in Settings: provider or credit failures switch both writing
-and verification to that free model, then retry your primary on later work after
-a five-minute cooldown. A failed quality check still leaves the reply pending. Choose
-**Disabled — keep replies pending** if no free provider has suitable data terms.
-**Ling 3.0 Flash VL** is an optional free writer and backup, restricted to Novita
-with zero data retention, data collection denied, and zero input/output pricing.
-If it is your backup and that route becomes unavailable, replies remain pending. These
+web draft editor and **Tahor never sends these replies automatically**. Choose a
+separate spending policy for reply writing in Settings. Writer and verifier use
+the same model for each attempt. Provider failures retry after a five-minute
+cooldown, using another tier only when your policy permits it. Quality checks
+can leave a draft pending even when a model is available.
+**Ling 3.0 Flash VL** is the free writing option, restricted to Novita with zero
+data retention, data collection denied, and zero input/output pricing. It can
+invent promises or details; review every draft. These
 [routing controls](https://openrouter.ai/docs/guides/features/zdr) protect provider
 selection; they do not guarantee the accuracy of a draft.
 All rule and reply writing requests require zero data retention and denied data
@@ -160,11 +160,14 @@ switching to a more expensive writing route. Classification settings are separat
 
 ## Choose the pace
 
-| Mode | Behavior | Inference cost |
+Choose independently for **classification, reply drafting, and rule drafting**:
+
+| Policy | Behavior | Paid requests |
 | :--- | :--- | :--- |
-| **Free** | Waits while free classification is disabled; an explicitly enabled experimental route can process mail | No paid classification requests |
-| **Paid** | Uses paid capacity to work through a large backlog faster | Provider usage charges |
-| **Auto** | Estimates a free/paid split from backlog size and observed free throughput | Variable paid usage |
+| **Always paid** | Retry paid failures; notify you if intervention is needed | Yes; never falls back to free |
+| **Paid with free fallback** | Use free only while paid is failing; periodically probe paid recovery | Normally |
+| **Free with paid escalation** | Start free; use paid if the estimated queue exceeds four hours or free temporarily fails; return to free | When needed |
+| **Always free** | Keep retrying free failures; never switch to paid | Never |
 
 Fully successful paid-only batches continue immediately, without the free-tier
 pause. Speed mode controls routing and concurrency; it does not change your
@@ -185,12 +188,11 @@ on retry. This is a small validation set, not a guarantee about every email.
 For an internet-facing server, use the [dedicated service-account setup](docs/service-isolation.md)
 to keep application code read-only and run without administrator privileges.
 
-In Paid or Auto mode, failed paid classifications retry on the free tier when it
-is explicitly enabled. `TAHOR_CLASSIFY_FREE_ENABLED=0` is the default; it disables free classification
-and fallback without silently switching Free mode to a paid model.
-Widespread failures start a five-minute cooldown, followed by a single-message
-paid recovery probe at the next batch. If both tiers fail, messages stay pending
-and the worker retries after five minutes. Your selected speed does not change.
+Failures leave work pending. Tier recovery probes occur after a five-minute
+cooldown, and persistent problems trigger the configured health alerts. The
+four-hour threshold is an estimate based on queued work and observed free
+throughput, not a completion guarantee. `TAHOR_CLASSIFY_FREE_ENABLED=0` remains
+an optional operator override that blocks free classification requests.
 
 AI-generated rule changes appear as proposals in the decision queue. Review the
 exact sender action or file diff before approving. Domain blocks require the exact
@@ -201,15 +203,17 @@ classification and reply writing; its requests use the xAI zero-retention route.
 
 ### A setup without an added inference bill
 
-**Fully free automatic classification is not ready yet.** No free candidate has
-met both the privacy and accuracy requirements in the current evaluation. The
-experimental free classifier remains disabled by default, including paid-to-free
-fallback. Enabling it is an explicit operator choice, not a recommendation.
+Choose **Always free** for each enabled AI task and use an existing computer for
+hosting. Rule and reply writing remain disabled until you enable them in Settings.
+The free model uses the same privacy restrictions as its paid counterparts, but
+its mistakes matter: the original 24-message classifier evaluation included five
+incorrect trash decisions, including important mail. Rule drafting chose the wrong
+folder in one of eight cases; generated rules require approval before application.
+The selected free writer can add unsupported promises or details to a reply.
 
-Reply writing has an optional free model in Settings. AI rule drafting can stay
-disabled: you can still add reply rules and owner directions manually. Writing
-and backup models require an explicit choice. An existing computer can provide
-hosting while a qualified free classification route is evaluated.
+These are observed examples, not universal error rates. Settings exposes these
+limitations so you can choose the tradeoff. Paid and free models are tested
+separately; a good prose result does not establish safe classification behavior.
 
 This does not make your email account, hardware, electricity, or hosting free.
 Free model capacity and account quotas are provider-controlled. OpenRouter can

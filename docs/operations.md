@@ -86,29 +86,27 @@ this extra hold, so ordinary inbox timing still applies. Cached text prepared
 before verification was introduced is regenerated and checked before any new
 append; an already existing draft is reconciled without being rewritten.
 
-### Free backup and automatic recovery
+### Independent AI policies and automatic recovery
 
-Choose the **Free backup for reply writing** model in Settings. Only explicitly
-free OpenRouter variants are accepted as backups; a paid model or a provider's
-promotional quota cannot be selected here. Choose **Disabled — keep replies
-pending** (`reply_backup_model: "none"`) to wait for primary recovery without
-calling any backup. Writer and verifier use the same
-backend for a given attempt. Defaults disable both primary and backup.
+Settings provides Always paid (`paid_only`), Paid with free fallback (`paid`),
+Free with paid escalation (`auto`), and Always free (`free`) separately for
+classification, reply writing and rule writing. Always free never calls paid;
+always paid never calls free. Auto starts free and may use paid for a queue
+estimated to exceed four hours or a temporary free-provider failure. Cooldowns
+last five minutes before another recovery probe; estimates are not guarantees.
+Writing starts disabled until a model is selected. Its paid/free model choices
+are independent of classifier models, and writer/verifier share one model per attempt.
 
-All OpenRouter rule and reply calls enforce `provider.zdr: true` and
-`provider.data_collection: deny`, including retries and verification. Unverified
-direct-provider writing routes are blocked. Retired Nemotron free or direct Gemini
-selections become disabled; existing Grok and Ling choices remain. No automatic
-paid substitution occurs. Manual reply rules and owner directions remain available
-when AI rule drafting is disabled.
+All hosted requests enforce `provider.zdr: true` and `provider.data_collection: deny`,
+including retries and verification. The selected Ling free route is pinned to
+Novita with provider fallback disabled and zero-price limits. Direct-provider
+writing routes with unverified account privacy remain blocked.
 
-Credit, authentication, quota, connection, and backend-response failures record
-a five-minute cooldown in the private `reply_backend_state.json` next to the
-database. While the primary is cooling down, new drafting work tries the free
-backup. After cooldown, the next queued request probes the primary again; a
-successful verified reply clears its hold. A failing free backup is also given
-a bounded cooldown. Restarts preserve these holds. There is no fallback to a
-different paid model, including when a requested Flex tier is unavailable.
+Writing recovery state and per-item failure timestamps persist privately in
+`ai_routing_state.json` next to the database. Failures lasting at least thirty
+minutes appear in configured health alerts; temporary failures that recover do
+not notify. Resolved rule requests retry every five minutes through
+`tahor-decisions.timer`. Proposals awaiting approval are not regenerated.
 
 Content rejection is distinct from a provider outage: unsupported facts or a
 failed instruction check never become a successful draft just because fallback
@@ -187,9 +185,10 @@ No shell `source` command is required.
 | `TAHOR_DATA_PUSH` | `1` to enable private configuration pushes; default is local commits only |
 | `WORKER_BATCH_SIZE` | Messages per classification batch; default 50 |
 | `WORKER_SLEEP_BETWEEN_BATCHES` | Optional delay override; defaults to 0 seconds after fully applied paid-only batches, 45 seconds otherwise |
-| `TAHOR_CLASSIFY_FREE_ENABLED` | Default `0`: disables free classification and paid-to-free fallback; messages remain retryable. `1` explicitly enables an experimental free route that has not met accuracy requirements |
+| `TAHOR_CLASSIFY_FREE_ENABLED` | Default `1`: free classification is available when policy permits it. Set `0` to block free classification regardless of policy |
 | `TAHOR_PAID_CONCURRENCY` | Concurrent paid classifications; default 8, configurable from 1 to 64; effective concurrency also depends on batch size |
-| `TAHOR_PAID_REQUEST_INTERVAL_SECONDS` | Minimum time between paid Vertex request starts, including retries; default 3 seconds |
+| `TAHOR_PAID_REQUEST_INTERVAL_SECONDS` | Minimum time between paid Vertex request starts, including retries; default 3 seconds, range 1–60 |
+| `TAHOR_FREE_REQUEST_INTERVAL_SECONDS` | Minimum time between free Ling classification starts, including retries; default 5 seconds, range 1–60 |
 
 Speed and model selections live in `settings.json` and are changed through the
 web app. `CLASSIFY_BACKEND` is for the standalone `classify.py` utility; it does
@@ -213,11 +212,12 @@ cases. Completed Gemini 3.8 responses made no incorrect trash decisions in those
 samples. One synthetic request timed out and passed the unchanged case on retry.
 These limited evaluations do not establish a general accuracy guarantee.
 
-Free classification is disabled by default because no current free candidate
-has met the privacy and accuracy requirements together. The explicitly enabled
-Ling alternative is experimental, not a qualified automatic fallback. Free mode
-keeps work pending rather than substituting paid requests. Fully free automatic
-mail processing remains unfinished.
+The free Ling classifier is available by informed choice. The original 24-message
+evaluation included five incorrect trash decisions, including important messages.
+Ling rule drafting selected a wrong folder in one of eight cases; all generated
+rule changes require review. Free reply drafts may contain invented commitments
+or details and must be reviewed. Settings discloses these observed weaknesses;
+free-only routing does not imply equivalent model accuracy.
 Model availability changes: check your provider’s catalog if a selected model
 stops responding. Paid estimates are not spending limits. Configure a provider
 budget separately if you need one.
