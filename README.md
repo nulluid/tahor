@@ -303,7 +303,8 @@ small deployment: one mailbox owner and one host, with SQLite and local file loc
 - **Provider rules are your choice.** Review and install generated Sieve yourself,
   or opt into the [isolated Fastmail connector](docs/fastmail-connector.md) for automatic
   whole-domain blocks. The experimental connector supports fresh password/TOTP sign-in,
-  keeps credentials out of the web app, and manages only its own rule IDs. Enrollment
+  keeps credentials out of the web app, and manages only its own rule IDs. Login and
+  settings authorization have separate, persistent retry safeguards. Enrollment
   grants it full account-login authority; Fastmail's unpublished interface can change.
 - **Hosted models receive mail content.** Classification sends sender, subject,
   date, and a body excerpt (up to 6,000 characters with natural-language reply

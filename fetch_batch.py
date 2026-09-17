@@ -25,6 +25,7 @@ from email.header import decode_header
 from email.utils import parseaddr
 
 import config
+from mailbox_search import search_uids
 
 DEFAULT_LIMIT = 100
 SNIPPET_MAX_CHARS = 500
@@ -148,7 +149,7 @@ def main():
         sys.exit(f"Could not select mailbox {mailbox!r}")
     uidvalidity = mailbox_uidvalidity(conn)
 
-    typ, data = conn.uid("SEARCH", None, "ALL")
+    typ, data = search_uids(conn, "ALL")
     if typ != "OK":
         sys.exit("SEARCH failed")
     uids = data[0].split()

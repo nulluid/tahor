@@ -13,6 +13,7 @@ import keyword_tool
 class WorkerFetchTests(unittest.TestCase):
     def test_message_without_id_uses_mailbox_uid_identity(self):
         conn = Mock()
+        conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         conn.select.return_value = ('OK', [])
         conn.response.return_value = ('UIDVALIDITY', [b'100'])
         headers = b'From: person@example.com\r\nSubject: No identifier\r\nDate: Wed, 16 Sep 2026 12:00:00 +0000\r\n\r\n'
@@ -44,6 +45,7 @@ class WorkerFetchTests(unittest.TestCase):
 
     def test_mailbox_uid_reset_cannot_tag_another_message(self):
         conn = Mock()
+        conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         conn.select.return_value = ('OK', [])
         conn.response.return_value = ('UIDVALIDITY', [b'101'])
         with patch.object(keyword_tool, 'connect', return_value=conn):

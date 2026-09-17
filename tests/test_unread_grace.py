@@ -32,6 +32,7 @@ class Mailbox:
 
     def select(self, mailbox, readonly=False):
         self.readonly = readonly
+        self.untagged_responses = {'UIDNEXT': [str(max([int(uid) for uid in self.rows] or [0])+1).encode()], 'EXISTS': [str(len(self.rows)).encode()]}
         return 'OK', []
 
     def logout(self):
@@ -42,9 +43,12 @@ class Mailbox:
 
     def uid(self, command, *args):
         if command == 'SEARCH':
-            def matches(row):
+            def matches(uid, row):
                 tokens = iter(args[1:])
                 def criterion(token):
+                    if token == 'UID':
+                        low, high = map(int, next(tokens).split(':'))
+                        return low <= int(uid) <= high
                     if token == 'OR':
                         left = criterion(next(tokens))
                         right = criterion(next(tokens))
@@ -64,7 +68,7 @@ class Mailbox:
                     raise AssertionError('Unsupported search term: ' + token)
                 results = [criterion(token) for token in tokens]
                 return all(results)
-            return 'OK', [b' '.join(uid for uid, row in self.rows.items() if matches(row))]
+            return 'OK', [b' '.join(uid for uid, row in self.rows.items() if matches(uid, row))]
         if command == 'FETCH':
             return 'OK', [(b'1', b'From: billing@example.com\r\n')]
         if command == 'STORE':

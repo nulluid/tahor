@@ -8,6 +8,7 @@ class ReplyFilingTests(unittest.TestCase):
     def test_reply_filing_respects_separate_read_and_unread_age_and_attention(self):
         rule = {'id':'a'*16, 'filing_folder':'Community/Updates'}
         conn = Mock()
+        conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         conn.uid.side_effect = [('OK',[b'1']), ('OK',[b'2'])]
         with patch.object(filing_sweep.reply_rules, 'get_rules', return_value=[rule]):
             result = filing_sweep.reply_filing_destinations(conn, ('SEEN','BEFORE','14-Sep-2026'), ('UNSEEN','BEFORE','10-Sep-2026'))
@@ -22,12 +23,14 @@ class ReplyFilingTests(unittest.TestCase):
 
     def test_no_filing_destination_does_not_change_existing_filing(self):
         conn = Mock()
+        conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         with patch.object(filing_sweep.reply_rules, 'get_rules', return_value=[{'id':'a'*16}]):
             self.assertEqual(filing_sweep.reply_filing_destinations(conn, (), ()), {})
         conn.uid.assert_not_called()
 
     def test_conflicting_destinations_and_failed_search_preserve_mail(self):
         conn = Mock()
+        conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         conn.uid.return_value = ('OK',[b'1'])
         rules = [{'id':'a'*16,'filing_folder':'Community/Updates'}, {'id':'b'*16,'filing_folder':'Different'}]
         with patch.object(filing_sweep.reply_rules, 'get_rules', return_value=rules):
@@ -52,6 +55,7 @@ class ReplyFiledReadStateTests(unittest.TestCase):
                    b'6': current - {filing_sweep.reply_rules.scan_keyword(rule)} | {filing_sweep.reply_rules.scan_keyword(old)},
                    b'7': current}
         conn = Mock()
+        conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         conn.select.return_value = ('OK', [])
         def command(operation, *args):
             if operation == 'STORE':
@@ -61,6 +65,9 @@ class ReplyFiledReadStateTests(unittest.TestCase):
             def matches(uid, flags):
                 tokens = iter(terms)
                 def one(token):
+                    if token == 'UID':
+                        low, high = map(int, next(tokens).split(':'))
+                        return low <= int(uid) <= high
                     if token == 'OR':
                         left = one(next(tokens)); right = one(next(tokens))
                         return left or right
@@ -84,6 +91,7 @@ class ReplyFiledReadStateTests(unittest.TestCase):
     def test_reply_routing_and_read_cleanup_require_same_current_revision(self):
         rule = {'id':'a'*16, 'revision':'new', 'filing_folder':'Community/Updates'}
         conn = Mock()
+        conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         conn.uid.return_value = ('OK',[b'1'])
         with patch.object(filing_sweep.reply_rules, 'get_rules', return_value=[rule]):
             filing_sweep.reply_filing_destinations(conn, ('SEEN',), ('UNSEEN',))

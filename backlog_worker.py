@@ -34,6 +34,7 @@ REPO = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO))
 
 import fetch_batch
+from mailbox_search import search_uids
 import classify
 import ai_routing
 import process_batch
@@ -125,7 +126,7 @@ def _fetch(conn, mailbox, prefix):
     criteria = ["ALL"]
     for keyword in sorted(RETENTION_KEYWORDS):
         criteria.extend(["UNKEYWORD", keyword])
-    typ, data = conn.uid("SEARCH", None, *criteria)
+    typ, data = search_uids(conn, *criteria)
     if typ != "OK":
         raise RuntimeError("SEARCH failed")
     pending = data[0].split() if data and data[0] else []
@@ -299,7 +300,7 @@ def full_backlog_count(mailboxes):
             criteria = []
             for kw in RETENTION_KEYWORDS:
                 criteria += ["UNKEYWORD", kw]
-            typ, data = conn.uid("SEARCH", None, *criteria)
+            typ, data = search_uids(conn, *criteria)
             if typ != "OK":
                 raise RuntimeError("Backlog count search failed")
             total += len(data[0].split()) if data and data[0] else 0

@@ -14,6 +14,7 @@ class FilingTests(unittest.TestCase):
 
     def test_failed_move_fails_the_scheduled_command(self):
         conn = Mock()
+        conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         conn.select.return_value = ('OK', [])
         conn.capabilities = ('MOVE',)
         conn.list.return_value = ('OK', [b'folder'])
@@ -31,6 +32,7 @@ class FilingTests(unittest.TestCase):
 
     def test_failed_search_cannot_report_an_empty_successful_sweep(self):
         conn = Mock()
+        conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         conn.select.return_value = ('OK', [])
         conn.uid.return_value = ('NO', [])
         with patch.object(filing_sweep, 'connect', return_value=conn), patch.object(filing_sweep.config, 'vendor_buckets', return_value={}), patch.object(sys, 'argv', ['filing_sweep.py']):
@@ -44,6 +46,7 @@ class FilingTests(unittest.TestCase):
 
     def test_failed_folder_creation_is_not_treated_as_success(self):
         conn = Mock()
+        conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         conn.list.return_value = ('OK', [None])
         conn.create.return_value = ('NO', [])
         created = set()
@@ -53,6 +56,7 @@ class FilingTests(unittest.TestCase):
 
     def test_successful_move_never_uses_global_expunge(self):
         conn = Mock()
+        conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         conn.capabilities = (b'MOVE', b'UIDPLUS')
         conn.select.return_value = ('OK', [])
         conn.list.return_value = ('OK', [b'folder'])

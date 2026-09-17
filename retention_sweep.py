@@ -15,6 +15,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import config
+from mailbox_search import search_uids
 
 TIERS = [
     ("retention-transient", config.retention_days("transient", 7)),
@@ -52,7 +53,7 @@ def sweep_mailbox(conn, path, keyword, cutoff_days, dry_run):
 
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=cutoff_days)).strftime("%d-%b-%Y")
-    typ, data = conn.uid("SEARCH", None, "BEFORE", cutoff, "KEYWORD", keyword, "UNKEYWORD", "retention-forever", "UNKEYWORD", "retention-pending-review", "UNKEYWORD", "needs-attention", "OR", "SEEN", "UNKEYWORD", "reply-protected")
+    typ, data = search_uids(conn, "BEFORE", cutoff, "KEYWORD", keyword, "UNKEYWORD", "retention-forever", "UNKEYWORD", "retention-pending-review", "UNKEYWORD", "needs-attention", "OR", "SEEN", "UNKEYWORD", "reply-protected")
     if typ != "OK":
         raise RuntimeError("Retention search failed; no messages changed in this pass")
     if not data or not data[0]:
@@ -65,7 +66,7 @@ def sweep_trash(conn, path, dry_run=False):
     typ, _ = conn.select('"' + path.replace('\\', '\\\\').replace('"', '\\"') + '"', readonly=dry_run)
     if typ != "OK":
         raise RuntimeError("Trash cleanup could not select a mailbox")
-    typ, data = conn.uid("SEARCH", None, "KEYWORD", "delete-pending", "UNKEYWORD", "retention-forever", "UNKEYWORD", "retention-pending-review", "UNKEYWORD", "needs-attention", "OR", "SEEN", "UNKEYWORD", "reply-protected")
+    typ, data = search_uids(conn, "KEYWORD", "delete-pending", "UNKEYWORD", "retention-forever", "UNKEYWORD", "retention-pending-review", "UNKEYWORD", "needs-attention", "OR", "SEEN", "UNKEYWORD", "reply-protected")
     if typ != "OK":
         raise RuntimeError("Trash cleanup search failed")
     return delete_uids(conn, data[0].split() if data and data[0] else [], dry_run)

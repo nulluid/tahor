@@ -415,3 +415,11 @@ vendor mappings retain their existing behavior.
 ### Optional private free-model guidance
 
 To tune the experimental free classifier independently, put UTF-8 guidance in `DATA_DIR/free_classifier_guidance.txt`, or set `TAHOR_FREE_CLASSIFIER_GUIDANCE_PATH` to a private file. Tahor appends this text only for its Ling free classifier, before injecting your natural-language rules; paid classification stays unchanged. Missing default files are optional. Unreadable, non-regular, invalid UTF-8 or oversized files (over 64 KiB) leave messages pending instead of making requests; an explicitly configured missing path is also an error. Private backups include this file. Keep personal policy and examples outside the public checkout, and test changes against both preservation and deletion cases. Prompt tuning does not eliminate free-model mistakes.
+
+### Large mailbox searches
+
+Classification, filing, retention, and backlog counts search bounded UID ranges,
+so a large folder does not exceed the IMAP client’s response-line limit. There is
+no folder-size cutoff. Searches keep the UID boundary observed when selecting
+the folder; newer arrivals are picked up on the next visit. A failed range
+invalidates that search instead of applying a partial filing or deletion result.

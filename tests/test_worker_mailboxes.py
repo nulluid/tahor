@@ -13,6 +13,7 @@ import backlog_worker as worker
 class MailboxTests(unittest.TestCase):
     def test_discovers_nested_special_large_and_escaped_names(self):
         conn = Mock()
+        conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         conn.list.return_value = ('OK', [
             b'(\\Noselect) "/" "Parent"',
             b'(\\HasNoChildren) "/" "INBOX"',
@@ -78,6 +79,7 @@ class MailboxTests(unittest.TestCase):
 
     def test_failed_fetch_advances_durable_cursor_and_closes_connection(self):
         conn = Mock()
+        conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         conn.select.return_value = ('OK', [])
         conn.response.return_value = ('UIDVALIDITY', [b'100'])
         def uid(command, *args):

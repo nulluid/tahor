@@ -22,6 +22,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 import config
+from mailbox_search import search_uids
 import tahor_db
 import mailbox_settings
 import reply_rules
@@ -73,7 +74,7 @@ SPECIAL_FLAGS = {"\\drafts", "\\sent", "\\trash", "\\junk", "\\all"}
 def eligible_uids(conn, criteria):
     candidates = set()
     for keyword in CATEGORY_KEYWORDS:
-        typ, data = conn.uid("SEARCH", None, *criteria, "KEYWORD", keyword, *PROTECTED, *CLASSIFIED)
+        typ, data = search_uids(conn, *criteria, "KEYWORD", keyword, *PROTECTED, *CLASSIFIED)
         if typ != "OK":
             raise RuntimeError("Filing search failed; retry the sweep")
         if data and data[0]:
@@ -126,7 +127,7 @@ def reconcile_filed_mail(conn, dry_run=False):
 
 def reply_filing_uids(conn, rule, criteria):
     # A stable rule ID alone can describe a match under an obsolete owner policy.
-    status, rows = conn.uid('SEARCH', None, *criteria, 'KEYWORD', reply_rules.keyword(rule),
+    status, rows = search_uids(conn, *criteria, 'KEYWORD', reply_rules.keyword(rule),
                             'KEYWORD', reply_rules.scan_keyword(rule), *PROTECTED, *CLASSIFIED)
     if status != 'OK':
         raise RuntimeError('Reply-rule filing search failed')

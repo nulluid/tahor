@@ -22,6 +22,7 @@ class RetentionSafetyTests(unittest.TestCase):
 
     def connection(self):
         conn = Mock()
+        conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         conn.capabilities = (b'IMAP4rev1', b'UIDPLUS')
         conn.select.return_value = ('OK', [])
         conn.uid.side_effect = [('OK', [b'42']), ('OK', []), ('OK', [])]
