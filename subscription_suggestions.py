@@ -21,7 +21,7 @@ ACTIONS = ('unsubscribe_block_marketing', 'unsubscribe', 'block_all', 'dismiss')
 CHUNK_SIZE = 10
 LEASE_SECONDS = 600
 SYSTEM_PROMPT = '''Recommend subscription choices for a human to review. You cannot execute actions.
-Return exactly {"recommendations":[{"candidate_id": integer,"action": string,
+Return exactly one JSON object: {"recommendations":[{"candidate_id": integer,"action": string,
 "confidence": number from 0 to 1,"reason": short explanation}]} with one entry
 per requested candidate, no other IDs or fields. Actions: unsubscribe_block_marketing
 (stop marketing, preserve transactions), unsubscribe (request removal without a
