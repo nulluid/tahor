@@ -14,7 +14,7 @@ spec.loader.exec_module(services)
 class SystemServiceTests(unittest.TestCase):
     def test_services_share_restricted_identity_and_writable_state(self):
         units = services.render('tahor',Path('/etc/tahor/config.env'),Path('/var/lib/tahor'),Path('/opt/tahor/venv/bin/python'),Path('/opt/tahor'))
-        self.assertEqual(len(units),11)
+        self.assertEqual(len(units),15)
         for name,text in units.items():
             if name.endswith('.service'):
                 for setting in ('User=tahor\n','NoNewPrivileges=true','CapabilityBoundingSet=\n','ProtectSystem=strict','ProtectHome=true','ReadWritePaths="/var/lib/tahor"','LimitCORE=0'):

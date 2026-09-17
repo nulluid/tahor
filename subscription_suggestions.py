@@ -306,3 +306,12 @@ def latest_recommendations():
         return list(found.values())
     finally:
         conn.close()
+
+
+def main():
+    """Process one bounded pass independently of slower rule/filing work."""
+    return 1 if run_pending_jobs(max_jobs=5) else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

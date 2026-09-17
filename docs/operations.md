@@ -544,3 +544,20 @@ stay in private instance data and are included in private recovery backups. The 
 policy is paid with free fallback. Email previews on both decision pages stay in
 a modal and preserve your scroll position and selections. Older review cards
 load missing sender/date details in bounded background passes with fair retries.
+
+
+### Subscription queue scheduling
+
+`tahor-subscriptions.timer` checks queued AI recommendations 15 seconds after its
+previous bounded pass finishes. `tahor-subscription-actions.timer` independently
+processes owner-confirmed bulk actions on the same interval. Neither waits for the
+five-minute decisions timer or a lengthy rule review. The services use the existing
+unprivileged account and private state boundary; the web app does not start privileged
+services. A recommendation pass handles up to five chunks of ten candidates, and an
+action pass handles up to ten saved choices. Provider cooldowns and ambiguous delivery
+guards still apply. Older decisions-loop processing remains as an upgrade fallback;
+durable job leases prevent duplicate recommendation calls or repeated delivery.
+
+Manual bounded passes use `python run.py subscriptions` and
+`python run.py subscription-actions`. Both service units have a five-minute execution
+limit; interrupted external deliveries remain uncertain rather than being resent.

@@ -163,3 +163,13 @@ def active_candidate(candidate_id):
         return bool(db.execute("SELECT 1 FROM subscription_actions WHERE candidate_id=? AND status IN ('queued','sending','applying','uncertain')", (candidate_id,)).fetchone())
     finally:
         db.close()
+
+
+def main():
+    """Process one bounded pass independently of slower rule/filing work."""
+    run_pending(limit=10)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

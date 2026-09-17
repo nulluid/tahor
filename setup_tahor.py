@@ -48,10 +48,12 @@ def write_units(directory, config, python):
         'tahor-retention': ('retention', ''),
         'tahor-healthcheck': ('status', '--check'),
         'tahor-decisions': ('decisions', ''),
+        'tahor-subscriptions': ('subscriptions', ''),
+        'tahor-subscription-actions': ('subscription-actions', ''),
         'tahor-notifications': ('notify', ''),
     }
     for name, (command, suffix) in commands.items():
-        oneshot = command in ('filing', 'retention', 'status', 'notify', 'decisions')
+        oneshot = command in ('filing', 'retention', 'status', 'notify', 'decisions', 'subscriptions', 'subscription-actions')
         text = f'''[Unit]
 Description={name}
 After=network-online.target
@@ -64,6 +66,8 @@ ExecStart={unit_quote(python)} {unit_quote(ROOT / "run.py")} --env {unit_quote(c
 UMask=0077
 NoNewPrivileges=true
 '''
+        if command in ('subscriptions', 'subscription-actions'):
+            text += 'TimeoutStartSec=300\n'
         if not oneshot:
             text += 'Restart=always\nRestartSec=30\n\n[Install]\nWantedBy=default.target\n'
         (directory / (name + '.service')).write_text(text)
@@ -74,6 +78,19 @@ Description=Schedule {name}
 [Timer]
 OnCalendar={schedule}
 Persistent=true
+
+[Install]
+WantedBy=timers.target
+''')
+
+    for name in ('tahor-subscriptions', 'tahor-subscription-actions'):
+        (directory / (name + '.timer')).write_text(f'''[Unit]
+Description=Process queued {name} work promptly
+
+[Timer]
+OnBootSec=15s
+OnUnitInactiveSec=15s
+AccuracySec=1s
 
 [Install]
 WantedBy=timers.target

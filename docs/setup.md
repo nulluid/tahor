@@ -219,6 +219,7 @@ When the previews match your intent:
 ```bash
 systemctl --user enable --now tahor-filing.timer tahor-retention.timer
 systemctl --user enable --now tahor-healthcheck.timer tahor-decisions.timer
+systemctl --user enable --now tahor-subscriptions.timer tahor-subscription-actions.timer
 systemctl --user list-timers 'tahor-*'
 ```
 
@@ -300,3 +301,8 @@ in `/etc/tahor/config.env`. Rejected authentication leaves that file unchanged.
 After saving, it restarts the web service to load the credential. If that restart
 fails, it reports that the credential was saved and prints the recovery command.
 Never enter the account password, authenticator seed, or app password in chat.
+
+Subscription recommendations and confirmed bulk actions use separate 15-second timers,
+so model generation does not wait for rule reviews or SMTP requests. Enable both
+new timers when upgrading an existing installation. Each pass is bounded; saved
+jobs resume through their existing lease and delivery-reconciliation guards.
