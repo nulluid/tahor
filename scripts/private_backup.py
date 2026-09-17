@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-NAMES = {'settings.json', 'decisions.db', 'prompt.txt', 'vendor_buckets.json', 'sieve.txt'}
+NAMES = {'settings.json', 'decisions.db', 'prompt.txt', 'vendor_buckets.json', 'sieve.txt', 'ai_routing_state.json'}
 REQUIRED = {'settings.json', 'decisions.db'}
 
 
@@ -93,7 +93,7 @@ def validate_snapshot(folder):
         data = read_file(path)
         if len(data) != metadata['bytes'] or hashlib.sha256(data).hexdigest() != metadata['sha256']:
             raise ValueError('Backup checksum mismatch')
-        if name in ('settings.json', 'vendor_buckets.json') and not isinstance(json.loads(data), dict):
+        if name in ('settings.json', 'vendor_buckets.json', 'ai_routing_state.json') and not isinstance(json.loads(data), dict):
             raise ValueError('Expected a JSON object')
         payloads[name] = data
     database_check(folder / 'decisions.db')
@@ -101,7 +101,7 @@ def validate_snapshot(folder):
 
 
 def validate_sources(sources):
-    if set(sources) != NAMES:
+    if set(sources) not in (NAMES, NAMES - {'ai_routing_state.json'}):
         raise ValueError('Invalid source path mapping')
     paths = {name: safe_path(path) for name, path in sources.items()}
     if len(set(paths.values())) != len(paths):
@@ -161,6 +161,8 @@ def restore(snapshot, sources, safety_destination, services_stopped=False):
         raise ValueError('Stop all Tahor services and acknowledge --services-stopped before restore')
     payloads = validate_snapshot(snapshot)  # Check every file before touching live state.
     sources = validate_sources(sources)
+    if not set(payloads).issubset(sources):
+        raise ValueError('Destination mapping lacks a backed-up state file')
     for name in payloads:
         if not sources[name].parent.is_dir():
             raise ValueError('Create destination directories with the correct service ownership first')
@@ -217,7 +219,8 @@ def main():
                'decisions.db': Path(os.environ.get('TAHOR_DB_PATH', ROOT / 'decisions.db')),
                'prompt.txt': Path(os.environ.get('PROMPT_PATH', data / 'prompt.txt')),
                'vendor_buckets.json': Path(os.environ.get('VENDOR_BUCKETS_PATH', data / 'vendor_buckets.json')),
-               'sieve.txt': data / 'sieve.txt'}
+               'sieve.txt': data / 'sieve.txt',
+               'ai_routing_state.json': Path(os.environ.get('TAHOR_DB_PATH', ROOT / 'decisions.db')).parent / 'ai_routing_state.json'}
     try:
         path = restore(args.restore, sources, args.destination, args.services_stopped) if args.restore else backup(sources, args.destination)
     except (ValueError, OSError, sqlite3.Error) as exc:

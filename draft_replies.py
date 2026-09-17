@@ -200,45 +200,12 @@ def _draft_reply_body(subject, sender, body_text, rule=None, verification=None, 
     raise ValueError('No verified reply was produced')
 
 
-def draft_reply_body(subject, sender, body_text, rule=None, verification=None):
-    primary = mailbox_settings.get_reply_model()
-    backup = mailbox_settings.get_reply_backup_model()
-    if primary == 'none':
-        raise ValueError('Reply drafting is disabled; select a private model in Settings')
-    primary_backend = mailbox_settings.REPLY_MODELS[primary]
-    cooling = reply_backend_recovery.cooling_down(primary, primary_backend)
-    if not cooling:
-        try:
-            result = _draft_reply_body(subject, sender, body_text, rule, verification, key=primary)
-        except (ReplyBackendError, urllib.error.URLError, TimeoutError, OSError) as error:
-            if isinstance(error, urllib.error.HTTPError):
-                try:
-                    error.close()
-                except Exception:
-                    pass
-            reply_backend_recovery.record_failure(primary, primary_backend)
-        else:
-            reply_backend_recovery.record_success(primary, primary_backend)
-            return result
-    if backup == 'none' or backup == primary:
-        raise ReplyBackendError('Reply provider is unavailable; retry after cooldown')
-    if backup not in mailbox_settings.free_reply_models():
-        raise ReplyBackendError('Reply fallback must be explicitly free')
-    backup_backend = mailbox_settings.REPLY_MODELS[backup]
-    if reply_backend_recovery.cooling_down(backup, backup_backend):
-        raise ReplyBackendError('Free reply provider is cooling down; retry remains pending')
-    try:
-        result = _draft_reply_body(subject, sender, body_text, rule, verification, key=backup)
-    except (ReplyBackendError, urllib.error.URLError, TimeoutError, OSError) as error:
-        if isinstance(error, urllib.error.HTTPError):
-            try:
-                error.close()
-            except Exception:
-                pass
-        reply_backend_recovery.record_failure(backup, backup_backend)
-        raise ReplyBackendError('Both reply providers are unavailable; retry remains pending') from None
-    reply_backend_recovery.record_success(backup, backup_backend)
-    return result
+def draft_reply_body(subject, sender, body_text, rule=None, verification=None, queue_size=1, work_id=None):
+    import ai_routing
+    return ai_routing.run('reply', mailbox_settings.REPLY_MODELS,
+        lambda key: _draft_reply_body(subject, sender, body_text, rule, verification, key=key),
+        queue_size=queue_size, work_id=work_id,
+        retryable=(ReplyBackendError, urllib.error.URLError, TimeoutError, OSError))
 
 
 def within_inbox_window(metadata, rule, now=None):
@@ -278,6 +245,8 @@ def append_draft(conn, in_reply_to, references, to_addr, subject, body_text, dra
 def _process_new_mail(conn):
     rules = reply_rules.get_rules()
     if not rules:
+        import ai_routing
+        ai_routing.reconcile_pending('reply', [])
         return []
     candidates = {}
     grace = mailbox_settings.get_inbox_grace_days()
@@ -295,7 +264,10 @@ def _process_new_mail(conn):
             raise RuntimeError('Reply search failed')
         for uid in (data[0].split() if data and data[0] else []):
             candidates.setdefault(uid, []).append(rule)
+    import ai_routing
+    ai_routing.reconcile_pending('reply', ['inbox:' + uid.decode() for uid in candidates])
     created = []
+    eligible = []
     # Prefer new mail; repeat passes are idempotent and bounded by the inbox-age window.
     for uid in sorted(candidates, key=int, reverse=True):
         try:
@@ -328,6 +300,15 @@ def _process_new_mail(conn):
                 store_checked(conn, uid, '+FLAGS.SILENT', '('+DRAFTED_KEYWORD+')')
                 continue
             subject = fetch_batch.decode_str(message.get('Subject', ''))
+            eligible.append((uid, sender, rule, recipient, message_id, references,
+                             draft_key, saved, subject, fetch_batch.extract_body_text(raw)))
+        except Exception:
+            print('Reply eligibility check pending; mailbox operation needs a retry.', flush=True)
+    # Estimate only work that passed sender, age, address and duplicate checks.
+    ai_routing.reconcile_pending('reply', ['inbox:' + row[0].decode() for row in eligible])
+    for queue_index, row in enumerate(eligible):
+        uid, sender, rule, recipient, message_id, references, draft_key, saved, subject, source_text = row
+        try:
             digest = hashlib.sha256((config.email_address().lower()+'\n'+draft_key).encode()).hexdigest()
             draft_id = f'<tahor-draft-{digest}@localhost>'
             revision = rule.get('revision')
@@ -355,7 +336,8 @@ def _process_new_mail(conn):
                     pending_context = json.dumps({'rule_id': rule['id'], 'rule_revision': revision})
                     tahor_db.prepare_reply_draft(message_id, draft_key, recipient, subject, '', pending_context)
                     saved = tahor_db.get_reply_draft_for_thread(draft_key)
-                body = draft_reply_body(subject, sender, fetch_batch.extract_body_text(raw), rule, verification=verification)
+                body = draft_reply_body(subject, sender, source_text, rule, verification=verification,
+                                        queue_size=len(eligible)-queue_index, work_id='inbox:' + uid.decode())
                 if not body:
                     raise ValueError('Empty reply')
                 context = json.dumps({'rule_id': rule['id'], 'rule_revision': revision, 'verified_reply': VERIFIED_REPLY_VERSION,

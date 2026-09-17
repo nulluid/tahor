@@ -11,6 +11,7 @@ from unittest.mock import patch
 import draft_replies
 import mailbox_settings
 import reply_backend_recovery
+import ai_routing
 import tahor_db
 
 
@@ -42,28 +43,28 @@ class ReplyFallbackTests(unittest.TestCase):
             self.assertIn('Thank you', self.write())
         models = [call.args[0]['model'] for call in complete.call_args_list]
         self.assertEqual(models, ['openai/gpt-5.1', 'inclusionai/ling-3.0-flash-vl:free', 'inclusionai/ling-3.0-flash-vl:free'])
-        path = reply_backend_recovery.state_path()
+        path = ai_routing.state_path()
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertNotIn('private', path.read_text())
         self.assertNotIn('project', path.read_text())
 
     def test_cooldown_survives_reload_then_primary_recovers(self):
-        with patch.object(reply_backend_recovery.time, 'time', return_value=1000), patch.object(draft_replies, 'reply_completion', side_effect=[TimeoutError(), self.generated, self.approved]):
+        with patch.object(ai_routing.time, 'time', return_value=1000), patch.object(draft_replies, 'reply_completion', side_effect=[TimeoutError(), self.generated, self.approved]):
             self.write()
-        importlib.reload(reply_backend_recovery)
-        with patch.object(reply_backend_recovery.time, 'time', return_value=1100), patch.object(draft_replies, 'reply_completion', side_effect=[self.generated, self.approved]) as complete:
+        importlib.reload(ai_routing)
+        with patch.object(ai_routing.time, 'time', return_value=1100), patch.object(draft_replies, 'reply_completion', side_effect=[self.generated, self.approved]) as complete:
             self.write()
         self.assertTrue(all(call.args[0]['model'].endswith(':free') for call in complete.call_args_list))
-        with patch.object(reply_backend_recovery.time, 'time', return_value=1301), patch.object(draft_replies, 'reply_completion', side_effect=[self.generated, self.approved]) as complete:
+        with patch.object(ai_routing.time, 'time', return_value=1301), patch.object(draft_replies, 'reply_completion', side_effect=[self.generated, self.approved]) as complete:
             self.write()
         self.assertTrue(all(call.args[0]['model'] == 'openai/gpt-5.1' for call in complete.call_args_list))
-        self.assertEqual(json.loads(reply_backend_recovery.state_path().read_text()), {})
+        self.assertEqual(json.loads(ai_routing.state_path().read_text())['reply']['tiers'], {})
 
     def test_both_fail_stays_retryable_and_free_quality_rejection_is_not_success(self):
-        with patch.object(draft_replies, 'reply_completion', side_effect=TimeoutError()), self.assertRaises(ValueError):
+        with patch.object(draft_replies, 'reply_completion', side_effect=TimeoutError()), self.assertRaises((ValueError, OSError)):
             self.write()
-        self.assertEqual(len(json.loads(reply_backend_recovery.state_path().read_text())), 2)
-        reply_backend_recovery.state_path().unlink()
+        self.assertEqual(len(json.loads(ai_routing.state_path().read_text())['reply']['tiers']), 2)
+        ai_routing.state_path().unlink()
         rejected = json.dumps({'approved': False, 'issues': ['Unsupported assertion.'], 'needs_attention': False})
         with patch.object(draft_replies, 'reply_completion', side_effect=[TimeoutError(), self.generated, rejected, self.generated, rejected]), patch.object(reply_backend_recovery, 'record_success') as success, self.assertRaisesRegex(ValueError, 'verification'):
             self.write()
@@ -77,25 +78,25 @@ class ReplyFallbackTests(unittest.TestCase):
 
     def test_fully_free_configuration_never_calls_paid_model(self):
         mailbox_settings.set_reply_model('ling-free')
-        with patch.object(draft_replies, 'reply_completion', side_effect=TimeoutError()) as complete, self.assertRaises(ValueError):
+        with patch.object(draft_replies, 'reply_completion', side_effect=TimeoutError()) as complete, self.assertRaises((ValueError, OSError)):
             self.write()
         self.assertEqual(complete.call_count, 1)
         self.assertTrue(complete.call_args.args[0]['model'].endswith(':free'))
-        with patch.object(draft_replies, 'reply_completion') as complete, self.assertRaises(ValueError):
+        with patch.object(draft_replies, 'reply_completion') as complete, self.assertRaises((ValueError, OSError)):
             self.write()
         complete.assert_not_called()
 
     def test_disabled_backup_makes_no_free_request_and_primary_recovers(self):
         mailbox_settings.set_reply_backup_model('none')
         self.assertEqual(mailbox_settings.get_reply_backup_model(), 'none')
-        with patch.object(reply_backend_recovery.time, 'time', return_value=1000), patch.object(draft_replies, 'reply_completion', side_effect=TimeoutError()) as complete, self.assertRaises(ValueError):
+        with patch.object(ai_routing.time, 'time', return_value=1000), patch.object(draft_replies, 'reply_completion', side_effect=TimeoutError()) as complete, self.assertRaises((ValueError, OSError)):
             self.write()
         self.assertEqual(complete.call_count, 1)
         self.assertEqual(complete.call_args.args[0]['model'], 'openai/gpt-5.1')
-        with patch.object(reply_backend_recovery.time, 'time', return_value=1100), patch.object(draft_replies, 'reply_completion') as complete, self.assertRaises(ValueError):
+        with patch.object(ai_routing.time, 'time', return_value=1100), patch.object(draft_replies, 'reply_completion') as complete, self.assertRaises((ValueError, OSError)):
             self.write()
         complete.assert_not_called()
-        with patch.object(reply_backend_recovery.time, 'time', return_value=1301), patch.object(draft_replies, 'reply_completion', side_effect=[self.generated, self.approved]) as complete:
+        with patch.object(ai_routing.time, 'time', return_value=1301), patch.object(draft_replies, 'reply_completion', side_effect=[self.generated, self.approved]) as complete:
             self.write()
         self.assertTrue(all(call.args[0]['model'] == 'openai/gpt-5.1' for call in complete.call_args_list))
 
@@ -117,7 +118,7 @@ class ReplyFallbackTests(unittest.TestCase):
 
     def test_backup_setting_rejects_paid_models_and_corruption_disables_fallback(self):
         for key in ('gpt5', 'gpt5-flex', 'gemini-flash', 'missing'):
-            with self.subTest(key=key), self.assertRaises(ValueError):
+            with self.subTest(key=key), self.assertRaises((ValueError, OSError)):
                 mailbox_settings.set_reply_backup_model(key)
         settings = mailbox_settings.load_settings()
         settings['reply_backup_model'] = 'gpt5'

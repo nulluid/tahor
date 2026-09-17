@@ -35,6 +35,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -91,8 +92,7 @@ null and explain what script behavior would need to change.
 """
 
 
-def rule_model_call(user_content):
-    selected = mailbox_settings.get_rule_model()
+def _rule_model_call(user_content, selected):
     if selected == "none":
         raise ValueError("Rule drafting is disabled; select a private model in Settings")
     backend = mailbox_settings.RULE_MODELS[selected]
@@ -125,6 +125,19 @@ def rule_model_call(user_content):
             content = content[4:]
         content = content.strip()
     return json.loads(content)
+
+
+def rule_model_call(user_content, queue_size=1, work_id=None, validate=None):
+    import ai_routing
+    def generate(key):
+        proposal = _rule_model_call(user_content, key)
+        validate_rule_proposal(proposal)
+        if validate is not None:
+            validate(proposal)
+        return proposal
+    return ai_routing.run('rule', mailbox_settings.RULE_MODELS,
+        generate, queue_size=queue_size, work_id=work_id,
+        retryable=(urllib.error.URLError, TimeoutError, OSError, RuntimeError))
 
 
 def git(*args):
@@ -249,6 +262,20 @@ def require_rule_approval(row, resolution, context, result, buckets, prompt, ins
     raise ValueError('Proposal ready: review the exact changes and approve them on the decisions page')
 
 
+def pending_ai_rule_ids(database):
+    ids = []
+    for row in database.execute("SELECT id,context FROM decisions WHERE kind='free_text_rule' AND status IN ('pending','resolved') AND resolution IS NOT NULL"):
+        try:
+            context = json.loads(row['context'] or '{}')
+        except (ValueError, TypeError):
+            context = {}
+        if not isinstance(context, dict):
+            context = {}
+        if not context.get('applied') and not context.get('rule_proposal') and not context.get('manual_code_required'):
+            ids.append(row['id'])
+    return ids
+
+
 def apply_free_text_rule(row, resolution):
     text = resolution.get("text", "").strip()
     if not text:
@@ -284,7 +311,14 @@ def apply_free_text_rule(row, resolution):
             if not retry_safe:
                 raise ValueError('Rules changed since this preview; reject it and submit a fresh instruction')
     else:
-        result = rule_model_call(user_content)
+        database = tahor_db.get_db()
+        try:
+            queued = len(pending_ai_rule_ids(database))
+        finally:
+            database.close()
+        result = rule_model_call(user_content, queue_size=max(1, queued), work_id=row["id"],
+            validate=lambda proposal: validate_explicit_sender_target(text, proposal['sender_rule'])
+                if proposal.get('kind') == 'sender_rule' else None)
         validate_rule_proposal(result)
     kind = result.get("kind")
 
@@ -300,6 +334,13 @@ def apply_free_text_rule(row, resolution):
         if heading not in existing:
             atomic_write(flag_path, existing + f"{heading} {text}\n\n{result.get('explanation')}\n\n")
         commit_and_push_data("record rule requiring implementation")
+        context['manual_code_required'] = True
+        database = tahor_db.get_db()
+        try:
+            with database:
+                database.execute("UPDATE decisions SET context=?,status='pending' WHERE id=?", (json.dumps(context), row['id']))
+        finally:
+            database.close()
         raise ValueError(f"This rule requires a code change and has not been applied: {result.get('explanation')}")
 
     if kind != "file_edit":
@@ -369,18 +410,22 @@ def apply_one(decision_id):
 
 
 def main():
+    import ai_routing
     conn = tahor_db.get_db()
     try:
-        ids = [row["id"] for row in conn.execute("SELECT id FROM decisions WHERE status='resolved' AND resolution IS NOT NULL")]
+        pending_ids = pending_ai_rule_ids(conn)
+        ids = list(dict.fromkeys([row['id'] for row in conn.execute("SELECT id FROM decisions WHERE status='resolved' AND resolution IS NOT NULL")] + pending_ids))
+        ai_routing.reconcile_pending('rule', pending_ids)
     finally:
         conn.close()
     failures = 0
     for decision_id in ids:
         try:
-            print(f"{decision_id}: {apply_one(decision_id)}")
+            apply_one(decision_id)
+            print(f"{decision_id}: decision processed")
         except Exception as exc:
             failures += 1
-            print(f"{decision_id}: could not apply: {exc}", file=sys.stderr)
+            print(f"{decision_id}: could not apply ({type(exc).__name__}); work remains pending", file=sys.stderr)
     if failures:
         raise SystemExit(1)
 

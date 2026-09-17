@@ -69,7 +69,7 @@ class ResponseBoundTests(unittest.TestCase):
                 rule_apply.urllib.request, 'urlopen', return_value=response), patch.object(
                 rule_apply.time, 'monotonic', side_effect=[0, 1, 91]):
             with self.assertRaisesRegex(TimeoutError, '^Model response deadline exceeded$'):
-                rule_apply.rule_model_call('Synthetic private directions')
+                rule_apply._rule_model_call('Synthetic private directions', 'gpt5')
         response.read.assert_not_called()
         response.__exit__.assert_called_once()
 
@@ -79,5 +79,5 @@ class ResponseBoundTests(unittest.TestCase):
                 rule_apply.mailbox_settings, 'get_rule_model', return_value='gpt5'), patch.object(
                 rule_apply.urllib.request, 'urlopen', return_value=response):
             with self.assertRaisesRegex(ValueError, '^Model response exceeds byte limit$'):
-                rule_apply.rule_model_call('Synthetic private directions')
+                rule_apply._rule_model_call('Synthetic private directions', 'gpt5')
         self.assertTrue(response.closed)

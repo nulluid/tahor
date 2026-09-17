@@ -26,6 +26,7 @@ class PrivateBackupTests(unittest.TestCase):
         self.sources['vendor_buckets.json'].write_text('{"example.org":"Filed/Example"}')
         self.sources['prompt.txt'].write_text('Private prompt')
         self.sources['sieve.txt'].write_text('# Private rules')
+        self.sources['ai_routing_state.json'].write_text(json.dumps({'reply': {'failure_since': 1000, 'tiers': {'paid': {'retry_at': 1300}}}}))
         with closing(sqlite3.connect(str(self.sources['decisions.db']), isolation_level=None)) as db:
             db.execute('CREATE TABLE decisions (value TEXT)')
             db.execute('INSERT INTO decisions VALUES (?)', ('private decision',))
@@ -36,15 +37,18 @@ class PrivateBackupTests(unittest.TestCase):
         snapshot = module.backup(self.sources, self.destination)
         original = self.sources['settings.json'].read_bytes()
         self.sources['settings.json'].write_text('{"changed":true}')
+        self.sources['ai_routing_state.json'].write_text('{}')
         with closing(sqlite3.connect(str(self.sources['decisions.db']), isolation_level=None)) as db:
             db.execute('DELETE FROM decisions')
         safety = module.restore(snapshot, self.sources, self.destination, services_stopped=True)
         self.assertEqual(self.sources['settings.json'].read_bytes(), original)
+        self.assertEqual(json.loads(self.sources['ai_routing_state.json'].read_text())['reply']['failure_since'], 1000)
         self.assertEqual(json.loads((safety / 'settings.json').read_text()), {'changed': True})
         with closing(sqlite3.connect(str(self.sources['decisions.db']), isolation_level=None)) as db:
             self.assertEqual(db.execute('SELECT value FROM decisions').fetchall(), [('private decision',)])
         self.assertEqual((self.state / 'config.env').read_text(), 'SECRET=never-copy')
         self.assertFalse((snapshot / 'config.env').exists())
+        self.assertEqual(json.loads((snapshot / 'ai_routing_state.json').read_text())['reply']['failure_since'], 1000)
         self.assertEqual(snapshot.stat().st_mode & 0o777, 0o700)
         self.assertTrue(all(p.stat().st_mode & 0o777 == 0o600 for p in snapshot.iterdir()))
 
@@ -124,7 +128,9 @@ class PrivateBackupTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         original = self.sources['settings.json'].read_bytes()
         self.sources['settings.json'].write_text('{"changed":true}')
+        self.sources['ai_routing_state.json'].write_text('{}')
         result = subprocess.run(command + arguments + ['--restore', str(snapshot), '--services-stopped'], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Pre-restore safety snapshot:', result.stderr)
         self.assertEqual(self.sources['settings.json'].read_bytes(), original)
+        self.assertEqual(json.loads(self.sources['ai_routing_state.json'].read_text())['reply']['failure_since'], 1000)

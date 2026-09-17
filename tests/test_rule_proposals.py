@@ -144,3 +144,19 @@ class RuleProposalTests(AppTestCase):
         self.assertIn('Action: block_marketing',page)
         self.assertIn('Attempt unsubscribe: Yes',page)
         self.assertNotIn('Misleading unrelated diff',page)
+
+    def test_timer_retries_failed_generation_but_not_proposals_awaiting_approval(self):
+        ready, _ = self.propose('Change policy.', {'kind': 'file_edit', 'prompt_txt': 'Proposed policy.'})
+        with patch.object(self.module.apply_decisions, 'rule_model_call', side_effect=TimeoutError()):
+            self.post('/add-rule', rule_text='Another policy.')
+        database = self.module.tahor_db.get_db()
+        try:
+            ids = self.module.apply_decisions.pending_ai_rule_ids(database)
+        finally:
+            database.close()
+        self.assertEqual(len(ids), 1)
+        self.assertNotIn(ready, ids)
+        import ai_routing
+        with patch.object(ai_routing, 'state_path', return_value=self.root/'routing.json'), patch.object(self.module.apply_decisions, 'apply_one', return_value='private outcome') as apply:
+            self.module.apply_decisions.main()
+        apply.assert_called_once_with(ids[0])

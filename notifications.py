@@ -25,6 +25,9 @@ import tahor_db
 CHECK_INTERVAL = 900
 PROGRESS_TIMEOUT = 3600
 PROBLEM_LABELS = {
+    'ai_classification': 'Some email classification work has remained pending for at least 30 minutes.',
+    'ai_reply': 'Some reply drafting work has remained pending for at least 30 minutes.',
+    'ai_rule': 'Some rule drafting work has remained pending for at least 30 minutes.',
     'worker_missing': 'The email worker has not published a readable status.',
     'worker_stale': 'The email worker has not reported activity for over an hour.',
     'worker_stalled': 'The email worker has not completed a batch for over an hour.',
@@ -67,6 +70,8 @@ def inspect_health(state, now):
             problems.append('connector_auth')
         elif connector.get('state') in ('protocol_changed', 'rule_conflict', 'invalid_request', 'stale'):
             problems.append('connector_stopped')
+    import ai_routing
+    problems.extend(ai_routing.persistent_problems(now))
     healthy = 'Caught up; watching for new mail.' if snapshot.get('state') == 'idle' and not problems else ('Processing mail normally.' if not problems else 'Administrator attention may be needed.')
     return problems, healthy
 
@@ -210,10 +215,10 @@ def run(now=None):
                 row = previous.get(problem, {'count': 0, 'incident': uuid.uuid4().hex})
                 row['count'] += 1
                 state['problems'][problem] = row
-                if health and row['count'] >= 3:
+                if health and (row['count'] >= 3 or problem.startswith('ai_')):
                     event_id = 'health:'+problem+':'+row['incident']
                     state['events'].setdefault(event_id, dict(kind='health', status='pending', created_at=now,
-                        subject='Tahor needs attention', body=PROBLEM_LABELS[problem]+'\n\nThis condition persisted across three checks. Ordinary automatic recovery continues. Check Tahor Settings and service status.\n'))
+                        subject='Tahor needs attention', body=PROBLEM_LABELS[problem]+'\n\nOrdinary automatic recovery continues. Check Tahor Settings and service status.\n'))
             state.update(last_check=now, health_summary=summary)
         if digest:
             zone = ZoneInfo(os.environ.get('TAHOR_NOTIFY_TIMEZONE', 'UTC'))

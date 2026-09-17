@@ -26,7 +26,7 @@ class GrokRuleRouteTests(unittest.TestCase):
         with patch.object(mailbox_settings, 'get_rule_model', return_value='grok-4.6'), patch.dict(
                 os.environ, {'OPENROUTER_API_KEY': 'synthetic'}), patch.object(
                 apply.urllib.request, 'urlopen', return_value=response) as network:
-            result = apply.rule_model_call('Synthetic owner instructions.')
+            result = apply._rule_model_call('Synthetic owner instructions.', 'grok-4.6')
         self.assertEqual(result, expected)
         payload = json.loads(network.call_args.args[0].data)
         self.assertEqual(payload['model'], 'x-ai/grok-4.6')

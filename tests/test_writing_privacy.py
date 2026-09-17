@@ -34,7 +34,7 @@ class WritingPrivacyTests(unittest.TestCase):
         response.__enter__.return_value = response
         response.read1.side_effect = [json.dumps({'choices':[{'message':{'content':'{}'}}]}).encode(), b'']
         with patch.object(mailbox_settings, 'get_rule_model', return_value='gpt5'), patch.dict(apply.os.environ, {'OPENROUTER_API_KEY':'synthetic'}), patch.object(apply.urllib.request, 'urlopen', return_value=response) as network:
-            apply.rule_model_call('synthetic directions')
+            apply._rule_model_call('synthetic directions', 'gpt5')
         self.assertEqual(json.loads(network.call_args.args[0].data)['provider'], {'zdr':True, 'data_collection':'deny'})
 
     def test_retired_or_missing_selections_disable_without_paid_substitution(self):

@@ -22,6 +22,10 @@ class NotificationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name)/'notifications.json'
+        import ai_routing
+        routing = patch.object(ai_routing, 'state_path', return_value=Path(self.temp.name)/'ai-routing.json')
+        routing.start()
+        self.addCleanup(routing.stop)
         self.environment = patch.dict(os.environ, {'TAHOR_NOTIFICATION_STATE': str(self.path), 'TAHOR_NOTIFY_HEALTH': '1', 'TAHOR_NOTIFY_DIGEST': '0', 'TAHOR_NOTIFY_TIMEZONE': 'UTC', 'TAHOR_NOTIFY_HOUR': '9', 'FASTMAIL_EMAIL': 'owner@example.com', 'FASTMAIL_APP_PASSWORD': 'private-app-password'})
         self.environment.start()
         self.addCleanup(self.environment.stop)
@@ -179,6 +183,21 @@ class NotificationTests(unittest.TestCase):
                 database.execute("INSERT INTO decisions(kind,summary,status,created_at) VALUES ('review','PRIVATE','pending','2026-09-17')")
             database.close()
             self.assertEqual(notifications.digest_counts(), (1, 0, 0))
+
+
+    def test_persistent_ai_failure_alert_does_not_wait_three_more_checks(self):
+        import ai_routing
+        self.snapshot.return_value = {'state': 'idle', 'updated_at': datetime.fromtimestamp(self.now, timezone.utc).isoformat()}
+        with patch.object(ai_routing, 'persistent_problems', return_value=['ai_rule']):
+            self.assertEqual(notifications.run(self.now), 1)
+            self.assertEqual(notifications.run(self.now + 900), 0)
+        self.client.append.assert_called_once()
+        body = next(iter(self.notices.values())).decode()
+        self.assertIn('30 minutes', body)
+        with patch.object(ai_routing, 'persistent_problems', return_value=[]):
+            notifications.run(self.now + 1800)
+        state = json.loads(self.path.read_text())
+        self.assertNotIn('ai_rule', state['problems'])
 
 
 class NotificationServiceTests(unittest.TestCase):

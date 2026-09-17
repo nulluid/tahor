@@ -49,6 +49,20 @@ class DraftTests(unittest.TestCase):
             return 'OK', [(self.metadata, self.raw)]
         return 'OK', []
 
+    def test_queue_estimate_excludes_ineligible_search_hits(self):
+        def command(name, *args):
+            if name == 'SEARCH':
+                return 'OK', [b'42 43']
+            if name == 'FETCH' and args[0] == b'43':
+                return 'OK', [(self.metadata, self.raw.replace(b'person@example.com', b'excluded@example.com'))]
+            return self.command(name, *args)
+        self.conn.uid.side_effect = command
+        self.conn.append.return_value = ('OK', [])
+        with patch.object(draft_replies, 'draft_exists', return_value=False), patch.object(draft_replies, 'draft_reply_body', return_value='Thank you.') as generate:
+            self.assertEqual(len(draft_replies.process_new_mail(self.conn)), 1)
+            generate.assert_called_once()
+            self.assertEqual(generate.call_args.kwargs['queue_size'], 1)
+
     def test_append_failure_keeps_original_retryable_and_reuses_generated_body(self):
         with patch.object(draft_replies, 'draft_exists', return_value=False), patch.object(draft_replies, 'draft_reply_body', return_value='Thursday works.') as generate:
             self.conn.append.return_value = ('NO', [])
@@ -132,13 +146,13 @@ class DraftTests(unittest.TestCase):
             json.dumps({'choices': [{'message': {'content': json.dumps({'sentences': ['Thank you for the update.', 'I appreciate the volunteer report.', 'May your week go well.']})}}]}).encode(), b'',
             json.dumps({'choices': [{'message': {'content': json.dumps({'approved': True, 'issues': [], 'needs_attention': False})}}]}).encode(), b'']
         with patch.dict(draft_replies.os.environ, {'OPENROUTER_API_KEY': 'test-only'}), patch.object(draft_replies.mailbox_settings, 'get_reply_model', return_value='ling-free'), patch.object(draft_replies.urllib.request, 'urlopen', return_value=response) as request:
-            body = draft_replies.draft_reply_body('Update', 'person@example.com', 'Here is the latest volunteer report.', self.rule)
+            body = draft_replies._draft_reply_body('Update', 'person@example.com', 'Here is the latest volunteer report.', self.rule)
         self.assertEqual(request.call_count, 3)
         self.assertEqual(body, 'Thank you for the update. I appreciate the volunteer report. May your week go well.\n\nBest,\nExample Owner')
 
     def prose_test(self, responses, verification=None):
         with patch.dict(draft_replies.os.environ, {'OPENROUTER_API_KEY': 'test-only'}), patch.object(draft_replies.mailbox_settings, 'get_reply_model', return_value='ling-free'), patch.object(draft_replies, 'reply_completion', side_effect=[json.dumps(r) for r in responses]) as completion:
-            body = draft_replies.draft_reply_body('A question', 'person@example.com', 'Can you attend? Please confirm your availability.', self.rule, verification=verification)
+            body = draft_replies._draft_reply_body('A question', 'person@example.com', 'Can you attend? Please confirm your availability.', self.rule, verification=verification)
         return body, completion
 
     def test_prose_rejection_regenerates_once_with_critique_then_verifies(self):
@@ -245,7 +259,7 @@ class DraftTests(unittest.TestCase):
             json.dumps({'service_tier': 'flex', 'choices': [{'message': {'content': json.dumps(value)}}]}).encode()
             if index % 2 == 0 else b'' for index, value in enumerate([generated, None, verdict, None])]
         with patch.dict(draft_replies.os.environ, {'OPENROUTER_API_KEY': 'test-only'}), patch.object(draft_replies.mailbox_settings, 'get_reply_model', return_value='gpt5-flex'), patch.object(draft_replies.urllib.request, 'urlopen', return_value=response) as request:
-            body = draft_replies.draft_reply_body('Update', 'person@example.com', 'A community update.', self.rule)
+            body = draft_replies._draft_reply_body('Update', 'person@example.com', 'A community update.', self.rule, key='gpt5-flex')
         self.assertIn('Thank you', body)
         self.assertEqual(request.call_count, 2)
         for call in request.call_args_list:
