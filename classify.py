@@ -142,6 +142,10 @@ def classify_one(url, headers, model, system_prompt, record, retries=3):
         "temperature": 0.1,
         "max_tokens": 1024,
     }
+    if url == BACKENDS["openrouter-paid"]["url"] and not model.endswith(":free"):
+        # Enforce endpoint policy on every paid request, including retries;
+        # never rely on a provider's current catalog membership alone.
+        payload["provider"] = {"zdr": True, "data_collection": "deny"}
     data = json.dumps(payload).encode("utf-8")
     last_err = None
     for attempt in range(retries + 1):

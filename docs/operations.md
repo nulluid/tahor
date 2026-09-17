@@ -198,6 +198,13 @@ Model availability changes: check your provider’s catalog if a selected model
 stops responding. Paid estimates are not spending limits. Configure a provider
 budget separately if you need one.
 
+Paid OpenRouter classification requests require zero data retention and deny
+provider data collection. These routing filters preserve the selected model and
+classification prompt; an unavailable compliant endpoint returns an error rather
+than relaxing the paid request's privacy policy. Free routes have separate terms
+and are not covered by this paid-route restriction. See
+[OpenRouter's endpoint privacy controls](https://openrouter.ai/docs/guides/features/zdr).
+
 ## Retention and filing
 
 | Setting | Default |
