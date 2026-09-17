@@ -62,6 +62,18 @@ DEFAULT_RULE_MODEL = "nemotron-free"
 # a separate model choice from RULE_MODELS, defaulting to a free option so
 # a zero-cost setup is possible out of the box.
 REPLY_MODELS = {
+    "grok-4.6": {
+        "label": "Grok 4.6 (via OpenRouter) — premium reply writing",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "model": "x-ai/grok-4.6",
+        "auth_env": "OPENROUTER_API_KEY",
+        "request_options": {
+            "reasoning": {"effort": "low"},
+            "max_tokens": 2048,
+            "response_format": {"type": "json_object"},
+            "provider": {"only": ["xai/zdr"], "allow_fallbacks": False},
+        },
+    },
     "gemini-flash": {
         "label": "Gemini 3.6 Flash — free, solid everyday English",
         "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
@@ -73,6 +85,7 @@ REPLY_MODELS = {
         "url": "https://openrouter.ai/api/v1/chat/completions",
         "model": "nvidia/nemotron-3-super-120b-a12b:free",
         "auth_env": "OPENROUTER_API_KEY",
+        "request_options": {"reasoning": {"enabled": False}},
     },
     "euryale-70b": {
         "label": "Euryale 70B (via OpenRouter) — prose quality, cheap at low volume",
