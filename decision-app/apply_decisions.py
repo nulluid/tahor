@@ -185,6 +185,9 @@ def apply_vendor_mapping(row, resolution):
         raise ValueError('Shared delivery domain needs an exact sender; refresh this routing request')
 
     buckets = json.loads(VENDOR_BUCKETS_PATH.read_text()) if VENDOR_BUCKETS_PATH.exists() else {}
+    if (resolution.get('automatic_vendor_mapping') is True
+            and buckets.get(sender_label.lower()) not in (context.get('automatic_mapping_previous'), [bucket, vendor_name])):
+        raise ValueError('An existing sender mapping changed; review the current destination')
     buckets[sender_label.lower()] = [bucket, vendor_name]
     atomic_write(VENDOR_BUCKETS_PATH, json.dumps(buckets, indent=2) + "\n")
     return f"mapped {sender_label} -> {bucket}/{vendor_name}"
@@ -536,7 +539,9 @@ def main():
         except Exception as exc:
             failures += 1
             print(f"{decision_id}: could not apply ({type(exc).__name__}); work remains pending", file=sys.stderr)
-    failures += vendor_suggestions.suggest_pending(rule_model_call)
+    import vendor_inventory
+    failures += vendor_inventory.enrich_pending()
+    failures += vendor_suggestions.suggest_pending(rule_model_call, apply_decision=apply_one)
     if failures:
         raise SystemExit(1)
 

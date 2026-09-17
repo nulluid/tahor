@@ -10,6 +10,10 @@ from unittest.mock import patch
 import vendor_suggestions as suggestions
 
 
+def evidence(**changes):
+    return dict(confidence=0.96, merchant_identified=True, samples_consistent=True, routine_transaction=True, shared_sender=False, **changes)
+
+
 class VendorSuggestionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -21,6 +25,7 @@ class VendorSuggestionTests(unittest.TestCase):
         self.start(patch.object(suggestions.tahor_db, 'get_db', side_effect=self.db))
         self.enabled = self.start(patch.object(suggestions.mailbox_settings, 'is_ai_enabled', return_value=True))
         self.start(patch.object(suggestions.config, 'vendor_buckets', return_value={'other.example': ['Shopping/Marketplace', 'Marketplace']}))
+        self.record = self.start(patch.object(suggestions.ai_routing, 'record_result'))
         self.now = self.start(patch.object(suggestions.time, 'time', return_value=1000))
 
     def start(self, p):
@@ -46,7 +51,7 @@ class VendorSuggestionTests(unittest.TestCase):
         self.assertIn('untrusted', prompt)
         self.assertIn('marketplace', prompt.lower())
         proposal = {'kind': 'file_edit', 'vendor_buckets_json': json.dumps({data['exact_sender']: {
-            'bucket': 'Shopping/Marketplace', 'vendor': 'General Marketplace', 'action': 'keep', 'reason': 'Specific purchase receipt'}})}
+            'bucket': 'Shopping/Marketplace', 'vendor': 'General Marketplace', 'action': 'keep', 'reason': 'Specific purchase receipt', **evidence()}})}
         kwargs['validate'](proposal)
         return proposal
 
@@ -67,7 +72,7 @@ class VendorSuggestionTests(unittest.TestCase):
         calls = []
         def model(prompt, **kwargs):
             calls.append(kwargs['work_id']); return self.model(prompt, **kwargs)
-        suggestions.suggest_pending(model, limit=99)
+        suggestions.suggest_pending(model)
         self.assertEqual(len(calls), 3)
         self.enabled.return_value = False
         suggestions.suggest_pending(model)
@@ -96,7 +101,7 @@ class VendorSuggestionTests(unittest.TestCase):
 
     def test_rejects_prompt_mutations_scope_broadening_and_invalid_targets(self):
         key = 'store1@delivery.example'
-        valid = {'bucket': 'Shopping', 'vendor': 'Store', 'action': 'review', 'reason': 'Ambiguous'}
+        valid = {'bucket': 'Shopping', 'vendor': 'Store', 'action': 'review', 'reason': 'Ambiguous', **evidence()}
         cases = [dict(kind='file_edit', vendor_buckets_json=json.dumps({'delivery.example': valid})),
                  dict(kind='file_edit', vendor_buckets_json=json.dumps({key: valid}), prompt_txt='change rules'),
                  dict(kind='sender_rule', sender_rule={'domain': 'delivery.example'}),
@@ -111,7 +116,7 @@ class VendorSuggestionTests(unittest.TestCase):
         key = 'store1@delivery.example'
         proposal = {'kind': 'file_edit', 'vendor_buckets_json': json.dumps({key: {
             'bucket': 'Shopping/Marketplace', 'vendor': 'General Marketplace',
-            'action': 'keep', 'reason': 'Specific receipt'}})}
+            'action': 'keep', 'reason': 'Specific receipt', **evidence()}})}
         response = io.BytesIO(json.dumps({'choices': [{'message': {'content': json.dumps(proposal)}}]}).encode())
         def route(task, registry, generate, **kwargs):
             self.assertEqual(task, 'rule')
@@ -127,6 +132,73 @@ class VendorSuggestionTests(unittest.TestCase):
         self.assertTrue(payload['provider']['zdr'])
         self.assertEqual(payload['provider']['data_collection'], 'deny')
         self.assertIn('xai/zdr', payload['provider']['only'])
+
+    def test_confident_routine_mapping_applies_exact_sender_without_owner_click(self):
+        from test_grok_rule_route import apply
+        self.add()
+        path = Path(self.tmp.name) / 'vendor_buckets.json'
+        path.write_text('{"existing.example":["Shopping","Existing"]}')
+        def apply_decision(identifier):
+            row = self.get(identifier)
+            choice = json.loads(row['resolution'])
+            self.assertEqual(choice['action'], 'map')
+            self.assertTrue(choice['automatic_vendor_mapping'])
+            with patch.object(apply, 'VENDOR_BUCKETS_PATH', path):
+                apply.apply_vendor_mapping(dict(context=row['context'], summary='Vendor: delivery.example'), choice)
+        suggestions.suggest_pending(self.model, apply_decision=apply_decision)
+        self.assertEqual(self.get()['status'], 'resolved')
+        self.assertEqual(json.loads(path.read_text()), {'existing.example': ['Shopping', 'Existing'],
+            'store1@delivery.example': ['Shopping/Marketplace', 'General Marketplace']})
+        self.record.assert_called_with('rule', 'vendor:1', True)
+
+    def test_uncertain_nonroutine_conflicting_shared_sender_or_trash_never_autoapplies(self):
+        for index, change in enumerate([{'confidence': 0.89}, {'action': 'trash'}, {'action': 'review'},
+                {'merchant_identified': False}, {'samples_consistent': False},
+                {'routine_transaction': False}, {'shared_sender': True}], 1):
+            self.add(index)
+            def model(prompt, **kwargs):
+                proposal = self.model(prompt, **kwargs)
+                mapping = json.loads(proposal['vendor_buckets_json'])
+                next(iter(mapping.values())).update(change)
+                proposal['vendor_buckets_json'] = json.dumps(mapping)
+                return proposal
+            with patch.object(suggestions, '_apply') as apply:
+                suggestions.suggest_pending(model, apply_decision=lambda identifier: None)
+                apply.assert_not_called()
+            self.assertEqual(self.get(index)['status'], 'pending')
+            self.assertIsNone(self.get(index)['resolution'])
+
+    def test_existing_exact_mapping_is_reused_without_a_model_request(self):
+        self.add()
+        with patch.object(suggestions.config, 'vendor_buckets', return_value={'store1@delivery.example': ['Shopping', 'Existing Store']}), \
+             patch.object(suggestions, '_validated') as validate:
+            suggestions.suggest_pending(self.model, apply_decision=lambda identifier: None)
+            validate.assert_not_called()
+        self.assertEqual(json.loads(self.get()['resolution'])['vendor_name'], 'Existing Store')
+
+    def test_nonfinite_boolean_or_out_of_range_confidence_is_rejected(self):
+        key = 'store1@delivery.example'
+        for confidence in (True, float('nan'), -1, 1.1):
+            value = dict(bucket='Shopping', vendor='Store', action='keep', reason='Receipt', **evidence())
+            value['confidence'] = confidence
+            with self.subTest(confidence=confidence), self.assertRaises(ValueError):
+                suggestions._validated({'kind': 'file_edit', 'vendor_buckets_json': json.dumps({key: value})}, key)
+
+    def test_autoapply_failure_remains_visible_and_retries_without_another_model_call(self):
+        self.add()
+        def fail(identifier): raise OSError('configuration temporarily unavailable')
+        self.assertEqual(suggestions.suggest_pending(self.model, apply_decision=fail), 1)
+        row = self.get(); self.assertEqual(row['status'], 'pending')
+        self.assertTrue(json.loads(row['resolution'])['automatic_vendor_mapping'])
+        with self.db() as conn:
+            self.assertEqual(suggestions.pending_work_ids(conn), ['vendor:1'])
+        def recover(identifier):
+            with self.db() as conn:
+                conn.execute("UPDATE decisions SET status='resolved' WHERE id=?", (identifier,))
+        with patch.object(suggestions, '_validated') as validate:
+            self.assertEqual(suggestions.suggest_pending(self.model, apply_decision=recover), 0)
+            validate.assert_not_called()
+        self.assertEqual(self.get()['status'], 'resolved')
 
     def test_manual_metadata_refresh_during_generation_preserves_newer_context(self):
         self.add()

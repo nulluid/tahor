@@ -252,11 +252,11 @@ def queue_vendor_mapping(sender_domain, metadata=None):
     sender = str(metadata.get('sender_email') or '').strip().lower()
     if sender and sender.count('@') == 1 and not any(c.isspace() or ord(c) < 32 for c in sender):
         values.update(sender_email=sender, routing_key=sender)
-    for key in ('display_name', 'subject', 'date', 'received_at', 'suggested_bucket', 'suggested_vendor'):
+    for key in ('display_name', 'subject', 'date', 'received_at', 'excerpt', 'suggested_bucket', 'suggested_vendor'):
         value = metadata.get(key)
         if isinstance(value, str) and value.strip():
             values[key] = value.strip()[:500]
-    sample = {key: values[key] for key in ('subject', 'date', 'received_at') if values.get(key)}
+    sample = {key: values[key] for key in ('subject', 'date', 'received_at', 'excerpt') if values.get(key)}
     for key in ('mailbox', 'message_id', 'uid', 'uidvalidity'):
         value = metadata.get(key)
         if isinstance(value, (str, int)) and str(value):
@@ -279,8 +279,13 @@ def queue_vendor_mapping(sender_domain, metadata=None):
                 if same or upgrade:
                     if row['status'] == 'pending' and metadata:
                         samples = previous.get('samples', []) if isinstance(previous.get('samples', []), list) else []
+                        if previous.get('suggestion_source') == 'ai':
+                            values.pop('suggested_vendor', None)
+                            values.pop('suggested_bucket', None)
                         if sample and sample not in samples:
                             samples.append(sample)
+                            previous.pop('suggestion_version', None)
+                            previous.pop('suggestion_status', None)
                         previous.update(values)
                         previous['samples'] = samples[-3:]
                         label = values.get('display_name') or sender or sender_domain
