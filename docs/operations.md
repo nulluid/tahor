@@ -187,8 +187,8 @@ No shell `source` command is required.
 | `TAHOR_DATA_PUSH` | `1` to enable private configuration pushes; default is local commits only |
 | `WORKER_BATCH_SIZE` | Messages per classification batch; default 50 |
 | `WORKER_SLEEP_BETWEEN_BATCHES` | Optional delay override; defaults to 0 seconds after fully applied paid-only batches, 45 seconds otherwise |
-| `TAHOR_CLASSIFY_FREE_ENABLED` | `0` disables all free classification and paid-to-free fallback; messages remain retryable. Default `1` |
-| `TAHOR_PAID_CONCURRENCY` | Concurrent paid classifications; default 40, configurable from 1 to 64; effective concurrency also depends on batch size |
+| `TAHOR_CLASSIFY_FREE_ENABLED` | Default `0`: disables free classification and paid-to-free fallback; messages remain retryable. `1` explicitly enables an experimental free route that has not met accuracy requirements |
+| `TAHOR_PAID_CONCURRENCY` | Concurrent paid classifications; default 8, configurable from 1 to 64; effective concurrency also depends on batch size |
 
 Speed and model selections live in `settings.json` and are changed through the
 web app. `CLASSIFY_BACKEND` is for the standalone `classify.py` utility; it does
@@ -197,6 +197,24 @@ not override the continuous worker’s Free/Paid/Auto setting.
 The standalone classifier also supports a local OpenAI-compatible endpoint.
 Direct Google requests are disabled pending account-specific privacy verification.
 The integrated continuous worker uses the two OpenRouter tiers.
+The paid model is `google/gemini-3.8-flash`, pinned to
+`google-vertex/global` with provider fallback disabled, zero data retention,
+and data collection denied. Requests use low reasoning effort and a 2,048-token
+output budget. The endpoint does not advertise temperature support; do not
+assume it honors the requested temperature. Eight concurrent requests are a
+conservative starting point; the previous 40-request benchmark applied to
+Nemotron, not this provider/model combination.
+
+The selection was checked on 24 real messages and ten separate synthetic policy
+cases. Completed Gemini 3.8 responses made no incorrect trash decisions in those
+samples. One synthetic request timed out and passed the unchanged case on retry.
+These limited evaluations do not establish a general accuracy guarantee.
+
+Free classification is disabled by default because no current free candidate
+has met the privacy and accuracy requirements together. The explicitly enabled
+Ling alternative is experimental, not a qualified automatic fallback. Free mode
+keeps work pending rather than substituting paid requests. Fully free automatic
+mail processing remains unfinished.
 Model availability changes: check your provider’s catalog if a selected model
 stops responding. Paid estimates are not spending limits. Configure a provider
 budget separately if you need one.
@@ -371,6 +389,10 @@ capabilities and folder conventions first. Tests cover failure paths and expecte
 behavior; they are not a guarantee that a mailbox or provider can never fail.
 
 ### Reviewing generated rules
+
+Grok 4.6 is the recommended independent rule-writing choice, using the xAI ZDR
+endpoint, low reasoning effort, and a 4,096-token budget for complete file edits.
+Writing remains opt-in; selecting a model never authorizes its proposed changes.
 
 AI rule generation creates a pending proposal rather than immediately changing
 mail policy. The decision queue shows escaped file diffs or the exact sender action.

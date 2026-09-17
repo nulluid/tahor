@@ -71,13 +71,17 @@ retention requires `UIDPLUS`. The setup check reports these capabilities.
 ```bash
 git clone https://github.com/nulluid/tahor.git
 cd tahor
-./install.sh
+./install.sh --mode paid
 ```
 
 The installer creates a virtual environment, asks for credentials without
 echoing them, and writes private configuration outside the checkout. New setups
 leave AI rule and reply writing **disabled until you select a model in Settings**. Rerunning setup preserves your existing
 configuration, prompt, and routing rules.
+
+This command explicitly enables paid classification. Without `--mode paid`, a
+new installation stays in Free mode and waits: free classification is disabled
+by default while a sufficiently accurate private route is still being evaluated.
 
 Check the connection, then start processing:
 
@@ -158,7 +162,7 @@ switching to a more expensive writing route. Classification settings are separat
 
 | Mode | Behavior | Inference cost |
 | :--- | :--- | :--- |
-| **Free** | Uses the free classification backend and retries when unavailable | No paid classification requests |
+| **Free** | Waits while free classification is disabled; an explicitly enabled experimental route can process mail | No paid classification requests |
 | **Paid** | Uses paid capacity to work through a large backlog faster | Provider usage charges |
 | **Auto** | Estimates a free/paid split from backlog size and observed free throughput | Variable paid usage |
 
@@ -166,14 +170,21 @@ Fully successful paid-only batches continue immediately, without the free-tier
 pause. Speed mode controls routing and concurrency; it does not change your
 classification instructions or mailbox safety checks.
 The worker logs fetch, classification, and application timings for tuning.
-Paid classification defaults to 40 concurrent requests, configurable for your
-host and provider. Free-tier concurrency remains separate.
+Paid classification uses **Gemini 3.8 Flash through Google Vertex**, restricted
+to a zero-retention endpoint with data collection denied and provider fallback
+disabled. It starts at **eight concurrent requests**, configurable for your host
+and provider. The earlier 40-request setting was measured with a different model.
+
+The selected model was evaluated against 24 real messages and ten separate
+synthetic policy cases. Its completed responses made no incorrect trash
+decisions in that sample; one synthetic request timed out and passed unchanged
+on retry. This is a small validation set, not a guarantee about every email.
 
 For an internet-facing server, use the [dedicated service-account setup](docs/service-isolation.md)
 to keep application code read-only and run without administrator privileges.
 
 In Paid or Auto mode, failed paid classifications retry on the free tier when it
-is enabled. Set `TAHOR_CLASSIFY_FREE_ENABLED=0` to disable free classification
+is explicitly enabled. `TAHOR_CLASSIFY_FREE_ENABLED=0` is the default; it disables free classification
 and fallback without silently switching Free mode to a paid model.
 Widespread failures start a five-minute cooldown, followed by a single-message
 paid recovery probe at the next batch. If both tiers fail, messages stay pending
@@ -183,13 +194,20 @@ AI-generated rule changes appear as proposals in the decision queue. Review the
 exact sender action or file diff before approving. Domain blocks require the exact
 domain in your instruction; a brand name or single email address cannot authorize
 a whole-domain block. Changed underlying rules invalidate an older proposal.
+**Grok 4.6** is the recommended rule-writing option, selected independently from
+classification and reply writing; its requests use the xAI zero-retention route.
 
 ### A setup without an added inference bill
 
-Use a vetted free classification route and choose the optional free reply writer
-in Settings. AI rule drafting can stay disabled: you can still add reply rules and
-owner directions manually. Writing and backup models require an explicit choice.
-Run Tahor on an existing computer or a server you already have.
+**Fully free automatic classification is not ready yet.** No free candidate has
+met both the privacy and accuracy requirements in the current evaluation. The
+experimental free classifier remains disabled by default, including paid-to-free
+fallback. Enabling it is an explicit operator choice, not a recommendation.
+
+Reply writing has an optional free model in Settings. AI rule drafting can stay
+disabled: you can still add reply rules and owner directions manually. Writing
+and backup models require an explicit choice. An existing computer can provide
+hosting while a qualified free classification route is evaluated.
 
 This does not make your email account, hardware, electricity, or hosting free.
 Free model capacity and account quotas are provider-controlled. OpenRouter can

@@ -20,11 +20,15 @@ Then:
 ```bash
 git clone https://github.com/nulluid/tahor.git
 cd tahor
-./install.sh
+./install.sh --mode paid
 ```
 
 The interactive installer asks for the mailbox email, IMAP app password, and
 OpenRouter key. Passwords are hidden while entered. Nothing starts automatically.
+The example explicitly selects paid classification. Omitting `--mode paid`
+leaves a new instance in Free mode, with processing pending because the free
+classifier is disabled by default. No free candidate currently meets the tested
+accuracy requirements for automatic mailbox actions.
 
 For a different mail provider:
 
@@ -48,7 +52,7 @@ Useful options:
 | :--- | :--- |
 | `--config-dir /path/to/instance` | Put credentials and runtime state in a different directory |
 | `--data-dir /path/to/private-repo` | Keep prompts and mappings in a separate private checkout |
-| `--mode free` | Free classification; default for new installations |
+| `--mode free` | No paid requests; default for new installations, currently pending while the experimental free route is disabled |
 | `--mode paid` / `--mode auto` | Explicitly enable paid classification capacity |
 | `--base-url https://mail-tools.example.com` | Set the review app’s public URL |
 | `--systemd-dir ~/.config/systemd/user` | Generate unattended user services and timers |
