@@ -120,8 +120,8 @@ If approved, issues must be empty. Do not quote private source passages in your 
 
 
 def reply_completion(backend, api_key, payload):
-    request_payload = dict(payload)
-    request_payload.update(backend.get('request_options', {}))
+    from model_privacy import private_request_payload
+    request_payload = private_request_payload(backend, payload)
     request = urllib.request.Request(backend['url'], data=json.dumps(request_payload).encode(),
               headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {api_key}'})
     deadline = time.monotonic() + MODEL_RESPONSE_SECONDS
@@ -157,6 +157,8 @@ def validate_verdict(content):
 
 def _draft_reply_body(subject, sender, body_text, rule=None, verification=None, key=None):
     key = key or mailbox_settings.get_reply_model()
+    if key == 'none':
+        raise ValueError('Reply drafting is disabled; select a private model in Settings')
     backend = mailbox_settings.REPLY_MODELS[key]
     api_key = os.environ.get(backend['auth_env'])
     if not api_key:
@@ -201,6 +203,8 @@ def _draft_reply_body(subject, sender, body_text, rule=None, verification=None, 
 def draft_reply_body(subject, sender, body_text, rule=None, verification=None):
     primary = mailbox_settings.get_reply_model()
     backup = mailbox_settings.get_reply_backup_model()
+    if primary == 'none':
+        raise ValueError('Reply drafting is disabled; select a private model in Settings')
     primary_backend = mailbox_settings.REPLY_MODELS[primary]
     cooling = reply_backend_recovery.cooling_down(primary, primary_backend)
     if not cooling:

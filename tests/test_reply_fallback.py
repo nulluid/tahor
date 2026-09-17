@@ -28,7 +28,7 @@ class ReplyFallbackTests(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
         mailbox_settings.set_reply_model('gpt5')
-        mailbox_settings.set_reply_backup_model('nemotron-free')
+        mailbox_settings.set_reply_backup_model('ling-free')
         self.generated = json.dumps({'sentences': ['Thank you for the update.']})
         self.approved = json.dumps({'approved': True, 'issues': [], 'needs_attention': False})
         self.rule = {'instructions': 'Thank the writer.', 'signature': 'Regards,\nExample Owner', 'max_sentences': 3}
@@ -41,7 +41,7 @@ class ReplyFallbackTests(unittest.TestCase):
         with patch.object(draft_replies, 'reply_completion', side_effect=[failure, self.generated, self.approved]) as complete:
             self.assertIn('Thank you', self.write())
         models = [call.args[0]['model'] for call in complete.call_args_list]
-        self.assertEqual(models, ['openai/gpt-5.1', 'nvidia/nemotron-3-super-120b-a12b:free', 'nvidia/nemotron-3-super-120b-a12b:free'])
+        self.assertEqual(models, ['openai/gpt-5.1', 'inclusionai/ling-3.0-flash-vl:free', 'inclusionai/ling-3.0-flash-vl:free'])
         path = reply_backend_recovery.state_path()
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertNotIn('private', path.read_text())
@@ -76,7 +76,7 @@ class ReplyFallbackTests(unittest.TestCase):
         self.assertTrue(all(call.args[0]['model'] == 'openai/gpt-5.1' for call in complete.call_args_list))
 
     def test_fully_free_configuration_never_calls_paid_model(self):
-        mailbox_settings.set_reply_model('nemotron-free')
+        mailbox_settings.set_reply_model('ling-free')
         with patch.object(draft_replies, 'reply_completion', side_effect=TimeoutError()) as complete, self.assertRaises(ValueError):
             self.write()
         self.assertEqual(complete.call_count, 1)
@@ -115,11 +115,11 @@ class ReplyFallbackTests(unittest.TestCase):
             self.assertEqual(payload['reasoning'], {'effort': 'low'})
             self.assertEqual(payload['max_tokens'], 2048)
 
-    def test_backup_setting_rejects_paid_models_and_corruption_defaults_free(self):
+    def test_backup_setting_rejects_paid_models_and_corruption_disables_fallback(self):
         for key in ('gpt5', 'gpt5-flex', 'gemini-flash', 'missing'):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 mailbox_settings.set_reply_backup_model(key)
         settings = mailbox_settings.load_settings()
         settings['reply_backup_model'] = 'gpt5'
         mailbox_settings.save_settings(settings)
-        self.assertEqual(mailbox_settings.get_reply_backup_model(), 'nemotron-free')
+        self.assertEqual(mailbox_settings.get_reply_backup_model(), 'none')

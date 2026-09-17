@@ -42,5 +42,5 @@ class LingReplyRouteTests(unittest.TestCase):
 
     def test_route_is_eligible_backup_without_changing_fresh_defaults(self):
         self.assertIn('ling-free', mailbox_settings.free_reply_models())
-        self.assertEqual(mailbox_settings.DEFAULT_REPLY_MODEL, 'nemotron-free')
-        self.assertEqual(mailbox_settings.DEFAULT_SETTINGS['reply_backup_model'], 'nemotron-free')
+        self.assertEqual(mailbox_settings.DEFAULT_REPLY_MODEL, 'none')
+        self.assertEqual(mailbox_settings.DEFAULT_SETTINGS['reply_backup_model'], 'none')

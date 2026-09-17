@@ -86,7 +86,10 @@ null and explain what script behavior would need to change.
 
 
 def rule_model_call(user_content):
-    backend = mailbox_settings.RULE_MODELS[mailbox_settings.get_rule_model()]
+    selected = mailbox_settings.get_rule_model()
+    if selected == "none":
+        raise ValueError("Rule drafting is disabled; select a private model in Settings")
+    backend = mailbox_settings.RULE_MODELS[selected]
     key = os.environ.get(backend["auth_env"])
     if not key:
         raise RuntimeError(f"Set {backend['auth_env']} in the environment for rule_model {backend['model']!r}.")
@@ -99,6 +102,8 @@ def rule_model_call(user_content):
         "temperature": 0.1,
         "max_tokens": 4096,
     }
+    from model_privacy import private_request_payload
+    payload = private_request_payload(backend, payload)
     req = urllib.request.Request(
         backend["url"],
         data=json.dumps(payload).encode("utf-8"),

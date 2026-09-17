@@ -116,7 +116,7 @@ def configure(args):
     for source, destination in (('prompt.example.txt', 'prompt.txt'), ('vendor_buckets.example.json', 'vendor_buckets.json')):
         write_new(data_dir / destination, (ROOT / source).read_text())
     write_new(data_dir / 'sieve.txt', '# Tahor sender blocks will be proposed here.\n')
-    write_new(state_dir / 'settings.json', json.dumps({'classify_mode': args.mode, 'rule_model': 'nemotron-free', 'reply_model': 'nemotron-free', 'reply_triggers': []}, indent=2) + '\n')
+    write_new(state_dir / 'settings.json', json.dumps({'classify_mode': args.mode, 'rule_model': 'none', 'reply_model': 'none', 'reply_backup_model': 'none', 'reply_triggers': []}, indent=2) + '\n')
     if args.systemd_dir:
         write_units(args.systemd_dir.expanduser(), config_path, Path(sys.executable).absolute())
     print(f'Configuration: {config_path}')

@@ -76,7 +76,7 @@ cd tahor
 
 The installer creates a virtual environment, asks for credentials without
 echoing them, and writes private configuration outside the checkout. New setups
-use **free models for all three tasks**. Rerunning setup preserves your existing
+leave AI rule and reply writing **disabled until you select a model in Settings**. Rerunning setup preserves your existing
 configuration, prompt, and routing rules.
 
 Check the connection, then start processing:
@@ -132,9 +132,9 @@ with zero data retention, data collection denied, and zero input/output pricing.
 If it is your backup and that route becomes unavailable, replies remain pending. These
 [routing controls](https://openrouter.ai/docs/guides/features/zdr) protect provider
 selection; they do not guarantee the accuracy of a draft.
-The [Nemotron free endpoint](https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free)
-warns against confidential or personal data and may log requests for provider
-improvement; free pricing is not a privacy guarantee. A reply
+All rule and reply writing requests require zero data retention and denied data
+collection. Retired Nemotron free and unverified direct Gemini writing routes are
+disabled; missing or obsolete selections never silently switch to a paid model. A reply
 address must pass syntax and DNS checks. Those checks cannot prove that the
 recipient’s mailbox accepts delivery.
 
@@ -147,7 +147,7 @@ afterward. Messages needing attention or review stay protected.
 Natural-language matching shares the existing classification request, using up
 to 6,000 characters of message context when such rules are enabled. Uncertain
 matches stay pending review and do not produce a draft. Reply writing is a
-separate model request; free models remain the default, with paid prose models
+separate model request; writing starts disabled, with paid prose models
 such as Euryale available as an optional choice in Settings. **GPT-5.1 Flex**
 is another writing option: half-price input/output tokens compared with standard
 GPT-5.1, with variable latency and availability. Tahor restricts it to the Flex
@@ -178,9 +178,10 @@ and the worker retries after five minutes. Your selected speed does not change.
 
 ### A setup without an added inference bill
 
-Keep classification in **Free**, and select the free model for **both rule and
-reply drafting**. The installer makes these choices by default. Run Tahor on an
-existing computer or a server you already have.
+Use a vetted free classification route and choose the optional free reply writer
+in Settings. AI rule drafting can stay disabled: you can still add reply rules and
+owner directions manually. Writing and backup models require an explicit choice.
+Run Tahor on an existing computer or a server you already have.
 
 This does not make your email account, hardware, electricity, or hosting free.
 Free model capacity and account quotas are provider-controlled. OpenRouter can

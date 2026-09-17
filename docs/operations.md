@@ -75,7 +75,7 @@ standard rates; slower or unavailable capacity is possible. This uses ordinary
 requests, not the asynchronous Batch API or its 24-hour queue. See
 [OpenRouter service tiers](https://openrouter.ai/docs/guides/features/service-tiers).
 Changing the reply model does not change classification or rule-drafting models,
-and the fresh-install writing default remains free.
+and fresh installations leave both writing features disabled until selected.
 
 The verifier also identifies personal questions or requests needing the owner's
 answer. Those messages receive `needs-attention` before the draft is saved, and
@@ -93,13 +93,14 @@ free OpenRouter variants are accepted as backups; a paid model or a provider's
 promotional quota cannot be selected here. Choose **Disabled — keep replies
 pending** (`reply_backup_model: "none"`) to wait for primary recovery without
 calling any backup. Writer and verifier use the same
-backend for a given attempt. Defaults keep both primary and backup free.
+backend for a given attempt. Defaults disable both primary and backup.
 
-Review provider data-handling terms before sending mail. The
-[Nemotron free endpoint](https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free)
-warns against confidential or personal information and may log requests for
-provider improvement. A zero-price endpoint is not necessarily appropriate for
-private correspondence; disable fallback when its terms do not fit your data.
+All OpenRouter rule and reply calls enforce `provider.zdr: true` and
+`provider.data_collection: deny`, including retries and verification. Unverified
+direct-provider writing routes are blocked. Retired Nemotron free or direct Gemini
+selections become disabled; existing Grok and Ling choices remain. No automatic
+paid substitution occurs. Manual reply rules and owner directions remain available
+when AI rule drafting is disabled.
 
 Credit, authentication, quota, connection, and backend-response failures record
 a five-minute cooldown in the private `reply_backend_state.json` next to the
@@ -171,7 +172,7 @@ No shell `source` command is required.
 | `FASTMAIL_HOST` | IMAP hostname; default `imap.fastmail.com`, SSL port 993 |
 | `FASTMAIL_SMTP_HOST` | SMTP hostname; default `smtp.fastmail.com`, SSL port 465 |
 | `OPENROUTER_API_KEY` | Hosted classification and OpenRouter rule/reply models |
-| `GEMINI_API_KEY` | Only needed when choosing a Gemini rule/reply model |
+| `GEMINI_API_KEY` | Legacy standalone classifier only; direct writing routes are disabled |
 | `DATA_DIR` | Private prompt, vendor mappings, and Sieve proposal directory |
 | `PROMPT_PATH` | Optional explicit classification prompt path |
 | `VENDOR_BUCKETS_PATH` | Optional explicit routing map path |

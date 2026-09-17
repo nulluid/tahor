@@ -131,13 +131,13 @@ class DraftTests(unittest.TestCase):
             json.dumps({'choices': [{'message': {'content': 'NO_REPLY_NEEDED'}}]}).encode(), b'',
             json.dumps({'choices': [{'message': {'content': json.dumps({'sentences': ['Thank you for the update.', 'I appreciate the volunteer report.', 'May your week go well.']})}}]}).encode(), b'',
             json.dumps({'choices': [{'message': {'content': json.dumps({'approved': True, 'issues': [], 'needs_attention': False})}}]}).encode(), b'']
-        with patch.dict(draft_replies.os.environ, {'OPENROUTER_API_KEY': 'test-only'}), patch.object(draft_replies.mailbox_settings, 'get_reply_model', return_value='nemotron-free'), patch.object(draft_replies.urllib.request, 'urlopen', return_value=response) as request:
+        with patch.dict(draft_replies.os.environ, {'OPENROUTER_API_KEY': 'test-only'}), patch.object(draft_replies.mailbox_settings, 'get_reply_model', return_value='ling-free'), patch.object(draft_replies.urllib.request, 'urlopen', return_value=response) as request:
             body = draft_replies.draft_reply_body('Update', 'person@example.com', 'Here is the latest volunteer report.', self.rule)
         self.assertEqual(request.call_count, 3)
         self.assertEqual(body, 'Thank you for the update. I appreciate the volunteer report. May your week go well.\n\nBest,\nExample Owner')
 
     def prose_test(self, responses, verification=None):
-        with patch.dict(draft_replies.os.environ, {'OPENROUTER_API_KEY': 'test-only'}), patch.object(draft_replies.mailbox_settings, 'get_reply_model', return_value='nemotron-free'), patch.object(draft_replies, 'reply_completion', side_effect=[json.dumps(r) for r in responses]) as completion:
+        with patch.dict(draft_replies.os.environ, {'OPENROUTER_API_KEY': 'test-only'}), patch.object(draft_replies.mailbox_settings, 'get_reply_model', return_value='ling-free'), patch.object(draft_replies, 'reply_completion', side_effect=[json.dumps(r) for r in responses]) as completion:
             body = draft_replies.draft_reply_body('A question', 'person@example.com', 'Can you attend? Please confirm your availability.', self.rule, verification=verification)
         return body, completion
 
@@ -251,7 +251,7 @@ class DraftTests(unittest.TestCase):
         for call in request.call_args_list:
             payload = json.loads(call.args[0].data)
             self.assertEqual(payload['service_tier'], 'flex')
-            self.assertEqual(payload['provider'], {'only': ['openai/flex'], 'allow_fallbacks': False})
+            self.assertEqual(payload['provider'], {'only': ['openai/flex'], 'allow_fallbacks': False, 'zdr': True, 'data_collection': 'deny'})
             self.assertEqual(payload['reasoning'], {'effort': 'none'})
             self.assertEqual(payload['response_format'], {'type': 'json_object'})
 

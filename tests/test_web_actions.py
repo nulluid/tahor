@@ -22,10 +22,10 @@ class WebActionTests(AppTestCase):
         settings = self.module.mailbox_settings
         original = settings.load_settings()
         self.addCleanup(settings.save_settings, original)
-        self.assertEqual(self.post('/settings', reply_backup_model='nemotron-free').status_code, 302)
-        self.assertEqual(settings.get_reply_backup_model(), 'nemotron-free')
+        self.assertEqual(self.post('/settings', reply_backup_model='ling-free').status_code, 302)
+        self.assertEqual(settings.get_reply_backup_model(), 'ling-free')
         self.assertEqual(self.post('/settings', reply_backup_model='gpt5').status_code, 400)
-        self.assertEqual(settings.get_reply_backup_model(), 'nemotron-free')
+        self.assertEqual(settings.get_reply_backup_model(), 'ling-free')
         page = self.client.get('/settings').get_data(as_text=True)
         self.assertIn('Free backup for reply writing', page)
         self.assertIn('name="reply_backup_model"', page)
@@ -152,7 +152,7 @@ class WebActionTests(AppTestCase):
             execute.assert_not_called()
 
     def test_each_setting_persists_and_triggers_can_be_removed(self):
-        for field, value in (('classify_mode', 'paid'), ('rule_model', 'gpt5'), ('reply_model', 'nemotron-free')):
+        for field, value in (('classify_mode', 'paid'), ('rule_model', 'gpt5'), ('reply_model', 'ling-free')):
             self.assertEqual(self.post('/settings', **{field: value}).status_code, 302)
             self.assertEqual(self.module.mailbox_settings.load_settings()[field], value)
         self.post('/add-reply-trigger', trigger_type='sender_email', value='Person@Example.com')

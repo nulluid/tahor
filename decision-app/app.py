@@ -479,7 +479,7 @@ SETTINGS_PAGE_TEMPLATE = """<!doctype html>
 </form>
 <h3>Free backup for reply writing</h3>
 <p class="hint">If the primary writer is unavailable, use this free model for both writing and verification. Retry the primary on new drafting work after a five-minute cooldown. A rejected reply stays pending; Tahor never substitutes another paid model. Disable backup to keep work pending until the primary recovers.</p>
-<p class="hint">Free does not imply private: the <a href="https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free" target="_blank" rel="noopener noreferrer">Nemotron free endpoint</a> warns against confidential or personal data and may log requests for provider improvement. Review the provider terms before using it for mail.</p>
+<p class="hint">Writing is disabled until you choose a model. All available routes require provider zero data retention and prohibit data collection; if no eligible endpoint is available, work stays pending. Free backups are optional. Retired or unverified routes are disabled rather than replaced silently.</p>
 <form method="post" action="/settings">
   <label>Free backup model <select name="reply_backup_model">{reply_backup_options}</select></label>
   <button type="submit">Save free backup</button>

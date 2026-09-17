@@ -24,24 +24,7 @@ MODES = ("free", "paid", "auto")
 
 # Rule drafting is rare and judgment-heavy, so it's worth a stronger model than routine classification uses.
 RULE_MODELS = {
-    "nemotron-free": {
-        "label": "Nemotron 3 Super — free tier",
-        "url": "https://openrouter.ai/api/v1/chat/completions",
-        "model": "nvidia/nemotron-3-super-120b-a12b:free",
-        "auth_env": "OPENROUTER_API_KEY",
-    },
-    "gemini-flash": {
-        "label": "Gemini 3.6 Flash — fast, effectively free",
-        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        "model": "gemini-3.6-flash",
-        "auth_env": "GEMINI_API_KEY",
-    },
-    "gemini-pro": {
-        "label": "Gemini 3 Pro — more capable, still cheap",
-        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        "model": "gemini-3-pro",
-        "auth_env": "GEMINI_API_KEY",
-    },
+    "none": {"label": "Disabled — choose a private model to enable", "model": "none", "url": "", "auth_env": ""},
     "claude-opus": {
         "label": "Claude Opus 5 (via OpenRouter) — best judgment, highest cost",
         "url": "https://openrouter.ai/api/v1/chat/completions",
@@ -55,13 +38,13 @@ RULE_MODELS = {
         "auth_env": "OPENROUTER_API_KEY",
     },
 }
-DEFAULT_RULE_MODEL = "nemotron-free"
+DEFAULT_RULE_MODEL = "none"
 
 # Reply drafting runs more often than rule drafting (once per matching
 # email, not a few times a month) and the whole point is prose quality --
-# a separate model choice from RULE_MODELS, defaulting to a free option so
-# a zero-cost setup is possible out of the box.
+# a separate model choice from RULE_MODELS. Disabled until explicitly selected.
 REPLY_MODELS = {
+    "none": {"label": "Disabled — choose a private model to enable", "model": "none", "url": "", "auth_env": ""},
     "grok-4.6": {
         "label": "Grok 4.6 (via OpenRouter) — premium reply writing",
         "url": "https://openrouter.ai/api/v1/chat/completions",
@@ -73,19 +56,6 @@ REPLY_MODELS = {
             "response_format": {"type": "json_object"},
             "provider": {"only": ["xai/zdr"], "allow_fallbacks": False, "zdr": True, "data_collection": "deny"},
         },
-    },
-    "gemini-flash": {
-        "label": "Gemini 3.6 Flash — free, solid everyday English",
-        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        "model": "gemini-3.6-flash",
-        "auth_env": "GEMINI_API_KEY",
-    },
-    "nemotron-free": {
-        "label": "Nemotron 3 Super (via OpenRouter, free tier)",
-        "url": "https://openrouter.ai/api/v1/chat/completions",
-        "model": "nvidia/nemotron-3-super-120b-a12b:free",
-        "auth_env": "OPENROUTER_API_KEY",
-        "request_options": {"reasoning": {"enabled": False}},
     },
     "euryale-70b": {
         "label": "Euryale 70B (via OpenRouter) — prose quality, cheap at low volume",
@@ -135,13 +105,13 @@ REPLY_MODELS = {
         "expected_service_tier": "flex",
     },
 }
-DEFAULT_REPLY_MODEL = "nemotron-free"
+DEFAULT_REPLY_MODEL = "none"
 
 DEFAULT_SETTINGS = {
     "classify_mode": "free",
     "rule_model": DEFAULT_RULE_MODEL,
     "reply_model": DEFAULT_REPLY_MODEL,
-    "reply_backup_model": "nemotron-free",
+    "reply_backup_model": "none",
     "free_rate_log": [],  # rolling [{"messages": N, "seconds": S}, ...], see record_free_batch
     "backlog_estimate": None,
     "backlog_estimate_at": None,
@@ -262,8 +232,8 @@ def free_reply_models():
 
 
 def get_reply_backup_model():
-    key = load_settings().get('reply_backup_model', 'nemotron-free')
-    return key if key == 'none' or key in free_reply_models() else 'nemotron-free'
+    key = load_settings().get('reply_backup_model', 'none')
+    return key if key == 'none' or key in free_reply_models() else 'none'
 
 
 @locked_update
