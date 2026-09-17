@@ -221,3 +221,32 @@ class SubscriptionSuggestionTests(unittest.TestCase):
                 else:
                     self.assertEqual(len(suggestions.model_call(context,1,policy)),1)
             self.assertEqual(calls,expected)
+
+    def test_invalid_model_output_uses_only_policy_authorized_fallback(self):
+        self.add()
+        with self.db() as conn:
+            context = suggestions.build_context(conn, conn.execute('SELECT * FROM unsubscribe_candidates').fetchall())
+        for policy, expected in [('paid_only', ['x-ai/grok-4.6']), ('paid', ['x-ai/grok-4.6', 'inclusionai/ling-3.0-flash-vl:free']), ('free', ['inclusionai/ling-3.0-flash-vl:free'])]:
+            calls = []
+            def response(request, **kwargs):
+                calls.append(json.loads(request.data)['model'])
+                content = 'not valid JSON' if len(calls) == 1 else json.dumps({'recommendations': self.result(context)})
+                return io.BytesIO(json.dumps({'choices': [{'message': {'content': content}}]}).encode())
+            suggestions.mailbox_settings.set_ai_task_settings('subscriptions', policy)
+            with patch.object(suggestions.urllib.request, 'urlopen', side_effect=response), patch.object(suggestions.ai_routing, 'state_path', return_value=self.root / (policy + '-invalid.json')):
+                if policy in ('paid_only', 'free'):
+                    with self.assertRaises(ValueError):
+                        suggestions.model_call(context, 1, policy)
+                else:
+                    self.assertEqual(len(suggestions.model_call(context, 1, policy)), 1)
+            self.assertEqual(calls, expected)
+
+    def test_poll_hashes_private_preferences_once_for_multiple_items(self):
+        self.add(3)
+        job = suggestions.enqueue()
+        with patch.object(suggestions, 'model_call', side_effect=self.result):
+            suggestions.run_pending_jobs()
+        with patch.object(suggestions, '_context_key', wraps=suggestions._context_key) as key:
+            result = suggestions.get_job(job['job_id'])
+        self.assertEqual(len(result['recommendations']), 3)
+        self.assertEqual(key.call_count, 1)

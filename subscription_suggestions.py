@@ -90,8 +90,9 @@ def get_job(identifier):
         if job is None:
             raise ValueError('Recommendation job not found.')
         items = conn.execute('SELECT i.*,c.status AS candidate_status FROM subscription_suggestion_items i LEFT JOIN unsubscribe_candidates c ON c.id=i.candidate_id WHERE job_id=? ORDER BY candidate_id', (identifier,)).fetchall()
+        current_context_key = _context_key(conn)
         return dict(job_id=identifier, status=job['status'], total=len(items), completed=sum(row['status'] != 'pending' for row in items),
-                    recommendations=[json.loads(row['result_json']) for row in items if row['result_json'] and row['candidate_status'] == 'pending' and job['context_key'] == _context_key(conn)], error=job['error'])
+                    recommendations=[json.loads(row['result_json']) for row in items if row['result_json'] and row['candidate_status'] == 'pending' and job['context_key'] == current_context_key], error=job['error'])
     finally:
         conn.close()
 
@@ -232,10 +233,13 @@ def model_call(context, queue_size, work_id):
         deadline = time.monotonic() + MODEL_RESPONSE_SECONDS
         with urllib.request.urlopen(request, timeout=90) as response:
             body = json.loads(read_bounded(response, deadline))
-        proposal = json.loads(body['choices'][0]['message']['content'])
+        try:
+            proposal = json.loads(body['choices'][0]['message']['content'])
+        except (KeyError, IndexError, TypeError) as error:
+            raise ValueError('The model returned an invalid recommendation envelope.') from None
         return validate(proposal, context['untrusted_candidates'])
     return ai_routing.run('subscriptions', mailbox_settings.SUBSCRIPTION_MODELS, call, queue_size=queue_size,
-        work_id=work_id, retryable=(urllib.error.URLError, OSError, TimeoutError, RuntimeError))
+        work_id=work_id, retryable=(urllib.error.URLError, OSError, TimeoutError, RuntimeError, ValueError))
 
 
 def run_pending_jobs(max_jobs=1):
