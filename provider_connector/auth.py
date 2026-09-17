@@ -16,12 +16,15 @@ import time
 from urllib.parse import urlsplit
 
 import requests
+from urllib3.exceptions import HTTPError as TransportHTTPError
+from http_response import read_bounded
 from data_changes import atomic_write
 
 ORIGINS = frozenset(('https://app.fastmail.com', 'https://api.fastmail.com',
                      'https://phl.api.fastmail.com', 'https://slc.api.fastmail.com'))
 MAIL = 'urn:ietf:params:jmap:mail'
 MAX_RESPONSE = 2 * 1024 * 1024
+RESPONSE_SECONDS = 90
 
 
 class ConnectorError(Exception):
@@ -138,6 +141,7 @@ class FastmailAuth:
         headers = {'Accept': 'application/json', 'Origin': 'https://app.fastmail.com'}
         if token:
             headers['Authorization'] = 'Bearer ' + token
+        deadline = time.monotonic() + RESPONSE_SECONDS
         try:
             with self.http.request(method, url, json=body, headers=headers,
                                    allow_redirects=False, timeout=(10, 45), stream=True) as response:
@@ -151,18 +155,27 @@ class FastmailAuth:
                     raise ConnectorError()
                 if status not in (200, 201):
                     raise ProtocolError()
-                chunks, size = [], 0
-                for chunk in response.iter_content(16384):
-                    size += len(chunk)
-                    if size > MAX_RESPONSE:
-                        raise ProtocolError()
-                    chunks.append(chunk)
+                # read1 returns available bytes instead of waiting for a full
+                # iter_content chunk while a peer trickles response data.
+                response.raw.decode_content = True
+                reader = response.raw
+                if not callable(getattr(reader, 'read1', None)):
+                    # Older urllib3 lacks read1. Single-byte streaming still
+                    # yields often enough to enforce the elapsed deadline.
+                    chunks = response.iter_content(chunk_size=1)
+                    class StreamingReader:
+                        def read1(self, size):
+                            return next(chunks, b'')
+                    reader = StreamingReader()
                 try:
-                    value = json.loads(b''.join(chunks))
+                    raw = read_bounded(reader, deadline, MAX_RESPONSE)
+                    value = json.loads(raw)
+                except TimeoutError:
+                    raise ConnectorError() from None
                 except (ValueError, UnicodeError):
                     raise ProtocolError() from None
                 return status, value
-        except requests.RequestException:
+        except (requests.RequestException, TransportHTTPError, OSError):
             raise ConnectorError() from None
 
     def accept(self, session, username, expected_user=None):

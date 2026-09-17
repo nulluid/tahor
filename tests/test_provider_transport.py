@@ -1,9 +1,10 @@
 from pathlib import Path
+import io
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-from provider_connector.auth import FastmailAuth, ProtocolError, RateLimited, MAX_RESPONSE
+from provider_connector.auth import FastmailAuth, ProtocolError, RateLimited, ConnectorError, MAX_RESPONSE
 
 
 class TransportTests(unittest.TestCase):
@@ -15,7 +16,7 @@ class TransportTests(unittest.TestCase):
 
     def response(self, status, content):
         response = Mock(status_code=status)
-        response.iter_content.return_value = [content]
+        response.raw = io.BytesIO(content)
         context = Mock()
         context.__enter__ = Mock(return_value=response)
         context.__exit__ = Mock(return_value=False)
@@ -42,4 +43,27 @@ class TransportTests(unittest.TestCase):
         with self.assertRaises(RateLimited) as caught:
             self.auth.request('GET','https://api.fastmail.com/auth/sessions')
         self.assertEqual(str(caught.exception), '')
-        response.iter_content.assert_not_called()
+        self.assertEqual(response.raw.tell(), 0)
+
+    def test_slow_trickle_has_elapsed_deadline_and_closes_response(self):
+        response = self.response(200, b'')
+        clock = [0]
+        def read1(size):
+            clock[0] += 31
+            return b' '
+        response.raw = Mock()
+        response.raw.read1.side_effect = read1
+        with patch('provider_connector.auth.time.monotonic', side_effect=lambda: clock[0]):
+            with self.assertRaises(ConnectorError) as caught:
+                self.auth.request('GET', 'https://api.fastmail.com/auth/sessions')
+        self.assertEqual(str(caught.exception), '')
+        self.assertEqual(response.raw.read1.call_count, 3)
+        self.transport.request.return_value.__exit__.assert_called_once()
+        self.assertTrue(response.raw.decode_content)
+
+    def test_older_transport_without_read1_uses_bounded_single_byte_streaming(self):
+        response = self.response(200, b'')
+        response.raw = type('LegacyReader', (), {})()
+        response.iter_content.return_value = iter([b'{', b'}'])
+        self.assertEqual(self.auth.request('GET', 'https://api.fastmail.com/auth/sessions'), (200, {}))
+        response.iter_content.assert_called_once_with(chunk_size=1)

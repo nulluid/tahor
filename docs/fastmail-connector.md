@@ -33,7 +33,9 @@ Session cookies and bearer tokens are stored in a mode-0700 connector directory 
 mode-0600 files. They are credentials too: keep that directory out of ordinary backups,
 repositories, logs, and support bundles. Core dumps are disabled. Requests use verified
 TLS, exact Fastmail endpoint allowlists, no redirects or environment proxies, bounded
-responses, and fixed connection/read timeouts.
+responses, fixed connection/read timeouts, and a 90-second elapsed body-read deadline.
+A blocked socket read can extend that deadline by up to its 45-second timeout; this is
+not a hard cancellation guarantee for DNS, TLS, or operating-system stalls.
 
 This holds both login factors on one host. It grants the connector full account-login
 authority even though its request interface exposes only domain blocking. Root, a kernel
@@ -128,3 +130,20 @@ not establish that an account has been enrolled or that an unpublished API will 
 Fastmail documents [multiple verification devices and TOTP enrollment](https://www.fastmail.help/hc/en-us/articles/360058752374-Using-two-step-verification-2FA).
 Its [Sieve FAQ](https://www.fastmail.help/hc/en-us/articles/360058753814-Sieve-frequently-asked-questions)
 describes the supported manual editing path.
+
+### Optional administrator lifecycle acceptance
+
+`python -m provider_connector.acceptance --config=... --live-invalid-domain-test`
+is an explicit live acceptance utility, run only under the connector's hardened unit
+identity with systemd credentials and with its ordinary service stopped for the shared
+lock. It creates reserved `.invalid` test domains under a unique installation journal,
+verifies readback and restart reconciliation, changes the managed domain list, removes
+the test rules, and compares all unrelated rule fingerprints. Private intent and results
+remain in the connector state directory, including uncertain cleanup outcomes.
+
+The optional `--fresh-login` deliberately establishes a fresh session only after existing
+login guards permit it. It never resets rejection or cooldown guards and does not claim
+to simulate actual provider cookie expiry. Settings renewal expires the local cached
+authorization only; Fastmail still determines the required challenge. Successful mocked
+tests establish code behavior, not live account verification. Inspect the acceptance
+result before declaring cleanup or account verification complete.
