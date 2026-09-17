@@ -103,7 +103,8 @@ def match_message(record, result=None, delivered=None, flags=(), rules=None):
     subject = str(record.get('subject','')).casefold()
     body = str(record.get('body', record.get('snippet','')))[:32768].casefold()
     flags = {flag.decode().lower() if isinstance(flag,bytes) else str(flag).lower() for flag in flags}
-    category = result.get('category') or next((flag[9:] for flag in flags if flag.startswith('category-')), '')
+    categories = {flag[9:] for flag in flags if flag.startswith('category-')}
+    category = result.get('category') or next((item for item in ('receipt','statement','government-tax','marketing') if item in categories), '')
     matches = []
     active_rules = load_rules() if rules is None else rules
     for rule in sorted(active_rules, key=lambda item: item.get('classified_business') is True):
@@ -187,6 +188,8 @@ def _fetch(conn, mailbox, validity, uid):
     record=dict(id=identifier,from_header=str(message.get('From','')),subject=fetch_batch.decode_str(message.get('Subject','')),
                 date=str(message.get('Date','')),body=fetch_batch.extract_body_text(raw))
     record['from']=record.pop('from_header')
+    if not ids:
+        record['ledger_id'] = '<tahor-content-' + hashlib.sha256(raw).hexdigest() + '@localhost>'
     return record,flags,delivered
 
 
@@ -260,7 +263,7 @@ def _run_sweep(conn, *, backfill=False, limit=100, budget_seconds=45, dry_run=Fa
                             if obsolete and conn.uid('STORE', uid, '-FLAGS.SILENT', '('+' '.join(obsolete)+')')[0] != 'OK':
                                 raise RuntimeError('Business obsolete deletion markers could not be cleared')
                             import business_ledger
-                            business_ledger.record_receipt(dict(route,mailbox=source,message_id=record['id'],uid=uid.decode(),uidvalidity=validity,received_at=delivered.isoformat(),subject=record['subject']),record['body'],verified_business=True)
+                            business_ledger.record_receipt(dict(route,mailbox=source,message_id=record.get('ledger_id',record['id']),uid=uid.decode(),uidvalidity=validity,received_at=delivered.isoformat(),subject=record['subject']),record['body'],verified_business=True)
                         if move:
                             capabilities={v.decode().upper() if isinstance(v,bytes) else v.upper() for v in conn.capabilities}
                             if 'MOVE' not in capabilities:raise RuntimeError('Business filing requires IMAP MOVE')
@@ -278,7 +281,7 @@ def _run_sweep(conn, *, backfill=False, limit=100, budget_seconds=45, dry_run=Fa
                                 match = re.fullmatch(rb'([1-9][0-9]*) ([1-9][0-9]*) ([1-9][0-9]*)', value or b'')
                                 if match and int(match[2]) == int(uid) and all(int(v) <= 4294967295 for v in match.groups()):
                                     if route['is_receipt']:
-                                        business_ledger.record_receipt(dict(route, mailbox=route['destination'],message_id=record['id'],uid=match[3].decode(),uidvalidity=match[1].decode(),received_at=delivered.isoformat(),subject=record['subject']),record['body'],verified_business=True)
+                                        business_ledger.record_receipt(dict(route, mailbox=route['destination'],message_id=record.get('ledger_id',record['id']),uid=match[3].decode(),uidvalidity=match[1].decode(),received_at=delivered.isoformat(),subject=record['subject']),record['body'],verified_business=True)
                                     break
                             tahor_db.relocate_vendor_samples(source,route['destination'],[record['id']])
                     if move:counts['moved']+=1
