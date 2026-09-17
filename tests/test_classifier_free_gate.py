@@ -48,12 +48,41 @@ class FreeClassifierGateTests(unittest.TestCase):
         with patch.object(worker, 'classify_with_backend', return_value=[
                 {'id': r['id'], 'action': 'error', 'http_status': 402} for r in self.records]) as backend:
             free, paid = worker.classify_batch(self.records, 'paid')
-            self.assert_pending(free)
-            self.assertEqual(paid, [])
+            self.assert_pending(paid)
+            self.assertEqual(free, [])
+            self.assertTrue(all(result['http_status'] == 402 for result in paid))
             free, paid = worker.classify_batch(self.records, 'paid')
-            self.assert_pending(free)
-            self.assertEqual(paid, [])
+            self.assert_pending(paid)
+            self.assertEqual(free, [])
+            self.assertTrue(all('cooling down' in result['reason'] for result in paid))
         backend.assert_called_once_with(self.records, 'openrouter-paid')
+
+    def test_failed_recovery_probe_preserves_original_status_without_free_requests(self):
+        worker._paid_retry_at = 1
+        original = {'id': '0', 'action': 'error', 'http_status': 429, 'reason': 'rate limited'}
+        with patch.object(worker, 'classify_with_backend', return_value=[original]) as backend:
+            free, paid = worker.classify_batch(self.records, 'paid')
+        self.assertEqual(free, [])
+        self.assert_pending(paid)
+        self.assertEqual(paid[0], original)
+        self.assertTrue(all('cooling down' in result['reason'] for result in paid[1:]))
+        backend.assert_called_once_with(self.records[:1], 'openrouter-paid')
+
+    def test_partial_paid_failures_keep_diagnostics_and_logs_exclude_private_content(self):
+        expected = [{'id': '0', 'action': 'keep'},
+                    {'id': '1', 'action': 'error', 'http_status': 503, 'reason': 'PRIVATE-SOURCE'},
+                    {'id': '2', 'action': 'error', 'reason': 'response deadline PRIVATE-SOURCE'}]
+        with patch.object(worker, 'classify_with_backend', return_value=expected), patch.object(
+                worker, '_classify_free_and_time') as free_backend, patch.object(worker, 'log') as log:
+            free, paid = worker.classify_batch(self.records, 'paid')
+        self.assertEqual(free, [])
+        self.assertEqual(paid, expected)
+        free_backend.assert_not_called()
+        logged = ' '.join(str(call.args) for call in log.call_args_list)
+        self.assertNotIn('PRIVATE-SOURCE', logged)
+        self.assertIn('503', logged)
+        self.assertIn('timeout', logged)
+        self.assertIn('http_statuses', logged)
 
     def test_paid_probe_recovers_even_when_free_is_disabled(self):
         worker._paid_retry_at = 1

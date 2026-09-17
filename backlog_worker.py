@@ -328,6 +328,32 @@ PAID_RETRY_SECONDS = 300
 _paid_retry_at = 0.0
 
 
+def log_paid_failures(failures):
+    statuses, classes = {}, {}
+    for result in failures:
+        status = result.get('http_status')
+        if type(status) is int and 100 <= status <= 599:
+            statuses[str(status)] = statuses.get(str(status), 0) + 1
+            kind = 'http'
+        else:
+            reason = str(result.get('reason', '')).lower()
+            if any(word in reason for word in ('timeout', 'timed out', 'deadline')):
+                kind = 'timeout'
+            elif any(word in reason for word in ('json', 'expecting value', 'invalid classification', 'invalid retention', 'invalid category', 'invalid attention')):
+                kind = 'invalid_response'
+            else:
+                kind = 'other'
+        classes[kind] = classes.get(kind, 0) + 1
+    log('Paid classification failures: ' + json.dumps(
+        {'count': len(failures), 'http_statuses': statuses, 'error_classes': classes}, sort_keys=True))
+
+
+def paid_cooldown_results(records):
+    return [{'id': record['id'], 'action': 'error',
+             'reason': 'Paid classification cooling down; free fallback disabled; retained for retry'}
+            for record in records]
+
+
 def classify_batch(records, mode):
     """Retry paid failures on free, periodically probing paid for recovery.
 
@@ -343,12 +369,19 @@ def classify_batch(records, mode):
     probe_results = []
     if _paid_retry_at:
         if time.monotonic() < _paid_retry_at:
+            if not classify.free_classification_enabled():
+                log("Paid backend cooling down; free fallback disabled; messages retained for retry")
+                return [], paid_cooldown_results(records)
             log("Paid backend cooling down; using free tier")
             return _classify_free_and_time(records), []
         log("Probing paid backend for recovery with one message")
         probe_results = classify_with_backend(records[:1], "openrouter-paid")
         if probe_results[0]["action"] == "error":
             _paid_retry_at = time.monotonic() + PAID_RETRY_SECONDS
+            log_paid_failures(probe_results)
+            if not classify.free_classification_enabled():
+                log("Paid probe failed; free fallback disabled; retrying paid in 300s")
+                return [], probe_results + paid_cooldown_results(records[1:])
             log("Paid probe failed; using free tier and retrying paid in 300s")
             return _classify_free_and_time(records), []
         _paid_retry_at = 0.0
@@ -361,10 +394,14 @@ def classify_batch(records, mode):
     paid_results = probe_results + paid_results
     failures = [r for r in paid_results if r["action"] == "error"]
     if failures:
+        log_paid_failures(failures)
         if (any(r.get("http_status") == 402 for r in failures)
                 or len(failures) / len(paid_results) >= 0.8):
             _paid_retry_at = time.monotonic() + PAID_RETRY_SECONDS
             log("Paid backend unavailable; next recovery probe in 300s")
+        if not classify.free_classification_enabled():
+            log("Free fallback disabled; preserving paid errors for retry")
+            return free_results, paid_results
         failed_ids = {r["id"] for r in failures}
         retry_records = [r for r in records if r["id"] in failed_ids]
         log(f"Retrying {len(retry_records)} failed paid classification(s) on free tier")
