@@ -25,6 +25,7 @@ import os
 import re
 import sys
 import time
+import threading
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -49,6 +50,32 @@ def paid_concurrency():
     if not 1 <= value <= 64:
         raise ValueError("TAHOR_PAID_CONCURRENCY must be between 1 and 64")
     return value
+
+
+_paid_pacing_lock = threading.Lock()
+_paid_next_start = {}
+
+
+def paid_request_interval():
+    value = float(os.environ.get("TAHOR_PAID_REQUEST_INTERVAL_SECONDS", "3"))
+    if not 1 <= value <= 60:
+        raise ValueError("TAHOR_PAID_REQUEST_INTERVAL_SECONDS must be between 1 and 60")
+    return value
+
+
+def wait_for_paid_request(url, model, provider):
+    if (url != 'https://openrouter.ai/api/v1/chat/completions'
+            or model != 'google/gemini-3.8-flash'):
+        return
+    interval = paid_request_interval()
+    route = (url, model, tuple(provider.get('only', [])))
+    # Serialize start reservations, not network requests. Holding this lock
+    # through the wait prevents delayed callers from releasing a queued burst.
+    with _paid_pacing_lock:
+        delay = _paid_next_start.get(route, 0) - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        _paid_next_start[route] = time.monotonic() + interval
 
 
 # Hosted and local models share the OpenAI-compatible request shape.
@@ -159,6 +186,7 @@ def classify_one(url, headers, model, system_prompt, record, retries=3):
     for attempt in range(retries + 1):
         try:
             req = urllib.request.Request(url, data=data, headers=headers)
+            wait_for_paid_request(url, model, payload.get('provider', {}))
             deadline = time.monotonic() + MODEL_RESPONSE_SECONDS
             with urllib.request.urlopen(req, timeout=60) as resp:
                 body = json.loads(read_bounded(resp, deadline).decode("utf-8"))
