@@ -54,3 +54,46 @@ class AIPolicyUITests(AppTestCase):
         with patch.dict('os.environ',{'TAHOR_CLASSIFY_FREE_ENABLED':'0'}):
             self.assertEqual(self.post(ai_task='classification',ai_policy='free').status_code,400)
             self.assertEqual(self.post(ai_task='classification',ai_policy='auto').status_code,400)
+
+    def routed_models(self, task, fail_paid=False):
+        import ai_routing
+        settings=self.module.mailbox_settings
+        registry=settings.REPLY_MODELS if task=='reply' else settings.RULE_MODELS
+        calls=[]
+        def operation(key):
+            calls.append(key)
+            if fail_paid and not registry[key]['model'].endswith(':free'):
+                raise OSError('Synthetic provider unavailable')
+            return 'synthetic result'
+        with patch.object(ai_routing,'mailbox_settings',settings), patch.object(ai_routing,'state_path',return_value=self.root/('ui-routing-'+task+'.json')):
+            try:
+                ai_routing.run(task,registry,operation,work_id='ui-regression')
+            except OSError:
+                pass
+        return calls
+
+    def test_legacy_free_model_selection_cannot_inherit_paid_only_spending(self):
+        settings=self.module.mailbox_settings
+        original=settings.load_settings();self.addCleanup(settings.save_settings,original)
+        for task in ('reply','rule'):
+            self.post(ai_task=task,ai_policy='paid_only',paid_model='grok-4.6',free_model='ling-free')
+            self.assertEqual(self.post(**{task+'_model':'ling-free'}).status_code,302)
+            self.assertEqual(settings.get_ai_policy(task),'free')
+            self.assertEqual(self.routed_models(task),['ling-free'])
+
+    def test_legacy_disabling_backup_stops_free_calls_after_paid_failure(self):
+        settings=self.module.mailbox_settings
+        original=settings.load_settings();self.addCleanup(settings.save_settings,original)
+        self.post(ai_task='reply',ai_policy='auto',paid_model='grok-4.6',free_model='ling-free')
+        self.assertEqual(self.post(reply_backup_model='none').status_code,302)
+        self.assertEqual(settings.get_ai_policy('reply'),'paid_only')
+        self.assertEqual(self.routed_models('reply',fail_paid=True),['grok-4.6'])
+
+    def test_legacy_backup_selection_does_not_authorize_paid_for_free_primary(self):
+        settings=self.module.mailbox_settings
+        original=settings.load_settings();self.addCleanup(settings.save_settings,original)
+        self.post(ai_task='reply',ai_policy='free',paid_model='grok-4.6',free_model='ling-free')
+        self.post(reply_model='ling-free')
+        self.post(reply_backup_model='ling-free')
+        self.assertEqual(settings.get_ai_policy('reply'),'free')
+        self.assertEqual(self.routed_models('reply'),['ling-free'])
