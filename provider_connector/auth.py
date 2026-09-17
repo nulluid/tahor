@@ -104,10 +104,11 @@ def validate_credentials(value):
 
 
 class FastmailAuth:
-    def __init__(self, credentials, state_dir, transport=None, clock=time.time):
+    def __init__(self, credentials, state_dir, transport=None, clock=time.time, sleeper=time.sleep):
         self.credentials_path = Path(credentials)
         self.state_dir = Path(state_dir)
         self.clock = clock
+        self.sleeper = sleeper
         self.http = transport or requests.Session()
         self.http.trust_env = False  # Ignore proxy and .netrc credential injection.
         self.session = None
@@ -193,6 +194,27 @@ class FastmailAuth:
         self.save()
         return self.session
 
+    def next_totp(self, seed):
+        """Reserve one time-step across login/settings, including crashes/restarts."""
+        now = self.clock()
+        step = int(now // 30)
+        previous = self.auth_state.get('totp_step')
+        if previous is not None:
+            if type(previous) is not int or previous > step:
+                raise RateLimited()
+            if previous == step:
+                delay = (step + 1) * 30 - now + 1
+                if not 0 < delay <= 31:
+                    raise RateLimited()
+                self.sleeper(delay)
+                now = self.clock()
+                step = int(now // 30)
+                if step <= previous:
+                    raise RateLimited()
+        self.auth_state['totp_step'] = step
+        self.save()  # A crash or rejected request cannot reuse this code window.
+        return totp(seed, now)
+
     def login(self, credentials, revision):
         # Reserve before network I/O: process crashes cannot bypass the cooldown.
         now = self.clock()
@@ -203,9 +225,12 @@ class FastmailAuth:
                 raise RateLimited()
         bound_user = self.auth_state.get('user_id')
         settings_attempt = self.auth_state.get('settings_attempt')
+        totp_step = self.auth_state.get('totp_step')
         self.auth_state = {'revision': revision, 'next_login': now + 3600, 'blocked': False, 'user_id': bound_user}
         if settings_attempt:
             self.auth_state['settings_attempt'] = settings_attempt
+        if totp_step is not None:
+            self.auth_state['totp_step'] = totp_step
         self.save()
         url = 'https://api.fastmail.com/auth/login'
         body = {'type': 'start'}
@@ -230,7 +255,7 @@ class FastmailAuth:
                 if next_step == 'username':
                     body['username'] = credentials['username']
                 else:
-                    body.update(value=credentials['password'] if next_step == 'password' else totp(credentials['totp_seed'], self.clock()), remember=False)
+                    body.update(value=credentials['password'] if next_step == 'password' else self.next_totp(credentials['totp_seed']), remember=False)
             raise ProtocolError()
         except (AuthenticationRequired, ProtocolError):
             self.auth_state['blocked'] = True
@@ -297,7 +322,7 @@ class FastmailAuth:
                 if not next_step or next_step not in [m.get('type') for m in methods if isinstance(m, dict)]:
                     raise AuthenticationRequired()
                 body = {'type': next_step, 'loginId': data['loginId'], 'remember': False,
-                        'value': credentials['password'] if next_step == 'password' else totp(credentials['totp_seed'], self.clock())}
+                        'value': credentials['password'] if next_step == 'password' else self.next_totp(credentials['totp_seed'])}
             raise ProtocolError()
         except ConnectorError as error:
             if isinstance(error, (AuthenticationRequired, ProtocolError)):

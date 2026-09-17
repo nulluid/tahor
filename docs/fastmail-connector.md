@@ -10,7 +10,11 @@ login. Before changing provider rules, it also performs Fastmail's separate sett
 reauthentication, supplying the password and TOTP when requested. It caches only the
 provider's explicit authorization expiry and rereads rule state after authentication.
 This flow has its own persistent 15-minute attempt cooldown; rejected credentials stop
-further attempts until corrected enrollment or an explicit administrator settings retry. It does not assume a permission error
+further attempts until corrected enrollment or an explicit administrator settings retry.
+Login and settings challenges share a persisted TOTP time-step reservation. If both
+need a code in the same 30-second window, Tahor waits once for the next window
+(up to 31 seconds); a stalled or backward clock stops the attempt. This avoids
+submitting the same time-step twice without weakening rejection guards. It does not assume a permission error
 means an earlier rule write is safe to replay. A fresh login does not clear a rejected
 settings-authentication attempt. Session refresh is a convenience, not a guarantee of
 permanent access. A rejected
