@@ -19,6 +19,7 @@ class FreeClassifierGateTests(unittest.TestCase):
         self.records = [{'id': str(i)} for i in range(3)]
         self.start_patch(patch.dict(os.environ, {'TAHOR_CLASSIFY_FREE_ENABLED': '0'}))
         self.start_patch(patch.object(worker, '_paid_retry_at', 0))
+        self.start_patch(patch.object(worker, '_free_retry_at', 0))
         self.start_patch(patch.object(worker, 'log'))
         self.http = self.start_patch(patch.object(classify.urllib.request, 'urlopen'))
 
@@ -94,16 +95,16 @@ class FreeClassifierGateTests(unittest.TestCase):
         self.assertEqual(worker._paid_retry_at, 0)
         self.assertTrue(all(call.args[1] == 'openrouter-paid' for call in backend.call_args_list))
 
-    def test_auto_keeps_free_partition_pending_without_extra_paid_work(self):
+    def test_auto_uses_paid_when_free_is_explicitly_disabled(self):
         with patch.object(worker, 'get_backlog_estimate', return_value=3), patch.object(
                 worker.mailbox_settings, 'recent_free_rate', return_value=1), patch.object(
                 worker.mailbox_settings, 'decide_backend_split', return_value=(1, 2)), patch.object(
                 worker, 'classify_with_backend', side_effect=lambda records, backend:
                 [{'id': r['id'], 'action': 'keep'} for r in records]) as backend:
             free, paid = worker.classify_batch(self.records, 'auto')
-        self.assert_pending(free, 1)
-        self.assertEqual(len(paid), 2)
-        backend.assert_called_once_with(self.records[1:], 'openrouter-paid')
+        self.assertEqual(free, [])
+        self.assertEqual(len(paid), 3)
+        backend.assert_called_once_with(self.records, 'openrouter-paid')
 
     def test_standalone_writes_retry_errors_without_credentials_or_paid_override(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -116,8 +117,8 @@ class FreeClassifierGateTests(unittest.TestCase):
                 classify.main()
             self.assert_pending(json.loads(output.read_text()))
 
-    def test_default_disabled_and_explicit_one_reenables(self):
+    def test_default_enabled_and_explicit_zero_disables(self):
         with patch.dict(os.environ, {}, clear=True):
-            self.assertFalse(classify.free_classification_enabled())
-        with patch.dict(os.environ, {'TAHOR_CLASSIFY_FREE_ENABLED': '1'}):
             self.assertTrue(classify.free_classification_enabled())
+        with patch.dict(os.environ, {'TAHOR_CLASSIFY_FREE_ENABLED': '0'}):
+            self.assertFalse(classify.free_classification_enabled())

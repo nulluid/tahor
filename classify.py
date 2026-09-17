@@ -132,7 +132,7 @@ SCHEMA_FIELDS = ["category", "retention", "expense_type", "needs_attention", "fo
 
 
 def free_classification_enabled():
-    return os.environ.get("TAHOR_CLASSIFY_FREE_ENABLED", "0").strip() == "1"
+    return os.environ.get("TAHOR_CLASSIFY_FREE_ENABLED", "1").strip() == "1"
 
 
 def free_disabled_results(records):

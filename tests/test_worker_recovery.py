@@ -35,6 +35,7 @@ def errors(records, status=402):
 class RecoveryTests(unittest.TestCase):
     def setUp(self):
         worker._paid_retry_at = 0
+        worker._free_retry_at = 0
         self.records = [dict(id=str(i)) for i in range(3)]
         patch.object(worker, 'delete_pending_trash').start()
         self.log = patch.object(worker, 'log').start()

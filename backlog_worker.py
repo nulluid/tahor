@@ -259,7 +259,7 @@ def classify_with_backend(records, backend_name):
                 results[futures[fut]] = {"id": rec["id"], "action": "error", "reason": f"classification failed: {exc}"}
     except FutureTimeoutError:
         pass
-    ex.shutdown(wait=False)
+    ex.shutdown(wait=False, cancel_futures=True)
 
     for i, rec in enumerate(records):
         if results[i] is None:
@@ -326,6 +326,8 @@ def get_backlog_estimate():
 
 PAID_RETRY_SECONDS = 300
 _paid_retry_at = 0.0
+FREE_RETRY_SECONDS = 300
+_free_retry_at = 0.0
 
 
 def log_paid_failures(failures):
@@ -354,6 +356,36 @@ def paid_cooldown_results(records):
             for record in records]
 
 
+def _classify_auto(records):
+    """Prefer free, temporarily routing failures to paid until a free probe succeeds."""
+    global _free_retry_at
+    if _free_retry_at and time.monotonic() < _free_retry_at:
+        return classify_batch(records, "paid_only")
+    if _free_retry_at:
+        probe = _classify_free_and_time(records[:1])
+        if probe[0]["action"] == "error":
+            _free_retry_at = time.monotonic() + FREE_RETRY_SECONDS
+            return classify_batch(records, "paid_only")
+        _free_retry_at = 0.0
+        free_results, paid_results = _classify_auto(records[1:]) if len(records) > 1 else ([], [])
+        return probe + free_results, paid_results
+
+    backlog = get_backlog_estimate()
+    rate = mailbox_settings.recent_free_rate()
+    free_count, _ = mailbox_settings.decide_backend_split(backlog, rate, len(records))
+    free_records, paid_records = records[:free_count], records[free_count:]
+    free_results = _classify_free_and_time(free_records) if free_records else []
+    failures = {result["id"] for result in free_results if result["action"] == "error"}
+    if failures:
+        _free_retry_at = time.monotonic() + FREE_RETRY_SECONDS
+        log(f"Free classification failed for {len(failures)} message(s); using paid temporarily; free probe in 300s")
+        paid_records = [record for record in free_records if record["id"] in failures] + paid_records
+        free_results = [result for result in free_results if result["id"] not in failures]
+    recovered_free, paid_results = classify_batch(
+        paid_records, "paid_only" if _free_retry_at else "paid") if paid_records else ([], [])
+    return free_results + recovered_free, paid_results
+
+
 def classify_batch(records, mode):
     """Retry paid failures on free, periodically probing paid for recovery.
 
@@ -361,15 +393,20 @@ def classify_batch(records, mode):
     Only final results are returned, so each message is applied once.
     """
     global _paid_retry_at
+    if mode not in ("paid_only", "paid", "auto", "free"):
+        raise ValueError("Unknown classification policy")
     if not records:
         return [], []
     if mode == "free":
         return _classify_batch(records, mode)
+    if mode == "auto":
+        return _classify_auto(records)
+    allow_free = mode == "paid" and classify.free_classification_enabled()
 
     probe_results = []
     if _paid_retry_at:
         if time.monotonic() < _paid_retry_at:
-            if not classify.free_classification_enabled():
+            if not allow_free:
                 log("Paid backend cooling down; free fallback disabled; messages retained for retry")
                 return [], paid_cooldown_results(records)
             log("Paid backend cooling down; using free tier")
@@ -379,7 +416,7 @@ def classify_batch(records, mode):
         if probe_results[0]["action"] == "error":
             _paid_retry_at = time.monotonic() + PAID_RETRY_SECONDS
             log_paid_failures(probe_results)
-            if not classify.free_classification_enabled():
+            if not allow_free:
                 log("Paid probe failed; free fallback disabled; retrying paid in 300s")
                 return [], probe_results + paid_cooldown_results(records[1:])
             log("Paid probe failed; using free tier and retrying paid in 300s")
@@ -399,7 +436,7 @@ def classify_batch(records, mode):
                 or len(failures) / len(paid_results) >= 0.8):
             _paid_retry_at = time.monotonic() + PAID_RETRY_SECONDS
             log("Paid backend unavailable; next recovery probe in 300s")
-        if not classify.free_classification_enabled():
+        if not allow_free:
             log("Free fallback disabled; preserving paid errors for retry")
             return free_results, paid_results
         failed_ids = {r["id"] for r in failures}
@@ -414,8 +451,8 @@ def _classify_batch(records, mode):
     """Returns (free_results, paid_results) -- kept separate, rather than one
     merged list, so the caller can tell a free-only quota exhaustion apart
     from a genuine paid-backend problem (see process_one_batch)."""
-    if mode == "paid":
-        log(f"  backend split: 0 free, {len(records)} paid (mode=paid)")
+    if mode in ("paid", "paid_only"):
+        log(f"  backend split: 0 free, {len(records)} paid (mode={mode})")
         return [], classify_with_backend(records, "openrouter-paid")
 
     if mode == "free":
