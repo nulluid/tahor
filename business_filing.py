@@ -123,6 +123,9 @@ def match_message(record, result=None, delivered=None, flags=(), rules=None):
         receipt = category in ('receipt','statement','government-tax') or bool(re.search(r'\b(?:receipt|invoice|payment (?:received|successful|confirmation)|refund (?:issued|confirmation))\b', subject))
         if category == 'marketing' and not re.search(r'\b(?:your receipt|receipt (?:for|from)|invoice\s*(?:#|[0-9])|payment (?:received|successful|confirmation))\b', subject):
             receipt = False
+        import business_ledger
+        if business_ledger.is_payment_reminder(subject, body):
+            receipt = False
         if 'refund' in subject:
             kind = 'refund'
         elif 'invoice' in subject and not re.search(r'\b(?:paid|payment received|payment successful)\b', subject + ' ' + body[:2000]):

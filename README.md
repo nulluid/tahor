@@ -209,13 +209,24 @@ Private business rules group correspondence and file receipt evidence into
 before they are moved. Existing mail can be reconciled with a resumable scan;
 new mail follows the same rules and your configured inbox timing.
 
-The **Expenses** page keeps an initial ledger alongside the receipt emails.
-Review uncertain amounts, inspect the source email, correct values, and export a
-CSV. Paid receipts, refunds, and invoices are distinct; currencies are never
-silently combined, and uncertain or duplicate entries stay out of totals.
-Your business rules, receipts, and ledger stay in private instance data and backups.
-[Business filing and ledger setup](docs/business-ledger.md) explains the current
-workflow and export format. Cloud-drive storage is not required.
+The **Expenses** page opens to the current calendar year, grouped by month.
+Compact rows expand for receipt previews, comments, AI-filled fields, and
+amount review. Monthly and annual summaries show charges, refund credits, and
+net paid, with expandable category totals. Invoices and currencies remain
+separate; uncertain amounts and duplicates stay out of totals. Remove an entry
+from the page without deleting its email or audit history.
+
+Download a year or all expense data as a ZIP containing CSV, ledger and review
+history, and original `.eml` files with attachments. Receipt filenames include
+the month, category, vendor, and entry ID. A manifest identifies any originals
+still awaiting recovery. The five-minute expense worker archives source emails
+and proposes vendor, date, type, reference, amount, currency, bookkeeping category,
+and business-purpose comments using your rule-writing model and privacy settings.
+Missing evidence remains blank, and suggestions do not overwrite confirmed values.
+Your verified off-server recovery schedule backs up the ledger, comments,
+categories, and archived originals together.
+[Business filing and ledger setup](docs/business-ledger.md) covers review,
+archive limits, exports, and recovery. Cloud-drive storage is not required.
 
 <details>
 <summary>See the private expense ledger</summary>

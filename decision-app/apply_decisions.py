@@ -541,7 +541,8 @@ def main():
             if isinstance(choice, dict) and choice.get('action') in ('keep', 'keep_brief', 'trash'):
                 resolved_ids.append(row['id'])
         ids = list(dict.fromkeys(resolved_ids + pending_ids))
-        ai_routing.reconcile_pending('rule', pending_ids + vendor_suggestions.pending_work_ids(conn))
+        import expense_categories
+        ai_routing.reconcile_pending('rule', pending_ids + vendor_suggestions.pending_work_ids(conn) + expense_categories.pending_work_ids(conn))
     finally:
         conn.close()
     failures = 0

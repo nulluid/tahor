@@ -46,6 +46,7 @@ def write_units(directory, config, python):
         'tahor-draft-replies': ('drafts', '--watch'),
         'tahor-filing': ('filing', ''),
         'tahor-filing-maintenance': ('filing-maintenance', ''),
+        'tahor-expenses': ('expense-maintenance', ''),
         'tahor-retention': ('retention', ''),
         'tahor-healthcheck': ('status', '--check'),
         'tahor-decisions': ('decisions', ''),
@@ -56,7 +57,7 @@ def write_units(directory, config, python):
         'tahor-notifications': ('notify', ''),
     }
     for name, (command, suffix) in commands.items():
-        oneshot = command in ('filing', 'filing-maintenance', 'retention', 'status', 'notify', 'decisions', 'subscriptions', 'subscription-actions', 'decision-suggestions', 'decision-actions')
+        oneshot = command in ('filing', 'filing-maintenance', 'expense-maintenance', 'retention', 'status', 'notify', 'decisions', 'subscriptions', 'subscription-actions', 'decision-suggestions', 'decision-actions')
         text = f'''[Unit]
 Description={name}
 After=network-online.target
@@ -69,7 +70,7 @@ ExecStart={unit_quote(python)} {unit_quote(ROOT / "run.py")} --env {unit_quote(c
 UMask=0077
 NoNewPrivileges=true
 '''
-        if command in ('subscriptions', 'subscription-actions', 'decision-suggestions', 'decision-actions', 'filing-maintenance'):
+        if command in ('subscriptions', 'subscription-actions', 'decision-suggestions', 'decision-actions', 'filing-maintenance', 'expense-maintenance'):
             text += 'TimeoutStartSec=300\n'
         if not oneshot:
             text += 'Restart=always\nRestartSec=30\n\n[Install]\nWantedBy=default.target\n'
@@ -86,13 +87,13 @@ Persistent=true
 WantedBy=timers.target
 ''')
 
-    for name in ('tahor-filing-maintenance', 'tahor-subscriptions', 'tahor-subscription-actions', 'tahor-decision-suggestions', 'tahor-decision-actions'):
+    for name in ('tahor-expenses', 'tahor-filing-maintenance', 'tahor-subscriptions', 'tahor-subscription-actions', 'tahor-decision-suggestions', 'tahor-decision-actions'):
         (directory / (name + '.timer')).write_text(f'''[Unit]
 Description=Process queued {name} work promptly
 
 [Timer]
-OnBootSec={'5min' if name == 'tahor-filing-maintenance' else '15s'}
-OnUnitInactiveSec={'5min' if name == 'tahor-filing-maintenance' else '15s'}
+OnBootSec={'5min' if name in ('tahor-filing-maintenance', 'tahor-expenses') else '15s'}
+OnUnitInactiveSec={'5min' if name in ('tahor-filing-maintenance', 'tahor-expenses') else '15s'}
 AccuracySec=1s
 
 [Install]

@@ -29,7 +29,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 import requests
-from flask import Flask, g, redirect, request, session, abort, jsonify, Response
+from flask import Flask, g, redirect, request, session, abort, jsonify, Response, send_file
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import apply_decisions
@@ -1345,58 +1345,149 @@ def decision_suggestion_status(job_id):
         abort(404)
 
 
+def expense_year(allow_all=False):
+    if allow_all and request.args.get('scope') == 'all':
+        return None
+    value = request.values.get('year', str(datetime.now(timezone.utc).year))
+    if not re.fullmatch(r'[0-9]{4}', value or '') or not 1900 <= int(value) <= 9999:
+        abort(400, 'Choose a valid calendar year.')
+    return int(value)
+
+
+def expense_return():
+    return redirect('/expenses?year=' + str(expense_year()) if 'year' in request.form else '/expenses')
+
+
 @app.route('/expenses')
 @login_required
 def expenses_page():
-    import business_ledger, expense_ui
+    import business_ledger, expense_ui, expense_archive
+    year = expense_year()
+    entries = business_ledger.list_entries(year=year)
+    report = business_ledger.report(year)
+    years = {year, datetime.now(timezone.utc).year}
+    for row in business_ledger.list_entries():
+        date = row.get('document_date') or row.get('received_at') or ''
+        if re.match(r'^[0-9]{4}-', date): years.add(int(date[:4]))
     flash = session.pop('flash', '')
-    return '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Tahor — expenses</title>' + STYLE_BLOCK + '</head><body><main>' + tahor_header('expenses') + ('<p role="status">' + html(flash) + '</p>' if flash else '') + expense_ui.render(business_ledger.list_entries(), business_ledger.summaries()) + '</main></body></html>'
+    body = expense_ui.render(entries, report['totals'], year=year, report=report, years=years, archive_status=expense_archive.archive_status(entries))
+    return '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Tahor — expenses</title>' + STYLE_BLOCK + '</head><body><main>' + tahor_header('expenses') + ('<p role="status">' + html(flash) + '</p>' if flash else '') + body + '</main></body></html>'
 
 
 @app.route('/expenses.csv')
 @login_required
 def expenses_csv():
     import business_ledger
-    response = Response(business_ledger.export_csv(), mimetype='text/csv')
-    response.headers['Content-Disposition'] = 'attachment; filename="business-expenses.csv"'
+    year = expense_year(allow_all=True)
+    response = Response(business_ledger.export_csv(year=year), mimetype='text/csv')
+    response.headers['Content-Disposition'] = 'attachment; filename="business-expenses-' + str(year or 'all') + '.csv"'
     return response
+
+
+@app.route('/expenses.zip')
+@login_required
+def expenses_zip():
+    import business_ledger, expense_archive
+    year = expense_year(allow_all=True)
+    entries = business_ledger.list_entries(year=year)
+    try:
+        stream = expense_archive.export_zip(entries, business_ledger.export_csv(rows=entries))
+    except (ValueError, RuntimeError):
+        return 'The archive could not be generated safely. Try one calendar year at a time.', 409
+    response = send_file(stream, mimetype='application/zip', as_attachment=True, download_name='business-expenses-' + str(year or 'all') + '.zip', conditional=False)
+    response.call_on_close(stream.close)
+    return response
+
+
+@app.route('/expenses/<int:identifier>/metadata', methods=['POST'])
+@login_required
+def expense_metadata(identifier):
+    import business_ledger
+    year = expense_year()
+    try:
+        business_ledger.update_metadata(identifier, comment=request.form.get('comment',''), category=request.form.get('category',''))
+    except LookupError: abort(404)
+    except ValueError as error: abort(400, str(error))
+    session['flash'] = 'Category and comment saved. Financial values are unchanged.'
+    return expense_return()
+
+
+@app.route('/expenses/<int:identifier>/accept-category', methods=['POST'])
+@login_required
+def expense_accept_category(identifier):
+    import business_ledger
+    year = expense_year()
+    try:
+        item = business_ledger.get_entry(identifier)
+        suggestion = request.form.get('suggestion','')
+        if not suggestion or suggestion != item.get('category_suggestion'):
+            abort(409, 'The category suggestion changed. Refresh before accepting it.')
+        business_ledger.accept_category_suggestion(identifier, suggestion)
+    except LookupError: abort(404)
+    except ValueError as error: abort(400, str(error))
+    session['flash'] = 'Suggested category accepted.'
+    return expense_return()
+
+
+@app.route('/expenses/<int:identifier>/suggest-category', methods=['POST'])
+@login_required
+def expense_suggest_category(identifier):
+    import expense_categories
+    year = expense_year()
+    try:
+        expense_categories.request_suggestion(identifier)
+    except LookupError: abort(404)
+    except ValueError as error: abort(400, str(error))
+    session['flash'] = 'AI review queued for all expense fields. Refresh shortly to review the suggestions.'
+    return expense_return()
 
 
 @app.route('/expenses/<int:identifier>/confirm', methods=['POST'])
 @login_required
 def confirm_expense(identifier):
+    expense_year()
     import business_ledger
     try:
-        business_ledger.confirm_entry(identifier, document_type=request.form.get('document_type'), currency=request.form.get('currency'), amount=request.form.get('amount'), document_date=request.form.get('document_date'), reference=request.form.get('reference'), distinct_document=request.form.get('distinct_document') == '1')
+        business_ledger.confirm_entry(identifier, document_type=request.form.get('document_type'), currency=request.form.get('currency'), amount=request.form.get('amount'), document_date=request.form.get('document_date'), reference=request.form.get('reference'), distinct_document=request.form.get('distinct_document') == '1', vendor=request.form.get('vendor'), category=request.form.get('category'), comment=request.form.get('comment'))
     except LookupError:
         abort(404)
     except ValueError as error:
         abort(400, str(error))
     session['flash'] = 'Ledger values confirmed. The receipt email is unchanged.'
-    return redirect('/expenses')
+    return expense_return()
 
 
 @app.route('/expenses/<int:identifier>/exclude', methods=['POST'])
 @login_required
 def exclude_expense(identifier):
+    expense_year()
     import business_ledger
     try:
         business_ledger.exclude_entry(identifier)
     except LookupError:
         abort(404)
-    session['flash'] = 'Entry excluded from totals. The receipt email is unchanged.'
-    return redirect('/expenses')
+    session['flash'] = 'Entry removed from Expenses and totals. Its audit record and email are retained.'
+    return expense_return()
 
 
 @app.route('/expenses/message/<int:identifier>')
 @login_required
 def expense_message(identifier):
     import business_ledger, message_reviews
-    item = business_ledger.get_entry(identifier)
-    if item is None:
+    try:
+        item = business_ledger.get_entry(identifier)
+    except LookupError:
         abort(404)
     try:
-        details, body = message_reviews.read_message(item)
+        import expense_archive, fetch_batch, email
+        try:
+            raw = expense_archive.read_original(identifier)
+        except LookupError:
+            details, body = message_reviews.read_message(item)
+        else:
+            message = email.message_from_bytes(raw)
+            details = {'subject': fetch_batch.decode_str(message.get('Subject', 'Receipt')), 'sender': str(message.get('From',''))}
+            body = fetch_batch.extract_body_text(raw)
     except (ValueError, RuntimeError):
         return 'The receipt could not be located safely. Open it in your mail client or try again later.', 409
     except Exception:

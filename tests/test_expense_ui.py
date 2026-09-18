@@ -40,3 +40,71 @@ class ExpensePageTests(AppTestCase):
         self.assertEqual(response.status_code,200)
         self.assertIn('&lt;script&gt;untrusted&lt;/script&gt;',response.get_data(as_text=True))
         self.assertIn('expenses\\/message',response.get_data(as_text=True))
+
+    def test_year_filter_compact_rows_and_removal(self):
+        body=self.client.get('/expenses?year=2026').get_data(as_text=True)
+        self.assertIn('July 2026',body)
+        self.assertIn('2026 total',body)
+        self.assertIn('Year totals by category',body)
+        self.assertIn('class="card expense-row"',body)
+        self.assertNotIn('class="card expense-row" open',body)
+        self.assertNotIn('&lt;Example &amp; Co&gt;',self.client.get('/expenses?year=2025').get_data(as_text=True))
+        self.assertEqual(self.client.get('/expenses?year=bad').status_code,400)
+        response=self.client.post('/expenses/'+str(self.identifier)+'/exclude',data={'csrf_token':self.token(),'year':'2026'})
+        self.assertEqual(response.status_code,302)
+        self.assertIn('year=2026',response.headers['Location'])
+        body=self.client.get('/expenses?year=2026').get_data(as_text=True)
+        self.assertNotIn('&lt;Example &amp; Co&gt;',body)
+        self.assertIn('excluded',self.client.get('/expenses.csv?year=2026').get_data(as_text=True))
+
+    def test_notes_category_and_ai_acceptance_do_not_confirm_amounts(self):
+        route='/expenses/'+str(self.identifier)+'/metadata'
+        self.assertEqual(self.client.post(route,data={'category':'Software'}).status_code,400)
+        response=self.client.post(route,data={'csrf_token':self.token(),'year':'2026','category':'Software','comment':'<script>audit</script>'})
+        self.assertEqual(response.status_code,302)
+        row=business_ledger.get_entry(self.identifier)
+        self.assertEqual(row['category'],'Software');self.assertEqual(row['owner_confirmed'],0)
+        self.assertIn('&lt;script&gt;audit&lt;/script&gt;',self.client.get('/expenses?year=2026').get_data(as_text=True))
+        business_ledger.update_metadata(self.identifier,category='',comment='keep latest comment')
+        business_ledger.set_category_suggestion(self.identifier,'Cloud hosting','Recurring infrastructure')
+        accept='/expenses/'+str(self.identifier)+'/accept-category'
+        self.assertEqual(self.client.post(accept,data={'csrf_token':self.token(),'suggestion':'Wrong'}).status_code,409)
+        self.assertEqual(self.client.post(accept,data={'csrf_token':self.token(),'suggestion':'Cloud hosting'}).status_code,302)
+        self.assertEqual(business_ledger.get_entry(self.identifier)['comment'],'keep latest comment')
+
+    def test_zip_is_private_and_complete_about_missing_originals(self):
+        import io,json,zipfile
+        self.assertEqual(self.module.app.test_client().get('/expenses.zip').status_code,302)
+        response=self.client.get('/expenses.zip?year=2026')
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.headers['Cache-Control'],'no-store')
+        with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+            self.assertIn('expenses.csv',archive.namelist())
+            self.assertIn('reviews.json',archive.namelist())
+            manifest=json.loads(archive.read('manifest.json'))
+            self.assertFalse(manifest['complete'])
+            self.assertEqual(manifest['originals'][0]['entry_id'],self.identifier)
+        empty=self.client.get('/expenses.zip?year=2025')
+        with zipfile.ZipFile(io.BytesIO(empty.data)) as archive:
+            self.assertEqual(json.loads(archive.read('ledger.json')),[])
+        response.close();empty.close()
+
+    def test_invalid_year_does_not_mutate_expense(self):
+        self.assertEqual(self.client.post('/expenses/'+str(self.identifier)+'/exclude',data={'csrf_token':self.token(),'year':'bad'}).status_code,400)
+        self.assertNotEqual(business_ledger.get_entry(self.identifier)['status'],'excluded')
+
+    def test_ai_prefills_all_unconfirmed_fields_but_preserves_owner_edits(self):
+        fields=dict(vendor='Example Software',document_date='2026-07-14',document_type='receipt',reference='AI-123',amount='25.00',currency='USD',category='Software subscriptions',comment='Developer tool usage')
+        business_ledger.set_ai_suggestions(self.identifier,fields,'Receipt evidence reviewed')
+        body=self.client.get('/expenses?year=2026').get_data(as_text=True)
+        self.assertIn('value="Example Software"',body)
+        self.assertIn('Developer tool usage',body)
+        self.assertIn('value="AI-123"',body)
+        self.assertEqual(business_ledger.get_entry(self.identifier)['vendor'],'<Example & Co>')
+        response=self.client.post('/expenses/'+str(self.identifier)+'/confirm',data=dict(csrf_token=self.token(),year='2026',vendor='Reviewed vendor',document_date='2026-07-13',document_type='receipt',reference='OWNER',amount='24.00',currency='USD',category='',comment=''))
+        self.assertEqual(response.status_code,302)
+        body=self.client.get('/expenses?year=2026').get_data(as_text=True)
+        self.assertIn('value="Reviewed vendor"',body)
+        self.assertNotIn('value="Example Software"',body)
+        self.assertNotIn('Developer tool usage',body)
+        self.assertEqual(business_ledger.get_entry(self.identifier)['amount_minor'],2400)

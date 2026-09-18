@@ -21,6 +21,11 @@ class BusinessRoutingTests(unittest.TestCase):
     def save(self):self.file.write_text(json.dumps(self.config))
     def record(self,**changes):return dict({'id':'<receipt@example.com>','from':'billing@service.example','subject':'Your receipt for service','date':'2026-07-01T00:10:00-07:00'},**changes)
 
+    def test_upcoming_payment_is_correspondence_even_when_mistagged_receipt(self):
+        route = business.match_message(self.record(subject='Your upcoming payment reminder', body='Your payment of USD 45.00 is scheduled for next week.'), {'category':'receipt'})
+        self.assertFalse(route['is_receipt'])
+        self.assertEqual(route['destination'], 'Business/Example/Correspondence/Service')
+
     def test_private_rules_date_boundary_and_calendar_receipt_folder(self):
         route=business.match_message(self.record(),{'category':'receipt'})
         self.assertEqual(route['destination'],'Business/Example/Receipts/2026')

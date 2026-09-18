@@ -54,7 +54,11 @@ def main():
             ui.tahor_db.upsert_unsubscribe_candidate(domain, 'news@' + domain, name, 'https://' + domain + '/unsubscribe', None, True)
         ui.tahor_db.set_sender_rule('brightday.example', 'block_marketing')
         import business_ledger
-        business_ledger.record_receipt(dict(business_key='example-studio',matched_rule_id='software-receipts',vendor='Example Cloud',sender_email='billing@cloud.example',mailbox='Example Studio/Receipts/2026',message_id='<demo-business-receipt@example.com>',uid='1',uidvalidity='1',received_at='2026-09-15T12:00:00+00:00',subject='Your cloud receipt'), 'Amount paid: USD 24.00\nPayment date: 2026-09-15\nReceipt ID: DEMO-24', verified_business=True)
+        import expense_archive, fetch_batch
+        original = b'From: Example Cloud <billing@cloud.example>\r\nMessage-ID: <demo-business-receipt@example.com>\r\nSubject: Your cloud receipt\r\nContent-Type: text/plain\r\n\r\nAmount paid: USD 24.00\nPayment date: 2026-09-15\nReceipt ID: DEMO-24'
+        expense_id = business_ledger.record_receipt(dict(business_key='example-studio',matched_rule_id='software-receipts',vendor='Example Cloud',sender_email='billing@cloud.example',mailbox='Example Studio/Receipts/2026',message_id='<demo-business-receipt@example.com>',uid='1',uidvalidity='1',received_at='2026-09-15T12:00:00+00:00',subject='Your cloud receipt'), fetch_batch.extract_body_text(original), verified_business=True)
+        business_ledger.update_metadata(expense_id, category='Hosting', comment='Hosted application infrastructure')
+        expense_archive.store_verified(expense_id, original)
         ui.generate_sieve.refresh_sieve()
         ui.runtime_status.write_status('processed', mode='paid_only', last_batch_applied=50, last_batch_pending=0, last_success_at=now)
 
