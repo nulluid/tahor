@@ -166,8 +166,9 @@ Mail that still needs attention stays protected, and inbox timing and deletion
 rules continue to apply. **Use this filing folder** sets the destination for
 qualifying retained mail; it does not keep everything a sender sends. Within that
 sender's filing area, receipts go in **Receipts** and other retained messages go
-in **Correspondence**. Existing mail in configured sender folders is reorganized
-gradually. Business-specific receipt rules can use calendar-year folders instead.
+in **Correspondence**. A bounded maintenance worker revisits existing sender
+folders every five minutes, continuing large folders across passes.
+Business-specific receipt rules can use calendar-year folders instead.
 Shared delivery services are matched by the actual
 sender address; a marketplace purchase does not turn every future receipt into the
 same product category. Uncertain cases show the sender, date, suggested folder,
