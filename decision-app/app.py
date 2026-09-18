@@ -206,6 +206,8 @@ def init_db():
 
 TAHOR_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230B2624'/%3E%3Cpath fill-rule='evenodd' fill='%230EA5A0' d='M50,14 C50,14 22,56 22,68 A28,28 0 1 0 78,68 C78,56 50,14 50,14 Z M33,53 L50,65 L67,53 L67,59 L50,71 L33,59 Z'/%3E%3C/svg%3E"
 
+FAVICON_LINK = f'<link rel="icon" type="image/svg+xml" href="{TAHOR_ICON}">'
+
 TAHOR_HEADER = """
 <header>
   <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill-rule="evenodd" fill="currentColor" d="M50,8 C50,8 18,54 18,68 A32,32 0 1 0 82,68 C82,54 50,8 50,8 Z M30,52 L50,66 L70,52 L70,59 L50,73 L30,59 Z"/></svg>
@@ -1174,7 +1176,7 @@ def view_message(decision_id, sample_index=None):
         return 'The message could not be read safely. Return to Pending decisions and refresh its details, or open it in your mail client.', 409
     except Exception:
         return 'The mailbox is temporarily unavailable. Your message remains unread and unchanged.', 503
-    return ('<!doctype html><html><head><meta charset="utf-8"><title>Tahor — message</title>' + STYLE_BLOCK + '</head><body><main>' + tahor_header('') +
+    return ('<!doctype html><html><head><meta charset="utf-8"><title>Tahor — message</title>' + FAVICON_LINK + STYLE_BLOCK + '</head><body><main>' + tahor_header('') +
             '<p><a href="/">Back to pending decisions</a></p><h1>' + html(details.get('subject') or '(No subject)') +
             '</h1><p>From: ' + html(details.get('sender', '')) + '</p><p>Received: ' + html(details.get('received_at', '')) +
             '</p><p>This read-only text view does not mark the email read. Remote images and attachments are not displayed.</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">' + html(body) + '</pre></main></body></html>')
@@ -1371,7 +1373,7 @@ def expenses_page():
         if re.match(r'^[0-9]{4}-', date): years.add(int(date[:4]))
     flash = session.pop('flash', '')
     body = expense_ui.render(entries, report['totals'], year=year, report=report, years=years, archive_status=expense_archive.archive_status(entries))
-    return '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Tahor — expenses</title>' + STYLE_BLOCK + '</head><body><main>' + tahor_header('expenses') + ('<p role="status">' + html(flash) + '</p>' if flash else '') + body + '</main></body></html>'
+    return '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Tahor — expenses</title>' + FAVICON_LINK + STYLE_BLOCK + '</head><body><main>' + tahor_header('expenses') + ('<p role="status">' + html(flash) + '</p>' if flash else '') + body + '</main></body></html>'
 
 
 @app.route('/expenses.csv')
@@ -1492,7 +1494,7 @@ def expense_message(identifier):
         return 'The receipt could not be located safely. Open it in your mail client or try again later.', 409
     except Exception:
         return 'The mailbox is temporarily unavailable. The receipt is unchanged.', 503
-    return '<!doctype html><html><head><title>Receipt email</title>' + STYLE_BLOCK + '</head><body><main><h1>' + html(details.get('subject', 'Receipt email')) + '</h1><p>From: ' + html(details.get('sender', '')) + '</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">' + html(body) + '</pre></main></body></html>'
+    return '<!doctype html><html><head><title>Receipt email</title>' + FAVICON_LINK + STYLE_BLOCK + '</head><body><main><h1>' + html(details.get('subject', 'Receipt email')) + '</h1><p>From: ' + html(details.get('sender', '')) + '</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">' + html(body) + '</pre></main></body></html>'
 
 
 @app.route("/add-rule", methods=["POST"])
@@ -1741,7 +1743,7 @@ def subscription_messages_page(candidate_id):
         except (ValueError, TypeError):
             pass
         entries.append(f'<div class="card"><h2><a href="/subscription-message/{candidate_id}/{sample["id"]}">{html(sample.get("subject") or "(No subject)")}</a></h2><p>From: {html(sample.get("display_name") or "")} &lt;{html(sample.get("sender_email") or "")}&gt;</p><p>{html(received + age)}</p><p>{html(sample.get("mailbox") or "")}</p></div>')
-    return ('<!doctype html><html><head><meta charset="utf-8"><title>Tahor — subscription emails</title>' + STYLE_BLOCK + '</head><body><main>' + tahor_header('unsubscribe') +
+    return ('<!doctype html><html><head><meta charset="utf-8"><title>Tahor — subscription emails</title>' + FAVICON_LINK + STYLE_BLOCK + '</head><body><main>' + tahor_header('unsubscribe') +
         '<p><a href="/unsubscribe">Back to subscriptions</a></p><h1>Emails from ' + html(candidate['display_name'] or candidate['sender_email'] or candidate['sender_domain']) +
         '</h1><p>Up to three recently captured messages from this subscription. Sender addresses are shown individually. Viewing leaves messages unread and does not load remote images.</p><p role="status">' + html(notice) + '</p>' +
         (''.join(entries) or '<p>No message samples have been captured yet. Search the mailbox to find recent examples.</p>') +
@@ -1765,7 +1767,7 @@ def subscription_message_view(candidate_id, sample_id):
         return 'This message moved or could not be identified safely. Return to its email list and search again, or open it in Fastmail.', 409
     except Exception:
         return 'The mailbox is temporarily unavailable. Your message remains unread and unchanged.', 503
-    return ('<!doctype html><html><head><meta charset="utf-8"><title>Tahor — subscription message</title>' + STYLE_BLOCK + '</head><body><main>' + tahor_header('unsubscribe') +
+    return ('<!doctype html><html><head><meta charset="utf-8"><title>Tahor — subscription message</title>' + FAVICON_LINK + STYLE_BLOCK + '</head><body><main>' + tahor_header('unsubscribe') +
         f'<p><a href="/subscription-messages/{candidate_id}">Back to this sender’s emails</a></p><h1>' + html(details.get('subject') or '(No subject)') +
         '</h1><p>From: ' + html(details.get('sender', '')) + '</p><p>Received: ' + html(details.get('received_at', '')) +
         '</p><p>This text view does not mark the email read. Remote images and attachments are not displayed.</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">' + html(body) + '</pre></main></body></html>')
@@ -1916,7 +1918,7 @@ def worker_status():
                ("Applied in last batch", snapshot.get("last_batch_applied", "—")),
                ("Pending retry in last batch", snapshot.get("last_batch_pending", "—"))]
     rows = "".join(f'<tr><th style="text-align:left;padding:10px">{html(label)}</th><td>{html(value)}</td></tr>' for label, value in details)
-    return f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Tahor — status</title>{STYLE_BLOCK}</head><body><main>{tahor_header("status")}<h1>Worker status</h1><p>{html(runtime_status.describe_status(snapshot))}</p><div class="card"><table>{rows}</table></div><p class="hint">Speed is your preference. Temporary provider fallback does not change it. Refresh this page for the latest worker report.</p></main></body></html>'
+    return f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Tahor — status</title>{FAVICON_LINK}{STYLE_BLOCK}</head><body><main>{tahor_header("status")}<h1>Worker status</h1><p>{html(runtime_status.describe_status(snapshot))}</p><div class="card"><table>{rows}</table></div><p class="hint">Speed is your preference. Temporary provider fallback does not change it. Refresh this page for the latest worker report.</p></main></body></html>'
 
 
 @app.route("/healthz")
