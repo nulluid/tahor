@@ -16,13 +16,14 @@ class FilingTests(unittest.TestCase):
         conn = Mock()
         conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         conn.select.return_value = ('OK', [])
+        conn.response.return_value = ('UIDVALIDITY', [b'42'])
         conn.capabilities = ('MOVE',)
         conn.list.return_value = ('OK', [b'folder'])
         def uid(command, *args):
             if command == 'SEARCH':
                 return 'OK', [b'1']
             if command == 'FETCH':
-                return 'OK', [(b'1', b'From: billing@example.com\r\n')]
+                return 'OK', [(b'1 (UID 1 FLAGS (category-receipt retention-forever) INTERNALDATE "01-Jan-2020 12:00:00 +0000")', b'From: billing@example.com\r\n')]
             return 'NO', []
         conn.uid.side_effect = uid
         with patch.object(filing_sweep, 'connect', return_value=conn), patch.object(filing_sweep.config, 'vendor_buckets', return_value={'example.com': ('Shopping', 'Shop')}), patch.object(sys, 'argv', ['filing_sweep.py']):
@@ -34,6 +35,7 @@ class FilingTests(unittest.TestCase):
         conn = Mock()
         conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         conn.select.return_value = ('OK', [])
+        conn.response.return_value = ('UIDVALIDITY', [b'42'])
         conn.uid.return_value = ('NO', [])
         with patch.object(filing_sweep, 'connect', return_value=conn), patch.object(filing_sweep.config, 'vendor_buckets', return_value={}), patch.object(sys, 'argv', ['filing_sweep.py']):
             with self.assertRaisesRegex(RuntimeError, 'search failed'):
@@ -59,12 +61,13 @@ class FilingTests(unittest.TestCase):
         conn.untagged_responses = {'UIDNEXT': [b'10000'], 'EXISTS': [b'100']}
         conn.capabilities = (b'MOVE', b'UIDPLUS')
         conn.select.return_value = ('OK', [])
+        conn.response.return_value = ('UIDVALIDITY', [b'42'])
         conn.list.return_value = ('OK', [b'folder'])
         def uid(command, *args):
             if command == 'SEARCH':
                 return 'OK', [b'1']
             if command == 'FETCH':
-                return 'OK', [(b'1', b'From: Billing <billing@example.com>\r\n')]
+                return 'OK', [(b'1 (UID 1 FLAGS (category-receipt retention-forever) INTERNALDATE "01-Jan-2020 12:00:00 +0000")', b'From: Billing <billing@example.com>\r\n')]
             return 'OK', []
         conn.uid.side_effect = uid
         with patch.object(filing_sweep, 'connect', return_value=conn), patch.object(filing_sweep.config, 'vendor_buckets', return_value={'example.com': ('Shopping', 'Shop')}), patch.object(sys, 'argv', ['filing_sweep.py']):

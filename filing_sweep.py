@@ -34,7 +34,38 @@ import coupon_expiry
 import business_filing
 from mailbox_paths import list_mailboxes, quote_mailbox
 
-CATEGORY_KEYWORDS = ["category-receipt", "category-statement", "category-government-tax"]
+CATEGORY_KEYWORDS = ['category-' + category for category in (
+    'receipt', 'statement', 'government-tax', 'security-alert', 'shipping',
+    'subscription', 'legal', 'medical', 'travel', 'financial-account', 'utility',
+    'personal-correspondence',
+)]
+HEADER_FETCH = '(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)])'
+MOVE_GUARDS = {b'\\flagged', b'\\draft', b'\\deleted', b'needs-attention',
+               b'retention-pending-review', b'delete-pending'}
+
+
+def move_snapshot(conn, uid):
+    from message_expiry import metadata
+    status, rows = conn.uid('FETCH', uid, HEADER_FETCH)
+    if status != 'OK':
+        raise RuntimeError('Could not verify filing source')
+    _, flags, delivered = metadata(rows, uid, content=True)
+    body = next(row[1] for row in rows if isinstance(row, tuple))
+    return flags, delivered, body
+
+
+def move_allowed(snapshot, grace, reply_rule=None):
+    flags, delivered, _ = snapshot
+    if flags & MOVE_GUARDS:
+        return False
+    if reply_rule is None and (b'reply-protected' in flags or any(flag.startswith(b'reply-rule-') for flag in flags)):
+        return False
+    if reply_rule is not None:
+        if not {reply_rules.keyword(reply_rule).encode(), reply_rules.scan_keyword(reply_rule).encode()} <= flags:
+            return False
+    days = grace['read' if b'\\seen' in flags else 'unread']
+    return datetime.now(timezone.utc) >= delivered + timedelta(days=days)
+
 
 
 def connect():
@@ -60,6 +91,10 @@ def vendor_for(from_header, buckets):
     return ("_Unsorted", domain if domain else "Unknown")
 
 
+def filing_destination(root, bucket, vendor, flags):
+    return f'{root}/{bucket}/{vendor}/' + ('Receipts' if b'category-receipt' in flags else 'Correspondence')
+
+
 def ensure_folder(conn, path, created):
     if path in created:
         return
@@ -74,7 +109,7 @@ def ensure_folder(conn, path, created):
 
 
 
-PROTECTED = ("UNFLAGGED", "UNKEYWORD", "needs-attention", "UNKEYWORD", "retention-pending-review", "UNKEYWORD", "delete-pending")
+PROTECTED = ("UNDRAFT", "UNDELETED", "UNFLAGGED", "UNKEYWORD", "needs-attention", "UNKEYWORD", "retention-pending-review", "UNKEYWORD", "delete-pending")
 CLASSIFIED = ("OR", "KEYWORD", "retention-standard", "OR", "KEYWORD", "retention-transient", "KEYWORD", "retention-forever")
 SPECIAL_FOLDERS = {"inbox", "drafts", "sent", "trash", "spam", "junk", "scheduled", "snoozed"}
 SPECIAL_FLAGS = {"\\drafts", "\\sent", "\\trash", "\\junk", "\\all"}
@@ -82,9 +117,10 @@ SPECIAL_FLAGS = {"\\drafts", "\\sent", "\\trash", "\\junk", "\\all"}
 
 def eligible_uids(conn, criteria):
     candidates = set()
+    reply_guards = tuple(value for rule in reply_rules.get_rules() for value in ('UNKEYWORD', reply_rules.keyword(rule)))
     for keyword in CATEGORY_KEYWORDS + [coupon_expiry.KEYWORD]:
-        coupon_guards = ('KEYWORD', 'category-marketing', 'UNKEYWORD', 'reply-protected') if keyword == coupon_expiry.KEYWORD else ()
-        typ, data = search_uids(conn, *criteria, "KEYWORD", keyword, *coupon_guards, *PROTECTED, *CLASSIFIED)
+        coupon_guards = ('KEYWORD', 'category-marketing') if keyword == coupon_expiry.KEYWORD else ()
+        typ, data = search_uids(conn, *criteria, "KEYWORD", keyword, *coupon_guards, *reply_guards, "UNKEYWORD", "reply-protected", *PROTECTED, *CLASSIFIED)
         if typ != "OK":
             raise RuntimeError("Filing search failed; retry the sweep")
         if data and data[0]:
@@ -167,8 +203,9 @@ def refile_unsorted(conn, buckets, root, dry_run=False, state_path=None):
         state = json.loads(state_path.read_text())
     except FileNotFoundError:
         state = {}
+    vendor_roots = {f'{root}/{value[0]}/{value[1]}' for value in buckets.values() if isinstance(value, (list, tuple)) and len(value) == 2}
     paths = [name for name, flags in list_mailboxes(conn)
-             if name.startswith(root + '/_Unsorted/') and not flags.intersection(SPECIAL_FLAGS)]
+             if (name.startswith(root + '/_Unsorted/') or name in vendor_roots) and not flags.intersection(SPECIAL_FLAGS)]
     if not paths:
         return 0
     paths.sort()
@@ -184,6 +221,8 @@ def refile_unsorted(conn, buckets, root, dry_run=False, state_path=None):
     for source in ordered[:3]:
         if conn.select(quote_mailbox(source), readonly=dry_run)[0] != 'OK':
             raise RuntimeError('Could not select unsorted mailbox')
+        response = conn.response('UIDVALIDITY')
+        validity = response[1][0] if isinstance(response, tuple) and len(response) == 2 and response[1] else None
         candidates = sorted(eligible_uids(conn, ('UNKEYWORD', 'reply-protected')), key=int)
         previous = int(state.get('uids', {}).get(source, 0))
         candidates = [uid for uid in candidates if int(uid) > previous] + [uid for uid in candidates if int(uid) <= previous]
@@ -202,22 +241,21 @@ def refile_unsorted(conn, buckets, root, dry_run=False, state_path=None):
                     continue
                 bucket, vendor = vendor_for(str(message.get('From', '')), buckets)
                 if bucket != '_Unsorted':
-                    target = f'{root}/{bucket}/{vendor}'
+                    target = filing_destination(root, bucket, vendor, flags)
                     if target != source:
                         if not dry_run:
                             ensure_folder(conn, target, created)
-                            status, current_rows = conn.uid('FETCH', uid, '(UID FLAGS INTERNALDATE)')
-                            if status != 'OK':
-                                raise RuntimeError('Could not recheck unsorted message')
-                            _, current, current_date = metadata(current_rows, uid)
-                            if current != flags or current_date != delivered:
+                            if conn.select(quote_mailbox(source))[0] != 'OK' or conn.response('UIDVALIDITY') != ('UIDVALIDITY', [validity]) or not isinstance(validity, bytes) or not validity.isdigit():
+                                raise RuntimeError('Refiling mailbox generation changed')
+                            current, current_date, current_body = move_snapshot(conn, uid)
+                            if current != flags or current_date != delivered or current_body != body or not move_allowed((current,current_date,current_body), grace):
                                 continue
-                            # It is already filed, low attention, and past unread grace.
-                            if conn.uid('STORE', uid, '+FLAGS.SILENT', '(\\Seen)')[0] != 'OK':
-                                raise RuntimeError('Could not mark refiled message read')
                             if conn.uid('MOVE', uid, quote_mailbox(target))[0] != 'OK':
                                 raise RuntimeError('Could not refile message')
                             tahor_db.relocate_vendor_samples(source, target, [str(message.get('Message-ID', ''))])
+                            mark_filed_read(conn, target)
+                            if conn.select(quote_mailbox(source))[0] != 'OK':
+                                raise RuntimeError('Could not resume refiling source')
                         moved += 1
             state.setdefault('uids', {})[source] = int(uid)
         state['folder'] = source
@@ -256,21 +294,28 @@ def main():
         raise
 
     by_dest = defaultdict(list)
+    snapshots = {}
+    grace = {'read': read_min_age, 'unread': unread_min_age}
+    active_filing_rules = [rule for rule in reply_rules.get_rules() if rule.get('filing_folder')]
+    reply_move_rules = {}
     queued_message_ids = {}
     unsorted_labels = set()
     failures = 0
     for uid in candidates:
+        snapshot = move_snapshot(conn, uid)
+        rule = next((r for r in active_filing_rules if r.get('filing_folder') == reply_destinations.get(uid) and {reply_rules.keyword(r).encode(), reply_rules.scan_keyword(r).encode()} <= snapshot[0]), None) if uid in reply_destinations else None
+        if uid in reply_destinations and rule is None:
+            continue
+        reply_move_rules[uid] = rule
+        if not move_allowed(snapshot, grace, rule):
+            continue
+        snapshots[uid] = snapshot
+        flags, delivered, raw_headers = snapshot
         if uid in reply_destinations:
             by_dest[reply_destinations[uid]].append(uid)
             continue
-        typ, msg_data = conn.uid("FETCH", uid, "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)])")
-        if typ != "OK" or not msg_data or not msg_data[0]:
-            failures += 1
-            continue
-        message = email.message_from_bytes(msg_data[0][1], policy=email.policy.default)
+        message = email.message_from_bytes(raw_headers, policy=email.policy.default)
         from_header = message.get('From', '')
-        flags_match = re.search(rb'FLAGS \(([^)]*)\)', msg_data[0][0])
-        flags = set(flags_match[1].lower().split()) if flags_match else set()
         if coupon_expiry.KEYWORD.encode() in flags and b'category-marketing' in flags:
             policy = coupon_expiry.policy_for(str(from_header))
             if any(flag.startswith(b'category-') and flag != b'category-marketing' for flag in flags):
@@ -279,8 +324,6 @@ def main():
                 continue
             by_dest[f"{root}/{policy['folder']}"].append(uid)
             continue
-        delivered_match = re.search(rb'INTERNALDATE "([^"]+)"', msg_data[0][0])
-        delivered = datetime.strptime(delivered_match[1].decode('ascii').strip(), '%d-%b-%Y %H:%M:%S %z') if delivered_match else None
         business_route = business_filing.match_message(dict(id=str(message.get('Message-ID', '')), **{'from': str(from_header)}, subject=str(message.get('Subject', '')), date=str(message.get('Date', ''))), delivered=delivered, flags=flags)
         if business_route:
             # The resumable business sweep alone owns these moves and revalidates
@@ -292,7 +335,6 @@ def main():
             if not dry_run and vendor != "Unknown":
                 display_name, sender_email = email.utils.parseaddr(from_header)
                 queued_message_ids[uid] = str(message.get('Message-ID', ''))
-                delivered = re.search(rb'INTERNALDATE "([^"]+)"', msg_data[0][0])
                 tahor_db.queue_vendor_mapping(vendor, metadata={
                     'sender_email': sender_email.strip().lower(),
                     'display_name': display_name, 'subject': str(message.get('Subject', '')),
@@ -300,9 +342,9 @@ def main():
                     'mailbox': 'INBOX', 'message_id': str(message.get('Message-ID', '')),
                     'uid': uid.decode('ascii'), 'uidvalidity': uidvalidity,
                     'date': str(message.get('Date', '')),
-                    'received_at': delivered[1].decode('ascii', errors='replace') if delivered else '',
+                    'received_at': delivered.isoformat(),
                 })
-        by_dest[f"{root}/{bucket}/{vendor}"].append(uid)
+        by_dest[filing_destination(root, bucket, vendor, flags)].append(uid)
 
     capabilities = {c.decode().upper() if isinstance(c, bytes) else c.upper() for c in conn.capabilities}
     if candidates and not dry_run and "MOVE" not in capabilities:
@@ -319,6 +361,18 @@ def main():
         ensure_folder(conn, dest, created)
         moved_here = 0
         for uid in uids:
+            if conn.select('"INBOX"')[0] != 'OK':
+                raise RuntimeError('Could not reselect filing source')
+            response = conn.response('UIDVALIDITY')
+            values = response[1] if isinstance(response, tuple) and len(response) == 2 else []
+            current_validity = values[0].decode('ascii') if values and isinstance(values[0], bytes) and values[0].isdigit() else ''
+            if not uidvalidity or current_validity != uidvalidity:
+                raise RuntimeError('Filing mailbox generation changed; no stale UID was moved')
+            current = move_snapshot(conn, uid)
+            rule = reply_move_rules.get(uid)
+            if current != snapshots[uid] or not move_allowed(current, grace, rule):
+                failures += 1
+                continue
             typ, _ = conn.uid("MOVE", uid, quote_mailbox(dest))
             if typ == "OK":
                 total_moved += 1

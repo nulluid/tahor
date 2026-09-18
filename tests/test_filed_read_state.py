@@ -9,7 +9,7 @@ from test_unread_grace import Mailbox, message, FrozenDateTime
 import filing_sweep
 import mailbox_settings
 
-DEST = 'Filed/Shopping/Shop'
+DEST = 'Filed/Shopping/Shop/Receipts'
 
 
 class FolderMailbox(Mailbox):

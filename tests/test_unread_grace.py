@@ -56,6 +56,8 @@ class Mailbox:
                         left = criterion(next(tokens))
                         right = criterion(next(tokens))
                         return left or right
+                    if token == 'UNDRAFT': return not row.get('draft', False)
+                    if token == 'UNDELETED': return not row.get('deleted', False)
                     if token == 'UNFLAGGED':
                         return not row.get('flagged', False)
                     if token == 'SEEN':
@@ -73,7 +75,10 @@ class Mailbox:
                 return all(results)
             return 'OK', [b' '.join(uid for uid, row in self.rows.items() if matches(uid, row))]
         if command == 'FETCH':
-            return 'OK', [(b'1', b'From: billing@example.com\r\n')]
+            row = self.rows[args[0]]
+            flags = set(row['tags']) | ({'\\Seen'} if row['read'] else set()) | ({'\\Flagged'} if row.get('flagged') else set())
+            header = b'1 (UID ' + args[0] + b' FLAGS (' + ' '.join(sorted(flags)).encode() + b') INTERNALDATE \"' + row['date'].strftime('%d-%b-%Y %H:%M:%S %z').encode() + b'\")'
+            return 'OK', [(header, b'From: billing@example.com\r\n')]
         if command == 'STORE':
             assert not self.readonly
             if args[1:] == ('+FLAGS.SILENT', '(\\Seen)'):

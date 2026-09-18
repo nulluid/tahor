@@ -74,6 +74,8 @@ class ReplyFiledReadStateTests(unittest.TestCase):
                     if token == 'KEYWORD': return next(tokens) in flags
                     if token == 'UNKEYWORD': return next(tokens) not in flags
                     if token == 'UNSEEN': return '\\Seen' not in flags
+                    if token == 'UNDRAFT': return '\\Draft' not in flags
+                    if token == 'UNDELETED': return '\\Deleted' not in flags
                     if token == 'UNFLAGGED': return '\\Flagged' not in flags
                     if token == 'BEFORE':
                         cutoff = datetime.strptime(next(tokens), '%d-%b-%Y').replace(tzinfo=timezone.utc)

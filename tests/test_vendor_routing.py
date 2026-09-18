@@ -63,11 +63,12 @@ class VendorRoutingTests(unittest.TestCase):
     def test_filing_queues_decoded_message_context_without_marking_read(self):
         client = Mock()
         client.capabilities = ('MOVE',)
+        client.response.return_value = ('UIDVALIDITY', [b'42'])
         client.select.return_value = ('OK', [])
         client.list.return_value = ('OK', [b'folder'])
         def uid(command, *args):
             if command == 'FETCH':
-                return 'OK', [(b'1 (UID 7 INTERNALDATE "17-Sep-2026 01:02:03 +0000")',
+                return 'OK', [(b'1 (UID 7 FLAGS (category-receipt retention-standard) INTERNALDATE "17-Sep-2020 01:02:03 +0000")',
                     b'From: =?utf-8?q?Alpha_Store?= <alpha@t.shopifyemail.com>\r\nSubject: Receipt #123\r\nDate: Thu, 17 Sep 2026 01:00:00 +0000\r\n\r\n')]
             return 'OK', []
         client.uid.side_effect = uid
@@ -86,6 +87,6 @@ class VendorRoutingTests(unittest.TestCase):
         self.assertEqual(metadata['sender_email'], 'alpha@t.shopifyemail.com')
         self.assertEqual(metadata['display_name'], 'Alpha Store')
         self.assertEqual(metadata['subject'], 'Receipt #123')
-        self.assertEqual(metadata['received_at'], '17-Sep-2026 01:02:03 +0000')
+        self.assertEqual(metadata['received_at'], '2020-09-17T01:02:03+00:00')
         fetch = next(c for c in client.uid.call_args_list if c.args[0] == 'FETCH')
         self.assertIn('BODY.PEEK', fetch.args[2])
