@@ -106,6 +106,16 @@ class DecisionBatchTests(AppTestCase):
         with patch.object(suggestions,'model_call',side_effect=changing):suggestions.run_pending_jobs()
         self.assertEqual(suggestions.get_job(job['job_id'])['recommendations'],[])
 
+    def test_prompt_change_requires_fresh_recommendations(self):
+        self.add()
+        job=suggestions.enqueue()
+        with patch.object(suggestions,'model_call',side_effect=self.model):
+            suggestions.run_pending_jobs()
+        self.assertEqual(len(suggestions.get_job(job['job_id'])['recommendations']),1)
+        with patch.object(suggestions,'SYSTEM_PROMPT',suggestions.SYSTEM_PROMPT+' Updated guidance.'):
+            self.assertEqual(suggestions.latest_recommendations(),[])
+            self.assertEqual(suggestions.enqueue()['total'],1)
+
     def test_feedback_contains_queued_owner_intent_excludes_automatic_mapping(self):
         identifier=self.add();bulk.enqueue([self.selection(identifier,'keep_brief')],'owner-feedback')
         self.add('vendor_mapping',{'action':'map','bucket':'Shopping','vendor_name':'Shop','automatic_vendor_mapping':True},'resolved')

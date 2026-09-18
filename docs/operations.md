@@ -605,6 +605,11 @@ the rotation while retaining the working label.
 
 ### Pending decision recommendations
 
+Recommendations use saved message snippets and up to three recent sample previews
+to distinguish a merchant from a shared delivery platform. This adds no mailbox
+read during generation. Updated recommendation instructions invalidate older
+suggestions so the next batch uses the current evidence format.
+
 Pending decisions has its own AI policy and models, private written guidance, and
 configurable batch size (20 by default). Generate suggestions to preselect
 message Keep, Keep briefly, Trash or Skip choices and vendor filing destinations.

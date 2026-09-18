@@ -85,7 +85,8 @@ def _context_key(conn):
     # policy/guidance and each exact decision revision still invalidate results.
     preferences.pop('prior_subscription_choices', None)
     preferences.pop('sender_rules', None)
-    return hashlib.sha256(json.dumps(preferences,sort_keys=True).encode()).hexdigest()
+    context = {'evidence_version': 2, 'system_prompt': SYSTEM_PROMPT, 'preferences': preferences}
+    return hashlib.sha256(json.dumps(context,sort_keys=True).encode()).hexdigest()
 
 
 def build_context(conn,rows):
