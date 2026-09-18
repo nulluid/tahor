@@ -657,7 +657,17 @@ def decision_context(row):
                 parts.append('Example: ' + str(sample['subject']) + (' · ' + str(sample.get('received_at') or sample.get('date')) if sample.get('received_at') or sample.get('date') else ''))
         if context.get('suggestion_source') == 'ai':
             parts.append('Tahor needs your review for this sender. Suggested action: ' + str(context.get('suggested_action', 'review')) + '. ' + str(context.get('suggestion_reason', ''))[:500])
-        parts.append('This rule applies to this exact sender address.' if context.get('routing_key') else 'Sender details have not been captured yet. Confirm the sender or organization before saving a domain-wide rule.')
+        if context.get('routing_key'):
+            parts.append('This rule applies to this exact sender address.')
+        else:
+            status = context.get('inventory_status')
+            if status == 'missing_folder':
+                parts.append('An older filing request has no matching folder. Tahor will look for a current email from this domain.')
+            elif status == 'no_samples':
+                parts.append('An older filing request has no matching email in its original folder. Tahor will check other filing folders and the inbox.')
+            else:
+                parts.append('Tahor is retrieving an example email to identify the sender.')
+            parts.append('Saving a folder here would apply to the whole domain; leave it unsorted if you cannot identify it.')
         return ' · '.join(parts)
     if row["kind"] == "message_review":
         parts = [f'From: {context.get("sender") or ("Not provided in this email" if context.get("details_loaded") else "Loading in the background")}']

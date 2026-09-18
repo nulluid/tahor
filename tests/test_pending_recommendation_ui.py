@@ -56,6 +56,12 @@ const card=id=>w.document.querySelector('[data-decision-id="'+id+'"]');const sel
  assert.equal(card(1).querySelector('input:checked').value,'keep');assert.equal(card(2).querySelector('[data-bulk-bucket]').value,'Business/Software');
  assert.deepEqual([...w.document.querySelector('#decision-cards').children].map(c=>c.dataset.decisionId),['2','1','3']);
  assert.equal(w.document.querySelector('[data-selected-count]').textContent,'2');
+ // A stale flag without visible advice must not compete with real advice.
+ card(3).dataset.recommended='true';select(3,'');
+ assert.deepEqual([...w.document.querySelector('#decision-cards').children].map(c=>c.dataset.decisionId),['2','1','3']);
+ // Status updates must not erase the independently displayed AI reason.
+ card(2).querySelector('.decision-result').textContent='Retry needed';
+ assert.equal(card(2).querySelector('[data-decision-recommendation]').textContent,'AI suggestion: Receipt');
  w.document.querySelector('[data-apply]').click();const sent=JSON.parse(calls[2].options.body.get('selections'));
  assert.deepEqual(sent,[{decision_id:2,action:'map',source_revision:'new2',bucket:'Business/Software',vendor_name:'Example Vendor'},{decision_id:1,action:'keep',source_revision:'r1'}]);
  answer(calls[2],{job_id:'batch',status:'complete',items:[{decision_id:1,status:'done',message:'Kept'},{decision_id:2,status:'done',message:'Filed'}]});await settle();

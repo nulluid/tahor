@@ -198,7 +198,7 @@ decisions and your private guidance; it never applies them. Each batch covers
 50 senders by default, configurable in Settings. Submitted choices guide later
 recommendations. **Tell Tahor what you want** on a subscription or decision card
 lets you add written guidance, or request a rule proposal to review before it
-changes mailbox policy. Recommended and selected items appear above undecided ones. Free recommendations can miss
+changes mailbox policy. Pending-decision recommendations appear first, followed by your other selections and then undecided items. Recommendation explanations remain visible separately from action progress and errors. Free recommendations can miss
 preferences for wanted coupons; review the selected actions before applying them. Some senders require confirmation on their website;
 email-based requests require an app password with SMTP sending access.
 

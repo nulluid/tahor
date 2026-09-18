@@ -19,7 +19,7 @@ class VendorInventoryTests(unittest.TestCase):
             conn.execute('CREATE TABLE decisions (id INTEGER PRIMARY KEY,kind TEXT,status TEXT,context TEXT,resolution TEXT, summary TEXT, created_at TEXT)')
         self.start(patch.object(inventory.tahor_db, 'get_db', side_effect=self.db))
         self.start(patch.object(inventory.config, 'filing_root', return_value='Filed'))
-        self.client = Mock(); self.client.list.return_value = ('OK', [b'folder'])
+        self.client = Mock(); self.client.list.side_effect = lambda reference, folder: ('OK', [b'folder'] if folder == '"Filed/_Unsorted/delivery.example"' else [None])
         self.client.select.return_value = ('OK', [])
         self.client.response.return_value = ('UIDVALIDITY', [b'123'])
         self.client.uid.side_effect = self.uid
@@ -66,16 +66,16 @@ class VendorInventoryTests(unittest.TestCase):
 
     def test_limit_and_missing_folder_do_not_block_other_work(self):
         for number in range(1, 6): self.add('vendor'+str(number)+'.example', number)
-        self.client.list.return_value = ('OK', [None])
+        self.client.list.side_effect = None; self.client.list.return_value = ('OK', [None])
         self.assertEqual(inventory.enrich_pending(), 0)
-        self.assertEqual(self.client.list.call_count, 3)
+        self.assertEqual(self.client.list.call_count, 12)
         self.queue.assert_not_called(); self.client.select.assert_not_called()
 
     def test_legacy_work_is_automatic_until_missing_folder_becomes_an_exception(self):
         self.add()
         with self.db() as conn:
             self.assertEqual(vendor_suggestions.pending_work_ids(conn), ['vendor:1'])
-        self.client.list.return_value = ('OK', [None])
+        self.client.list.side_effect = None; self.client.list.return_value = ('OK', [None])
         inventory.enrich_pending()
         with self.db() as conn:
             self.assertEqual(vendor_suggestions.pending_work_ids(conn), [])
@@ -91,3 +91,40 @@ class VendorInventoryTests(unittest.TestCase):
         self.add('../Inbox')
         self.assertEqual(inventory.enrich_pending(), 0)
         self.connect.assert_not_called()
+
+    def test_new_receipts_and_correspondence_subfolders_are_sampled(self):
+        self.add()
+        self.client.list.side_effect = lambda reference, folder: ('OK', [b'folder'] if folder.endswith('/Receipts"') or folder.endswith('/Correspondence"') else [None])
+        self.assertEqual(inventory.enrich_pending(), 0)
+        self.assertEqual({call.kwargs['metadata']['mailbox'] for call in self.queue.call_args_list},
+                         {'Filed/_Unsorted/delivery.example/Receipts', 'Filed/_Unsorted/delivery.example/Correspondence'})
+        self.assertTrue(all(call.args[1:] == ('ALL',) for call in inventory.search_uids.call_args_list))
+        self.assertFalse(any(call.args[0] == '"INBOX"' for call in self.client.select.call_args_list))
+
+    def test_missing_legacy_folder_recovers_from_inbox_without_category_filter(self):
+        self.add()
+        self.client.list.side_effect = lambda reference, folder: ('OK', [b'folder'] if folder == '"INBOX"' else [None])
+        self.assertEqual(inventory.enrich_pending(), 0)
+        self.assertEqual(self.queue.call_count, 2)
+        self.assertTrue(all(call.kwargs['metadata']['mailbox'] == 'INBOX' for call in self.queue.call_args_list))
+        inventory.search_uids.assert_called_once_with(self.client, 'FROM', '"@delivery.example"')
+
+    def test_unrelated_and_deceptive_from_domains_are_not_evidence(self):
+        self.add()
+        original = self.uid
+        for sender in (b'person@unrelated.example', b'person@delivery.example.evil.test',
+                       b'person@evildelivery.example', b'a@delivery.example, b@delivery.example'):
+            with self.subTest(sender=sender):
+                def response(command, uid, spec):
+                    status, rows = original(command, uid, spec)
+                    return status, [(rows[0][0], b'From: ' + sender + b'\r\nMessage-ID: <one@example.com>\r\nSubject: example\r\n\r\n')]
+                self.client.uid.side_effect = response
+                self.assertEqual(inventory.enrich_pending(), 0)
+                self.queue.assert_not_called()
+
+    def test_sample_fetch_is_bounded(self):
+        self.add()
+        inventory.search_uids.return_value = ('OK', [b' '.join(str(i).encode() for i in range(1, 101))])
+        self.assertEqual(inventory.enrich_pending(), 0)
+        self.assertEqual(self.client.uid.call_count, 25)
+        self.assertEqual(self.client.uid.call_args_list[0].args[1], b'76')
