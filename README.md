@@ -227,8 +227,10 @@ tax deductions; Tahor does not calculate or file your tax return.
 
 Accounting CSV and ZIP downloads include only ready receipts and refunds, excluding
 removed items, possible duplicates, unpaid invoices, and items awaiting review.
-The separately labeled all-records ZIP preserves everything for recovery, including
-excluded items. ZIPs contain CSV, ledger and review history, and original `.eml` files with attachments. Receipt filenames include
+The separately labeled all-records ZIP preserves the selected business’s records
+for recovery, including excluded items. ZIPs contain the ledger, review history,
+account allocations, asset records, private filing notes, and original `.eml`
+files with attachments. Receipt filenames include
 the month, category, vendor, and entry ID. A manifest identifies any originals
 still awaiting recovery. The five-minute expense worker archives source emails
 and proposes vendor, date, type, reference, amount, currency, bookkeeping category,
@@ -240,7 +242,7 @@ categories, business profiles, allocation policies, and archived originals toget
 archive limits, exports, and recovery. Cloud-drive storage is not required.
 
 <details>
-<summary>See the private expense ledger</summary>
+<summary>See the accounting dashboard with sample data</summary>
 
 ![Business expense evidence and reviewable totals](docs/screenshots/expenses.png)
 
