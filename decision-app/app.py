@@ -785,7 +785,7 @@ def index():
                 vendor_context = {}
             if vendor_review_state.reconcile(db, row, vendor_context):
                 continue
-            if ('vendor:' + str(row['id']) in automatic_ids or (mailbox_settings.is_ai_enabled('rule') and vendor_context.get('automatic_vendor_mapping'))):
+            if row['id'] not in recommendations and ('vendor:' + str(row['id']) in automatic_ids or (mailbox_settings.is_ai_enabled('rule') and vendor_context.get('automatic_vendor_mapping'))):
                 automatic_count += 1
                 continue
             suggested_bucket = vendor_context.get('suggested_bucket')

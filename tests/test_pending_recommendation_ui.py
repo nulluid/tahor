@@ -26,6 +26,13 @@ class PendingRecommendationRoutes(AppTestCase):
         self.assertIn('data-generate',body)
         self.assertIn('data-decision-choice',body)
 
+    def test_ready_recommendation_is_visible_even_while_sender_enrichment_is_automatic(self):
+        self.seed(1, 'vendor_mapping')
+        with patch('decision_suggestions.latest_recommendations', return_value=[{'decision_id': 1, 'action': 'unsorted', 'reason': 'Review this sender', 'source_revision': 'sample'}]), patch('vendor_suggestions.pending_work_ids', return_value=['vendor:1']), patch.object(self.module.mailbox_settings, 'is_ai_enabled', return_value=True):
+            body = self.client.get('/').get_data(as_text=True)
+        self.assertIn('data-decision-id="1"', body)
+        self.assertIn('AI suggestion: Review this sender', body)
+
     def test_settings_exposes_default_twenty_and_autosaves_task(self):
         page=self.client.get('/settings').get_data(as_text=True)
         self.assertIn('data-ai-task="decisions"',page)
@@ -54,11 +61,11 @@ const card=id=>w.document.querySelector('[data-decision-id="'+id+'"]');const sel
  w.document.querySelector('[data-generate]').click();assert.equal(calls[1].url,'/decisions/suggestions');
  answer(calls[1],{job_id:'ai',status:'complete',recommendations:[{decision_id:1,action:'trash',reason:'Wrong',source_revision:'r1'},{decision_id:2,action:'map',bucket:'Business/Software',vendor_name:'Example Vendor',reason:'Receipt',source_revision:'new2'}]});await settle();
  assert.equal(card(1).querySelector('input:checked').value,'keep');assert.equal(card(2).querySelector('[data-bulk-bucket]').value,'Business/Software');
- assert.deepEqual([...w.document.querySelector('#decision-cards').children].map(c=>c.dataset.decisionId),['2','1','3']);
+ assert.deepEqual([...w.document.querySelector('#decision-cards').querySelectorAll('[data-decision-id]')].map(c=>c.dataset.decisionId),['2','1','3']);
  assert.equal(w.document.querySelector('[data-selected-count]').textContent,'2');
  // A stale flag without visible advice must not compete with real advice.
  card(3).dataset.recommended='true';select(3,'');
- assert.deepEqual([...w.document.querySelector('#decision-cards').children].map(c=>c.dataset.decisionId),['2','1','3']);
+ assert.deepEqual([...w.document.querySelector('#decision-cards').querySelectorAll('[data-decision-id]')].map(c=>c.dataset.decisionId),['2','1','3']);
  // Status updates must not erase the independently displayed AI reason.
  card(2).querySelector('.decision-result').textContent='Retry needed';
  assert.equal(card(2).querySelector('[data-decision-recommendation]').textContent,'AI suggestion: Receipt');

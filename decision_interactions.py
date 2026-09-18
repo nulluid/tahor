@@ -57,7 +57,7 @@ SCRIPT = r'''<script>
         oldFields.forEach((field, index) => {
           const target = newFields[index];
           if (!target || target.name !== field.name || field.type === 'hidden') return;
-          const bulkField=field.matches('[data-decision-choice],[data-bulk-bucket],[data-bulk-vendor]');
+          const bulkField=field.matches('[data-decision-choice],[data-bulk-bucket],[data-bulk-folder],[data-bulk-custom-folder],[data-bulk-vendor]');
           if(bulkField&&other.dataset.decisionRevision!==fresh.dataset.decisionRevision)return;
           if (field.type === 'checkbox' || field.type === 'radio') { if(target.value===field.value)target.checked=field.checked; }
           else target.value = field.value;

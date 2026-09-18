@@ -178,7 +178,7 @@ place so you can keep working without losing your position.
 **Generate AI suggestions** on Pending decisions recommends up to **20 items**
 per batch by default. Adjust its independent model policy, batch size, and written
 guidance in Settings. Recommended items rise above undecided ones. Review the
-radio choices, then apply a batch from the sticky toolbar; individual decisions
+radio choices and choose any existing filing folder from the full dropdown, or enter a new folder. Apply a batch from the sticky toolbar; individual decisions
 remain available. Your confirmed choices guide future recommendations, including
 choices still waiting for mailbox recovery. Rule proposals require separate approval.
 
