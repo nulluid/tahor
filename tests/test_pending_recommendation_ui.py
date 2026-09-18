@@ -54,10 +54,10 @@ const card=id=>w.document.querySelector('[data-decision-id="'+id+'"]');const sel
  w.document.querySelector('[data-generate]').click();assert.equal(calls[1].url,'/decisions/suggestions');
  answer(calls[1],{job_id:'ai',status:'complete',recommendations:[{decision_id:1,action:'trash',reason:'Wrong',source_revision:'r1'},{decision_id:2,action:'map',bucket:'Business/Software',vendor_name:'Example Vendor',reason:'Receipt',source_revision:'new2'}]});await settle();
  assert.equal(card(1).querySelector('input:checked').value,'keep');assert.equal(card(2).querySelector('[data-bulk-bucket]').value,'Business/Software');
- assert.deepEqual([...w.document.querySelector('#decision-cards').children].map(c=>c.dataset.decisionId),['1','2','3']);
+ assert.deepEqual([...w.document.querySelector('#decision-cards').children].map(c=>c.dataset.decisionId),['2','1','3']);
  assert.equal(w.document.querySelector('[data-selected-count]').textContent,'2');
  w.document.querySelector('[data-apply]').click();const sent=JSON.parse(calls[2].options.body.get('selections'));
- assert.deepEqual(sent,[{decision_id:1,action:'keep',source_revision:'r1'},{decision_id:2,action:'map',source_revision:'new2',bucket:'Business/Software',vendor_name:'Example Vendor'}]);
+ assert.deepEqual(sent,[{decision_id:2,action:'map',source_revision:'new2',bucket:'Business/Software',vendor_name:'Example Vendor'},{decision_id:1,action:'keep',source_revision:'r1'}]);
  answer(calls[2],{job_id:'batch',status:'complete',items:[{decision_id:1,status:'done',message:'Kept'},{decision_id:2,status:'done',message:'Filed'}]});await settle();
  select(3,'keep_brief');w.document.querySelector('[data-apply]').click();assert.equal(JSON.parse(calls[3].options.body.get('selections')).length,1);
  answer(calls[3],{job_id:'batch2',status:'complete',items:[{decision_id:3,status:'done',message:'Kept briefly'}]});await settle();

@@ -614,8 +614,9 @@ Pending decisions has its own AI policy and models, private written guidance, an
 configurable batch size (20 by default). Generate suggestions to preselect
 message Keep, Keep briefly, Trash or Skip choices and vendor filing destinations.
 Review the selections before applying them. Free-text rule proposals retain their
-separate approval controls. Recommended and selected items rise above undecided
-items; the sticky toolbar and working indicator remain visible while you review.
+separate approval controls. Recommendations come first, followed by manually
+selected items without recommendations, then undecided items. The sticky toolbar
+and working indicator remain visible while you review.
 Individual and bulk choices are recorded as private feedback, including saved
 choices awaiting recovery. Automatic vendor choices are not counted as owner
 feedback. Stale source revisions cannot inherit a previous destructive selection.

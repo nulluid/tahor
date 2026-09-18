@@ -20,7 +20,7 @@ SCRIPT = r'''<script>
  function prioritize(preserve=true){
   const list=document.querySelector('#decision-cards');if(!list||document.querySelector('dialog.email-preview[open]'))return;
   const current=[...list.querySelectorAll('[data-decision-id]')];
-  const rank=c=>c.dataset.queued?3:(c.querySelector('[data-decision-choice]:checked')?.value?0:(c.dataset.recommended==='true'?1:2));
+  const rank=c=>c.dataset.queued?3:(c.dataset.recommended==='true'?0:(c.querySelector('[data-decision-choice]:checked')?.value?1:2));
   const ordered=[...current].sort((a,b)=>rank(a)-rank(b));
   if(ordered.every((c,i)=>c===current[i]))return;
   const edge=Math.max(0,bar.getBoundingClientRect().bottom);
