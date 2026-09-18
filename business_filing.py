@@ -201,6 +201,55 @@ def _candidate_search(conn, rules, after):
     return sorted((uid for uid in uids if int(uid)>after),key=int)
 
 
+def _header_nonmatches(conn, mailbox, validity, uids, rules):
+    """Reject only proven nonmatches using one bounded read-only header batch.
+
+    Unknown, missing, truncated, duplicate, or malformed evidence keeps the
+    existing full-message path. Body-dependent rules are weakened, never
+    strengthened, for this preliminary check.
+    """
+    uids = list(uids[:100])
+    if not uids:
+        return set()
+    status, rows = conn.uid('FETCH', b','.join(uids),
+                           '(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)]<0.16384>)')
+    if status != 'OK':
+        return set()
+    requested = set(uids)
+    grouped = {}
+    for row in rows or []:
+        if not isinstance(row, tuple) or len(row) != 2 or not isinstance(row[0], bytes):
+            continue
+        identity = re.search(rb'\bUID (\d+)\b', row[0])
+        if identity and identity[1] in requested:
+            grouped.setdefault(identity[1], []).append(row)
+    preliminary_rules = [dict(rule, body_contains_any=[]) for rule in rules]
+    rejected = set()
+    for uid, parts in grouped.items():
+        try:
+            if len(parts) != 1:
+                continue
+            raw = parts[0][1]
+            if not isinstance(raw, bytes) or len(raw) >= 16384 or not raw.endswith((b'\r\n\r\n', b'\n\n')):
+                continue
+            _, flags, delivered = metadata(parts, uid, content=True)
+            message = email.message_from_bytes(raw)
+            if message.defects or any(len(message.get_all(name, [])) != 1 for name in ('From','Subject','Date')):
+                continue
+            identifiers = message.get_all('Message-ID', [])
+            if len(identifiers) > 1:
+                continue
+            record = dict(id=str(identifiers[0]).strip() if identifiers else fetch_batch.local_message_id(mailbox, validity, uid.decode()),
+                          subject=fetch_batch.decode_str(message.get('Subject','')), date=str(message.get('Date','')))
+            record['from'] = str(message.get('From',''))
+            if match_message(record, delivered=delivered, flags=flags, rules=preliminary_rules) is None:
+                rejected.add(uid)
+        except (ValueError, TypeError, RuntimeError, UnicodeError, IndexError):
+            # Never turn an uncertain preliminary parse into a skipped receipt.
+            continue
+    return rejected
+
+
 def _fetch(conn, mailbox, validity, uid):
     status, rows = conn.uid('FETCH',uid,'(UID FLAGS INTERNALDATE BODY.PEEK[]<0.32768>)')
     if status!='OK':
@@ -257,12 +306,17 @@ def _run_sweep(conn, *, backfill=False, limit=100, budget_seconds=45, dry_run=Fa
         deferred=set(cursor.get('deferred', [])) if cursor.get('uidvalidity')==validity else set()
         uids=sorted(set(_candidate_search(conn,rules,after)) | {str(uid).encode() for uid in deferred if str(uid).isdigit()},key=int)
         finished=True
-        for uid in uids:
+        header_nonmatches = set()
+        header_batch_end = 0
+        for uid_index, uid in enumerate(uids):
             if counts['examined']>=limit or time.monotonic()>=deadline:
                 finished=False;break
+            if uid_index >= header_batch_end:
+                header_batch_end = min(len(uids), uid_index + 100, uid_index + limit - counts['examined'])
+                header_nonmatches = _header_nonmatches(conn, source, validity, uids[uid_index:header_batch_end], rules)
             counts['examined']+=1
             deferred.discard(int(uid))
-            fetched=_fetch(conn,source,validity,uid)
+            fetched=None if uid in header_nonmatches else _fetch(conn,source,validity,uid)
             if fetched:
                 record,flags,delivered=fetched
                 route=match_message(record,delivered=delivered,flags=flags,rules=rules)

@@ -243,3 +243,56 @@ class CandidateSearchGrammarTests(unittest.TestCase):
         query=self.query([dict(message_ids=['<réçu@example.org>'],subject_contains_any=['Receipt'])])
         self.assertTrue(self.matches(query,'any@example.net','Receipt'))
         self.assertFalse(self.matches(query,'any@example.net','Unrelated'))
+
+
+class HeaderPrefilterTests(unittest.TestCase):
+    def rule(self, **changes):
+        return dict(dict(id='service',vendor='Service',business_key='example',root='Business/Example',domains=['service.example'],since='2026-07-01'),**changes)
+
+    def row(self, uid, sender='billing@service.example', subject='Your receipt', date='01 Jul 2026 12:00:00 +0000', extra=b'', internal='01-Sep-2026 12:00:00 +0000'):
+        header=('1 (UID '+str(uid)+' FLAGS (category-receipt) INTERNALDATE "'+internal+'")').encode()
+        raw=('From: '+sender+'\r\nSubject: '+subject+'\r\nDate: '+date+'\r\nMessage-ID: <'+str(uid)+'@example>\r\n').encode()+extra+b'\r\n'
+        return header,raw
+
+    def test_one_batch_rejects_one_hundred_proven_source_nonmatches(self):
+        client=Mock();client.uid.return_value=('OK',[self.row(uid,sender='store@service.example',subject='Shopping sale') for uid in range(1,101)])
+        uids=[str(uid).encode() for uid in range(1,101)]
+        result=business._header_nonmatches(client,'Trash','42',uids,[self.rule(subject_contains_any=['Cloud'])])
+        self.assertEqual(result,set(uids));client.uid.assert_called_once()
+        self.assertIn('BODY.PEEK[HEADER.FIELDS',client.uid.call_args.args[-1])
+        self.assertEqual(client.uid.call_args.args[1],b','.join(uids))
+
+    def test_body_filters_are_removed_for_preliminary_match(self):
+        client=Mock();client.uid.return_value=('OK',[self.row(1),self.row(2,sender='unrelated@example.org')])
+        result=business._header_nonmatches(client,'Archive','42',[b'1',b'2'],[self.rule(body_contains_any=['Special purchase'])])
+        self.assertEqual(result,{b'2'})
+
+    def test_header_date_not_internaldate_controls_cutoff(self):
+        client=Mock();client.uid.return_value=('OK',[self.row(1,date='01 Jul 2025 12:00:00 +0000'),self.row(2,internal='01-Sep-2025 12:00:00 +0000')])
+        self.assertEqual(business._header_nonmatches(client,'Archive','42',[b'1',b'2'],[self.rule()]),{b'1'})
+
+    def test_ambiguous_missing_and_truncated_evidence_always_gets_full_read(self):
+        client=Mock()
+        duplicate=self.row(2,sender='unrelated@example.org')
+        truncated=self.row(3,sender='unrelated@example.org')
+        client.uid.return_value=('OK',[
+            self.row(1,sender='unrelated@example.org',extra=b'From: billing@service.example\r\n'),
+            duplicate,duplicate,
+            (truncated[0],truncated[1]+b'x'*16384),
+            (b'1 (UID 4 FLAGS ())',b'bad header\r\n\r\n'),
+        ])
+        self.assertEqual(business._header_nonmatches(client,'Archive','42',[b'1',b'2',b'3',b'4',b'5'],[self.rule()]),set())
+        client.uid.return_value=('NO',[])
+        self.assertEqual(business._header_nonmatches(client,'Archive','42',[b'1'],[self.rule()]),set())
+
+    def test_sweep_skips_full_body_and_mutations_for_proven_old_message(self):
+        client=Mock();client.select.return_value=('OK',[]);client.response.return_value=('UIDVALIDITY',[b'42'])
+        client.list.return_value=('OK',[b'(\\HasNoChildren) "/" "Trash"'])
+        client.uid.return_value=('OK',[self.row(7,date='01 Jul 2025 12:00:00 +0000')])
+        with tempfile.TemporaryDirectory() as directory,patch.object(business,'load_rules',return_value=[self.rule()]),patch.object(business,'_candidate_search',return_value=[b'7']),patch('business_ledger.record_receipt') as ledger:
+            path=Path(directory)/'state.json'
+            result=business.run_sweep(client,backfill=True,state_path=path)
+            self.assertEqual(json.loads(path.read_text())['folders']['Trash']['after'],7)
+        self.assertTrue(result['complete']);self.assertEqual(result['examined'],1);self.assertEqual(result['receipts'],0)
+        client.uid.assert_called_once();ledger.assert_not_called()
+        self.assertIn('HEADER.FIELDS',client.uid.call_args.args[-1])
