@@ -241,3 +241,66 @@ class DecisionBatchTests(AppTestCase):
         conn.close()
         self.assertEqual(suggestions.get_job(job['job_id'])['recommendations'],[])
         self.assertEqual(suggestions.enqueue()['total'],1)
+
+    def test_candidate_scope_excludes_hidden_automatic_cards(self):
+        hidden=self.add('vendor_mapping',context={'routing_key':'hidden@example.com','automatic_vendor_mapping':True})
+        visible=self.add()
+        job=suggestions.enqueue(candidate_ids=[visible])
+        with patch.object(suggestions,'model_call',side_effect=self.model):
+            suggestions.run_pending_jobs()
+        results=suggestions.get_job(job['job_id'])['recommendations']
+        self.assertEqual([item['decision_id'] for item in results],[visible])
+        self.assertNotIn(hidden,[item['decision_id'] for item in results])
+        self.assertEqual(suggestions.enqueue(candidate_ids=[])['total'],0)
+
+    def test_active_job_reused_only_for_visible_nonexcluded_candidates(self):
+        first=self.add();second=self.add()
+        broad=suggestions.enqueue(candidate_ids=[first,second])
+        scoped=suggestions.enqueue(candidate_ids=[second])
+        self.assertNotEqual(scoped['job_id'],broad['job_id'])
+        self.assertEqual(scoped['total'],1)
+        self.assertEqual(suggestions.enqueue(candidate_ids=[second])['job_id'],scoped['job_id'])
+        self.assertEqual(suggestions.get_job(broad['job_id'])['status'],'queued')
+        excluded=suggestions.enqueue(candidate_ids=[first,second],exclude_ids=[second])
+        self.assertNotIn(excluded['job_id'],[scoped['job_id'],broad['job_id']])
+        self.assertEqual(excluded['total'],1)
+
+    def test_candidate_ids_validate_and_route_passes_scope(self):
+        for invalid in ({},'1',[True],[1.0],['1'],[0],[-1],list(range(1,2002))):
+            with self.subTest(invalid=repr(invalid)[:80]),self.assertRaises(ValueError):
+                suggestions.enqueue(candidate_ids=invalid)
+        first=self.add();self.add('vendor_mapping')
+        response=self.client.post('/decisions/suggestions',data={'csrf_token':self.token(),'candidate_ids':json.dumps([first])})
+        self.assertEqual(response.status_code,202)
+        self.assertEqual(response.get_json()['total'],1)
+        response=self.client.post('/decisions/suggestions',data={'csrf_token':self.token(),'candidate_ids':'[true]'})
+        self.assertEqual(response.status_code,400)
+
+    def test_uncertain_filing_recommendation_can_defer_without_executable_choice(self):
+        identifier=self.add('vendor_mapping')
+        proposal=dict(decision_id=identifier,action='defer',confidence=.4,reason='Sender evidence is incomplete; keep this request pending.',bucket='',vendor_name='')
+        candidates=[{'decision_id':identifier,'kind':'vendor_mapping'}]
+        self.assertEqual(suggestions.validate({'recommendations':[proposal]},candidates),[proposal])
+        with self.assertRaises(ValueError):
+            bulk.validate_choice(candidates[0],proposal)
+        with self.assertRaises(ValueError):
+            bulk.enqueue([self.selection(identifier,'defer')],'cannot-submit-deferral')
+        for changed in (dict(proposal,bucket='Shopping'),dict(proposal,vendor_name='Shop')):
+            with self.assertRaises(ValueError):suggestions.validate({'recommendations':[changed]},candidates)
+        with self.assertRaises(ValueError):
+            suggestions.validate({'recommendations':[proposal]},[{'decision_id':identifier,'kind':'message_review'}])
+
+    def test_deferred_ai_result_leaves_filing_request_unresolved(self):
+        identifier=self.add('vendor_mapping')
+        job=suggestions.enqueue(candidate_ids=[identifier])
+        def uncertain(context,**kwargs):
+            self.assertIn('uncertainty about a destination means defer',suggestions.SYSTEM_PROMPT)
+            self.assertIn('explicit owner preferences',suggestions.SYSTEM_PROMPT)
+            return [dict(decision_id=identifier,action='defer',confidence=.3,reason='Need more sender context.',bucket='',vendor_name='')]
+        with patch.object(suggestions,'model_call',side_effect=uncertain),patch.object(self.module.apply_decisions,'apply_one') as execute:
+            self.assertEqual(suggestions.run_pending_jobs(),0)
+            execute.assert_not_called()
+        self.assertEqual(suggestions.get_job(job['job_id'])['recommendations'][0]['action'],'defer')
+        conn=self.module.tahor_db.get_db()
+        row=conn.execute('SELECT status,resolution FROM decisions WHERE id=?',(identifier,)).fetchone();conn.close()
+        self.assertEqual(row['status'],'pending');self.assertIsNone(row['resolution'])

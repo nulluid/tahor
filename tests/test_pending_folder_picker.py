@@ -28,7 +28,7 @@ class PendingFolderPickerTests(unittest.TestCase):
         harness = r'''
 const assert=require('node:assert/strict');const {JSDOM}=require(process.env.TAHOR_JSDOM_MODULE);
 const dom=new JSDOM(PAGE,{url:'https://example.test/',runScripts:'outside-only'});const w=dom.window,calls=[];
-w.scrollBy=()=>{};w.fetch=(url,options)=>new Promise(resolve=>calls.push({url,options,resolve}));
+const scrolls=[];w.scrollBy=(x,y)=>scrolls.push(y);w.fetch=(url,options)=>new Promise(resolve=>calls.push({url,options,resolve}));
 w.eval(SCRIPT);const settle=()=>new Promise(r=>setImmediate(r));
 (async()=>{
  calls[0].resolve({ok:true,json:async()=>[]});await settle();
@@ -45,11 +45,22 @@ w.eval(SCRIPT);const settle=()=>new Promise(r=>setImmediate(r));
  for(const call of calls.slice(1))call.resolve({ok:true,json:async()=>[]});await settle();
  const before=calls.length;w.document.querySelector('[data-generate]').click();
  calls[before].resolve({ok:true,json:async()=>({job_id:'j',status:'complete',total:1,completed:1,recommendations:[{decision_id:2,source_revision:'r1',action:'map',bucket:'New category',vendor_name:'Another vendor',reason:'Classified archive'}]})});await settle();
- assert.equal(two.querySelector('[data-bulk-bucket]').value,'New category');assert.equal(two.querySelector('[data-bulk-custom-folder]').value,'New category');assert.equal(two.querySelector('[data-bulk-folder]').value,'');
+ assert.ok(scrolls.includes(-12),'Finished generation reveals the recommended group');assert.equal(two.querySelector('[data-bulk-bucket]').value,'New category');assert.equal(two.querySelector('[data-bulk-custom-folder]').value,'New category');assert.equal(two.querySelector('[data-bulk-folder]').value,'');
  assert.deepEqual([...w.document.querySelectorAll('[data-decision-section]')].map(h=>h.textContent),['AI recommendations']);
+ // An older 'leave unsorted' recommendation must follow a concrete filing recommendation.
+ const none=one.querySelector('[data-decision-choice][value="unsorted"]');none.checked=true;none.dispatchEvent(new w.Event('change',{bubbles:true}));
+ assert.deepEqual([...w.document.querySelectorAll('#decision-cards > [data-decision-id]')].map(c=>c.dataset.decisionId),['2','1']);
+ assert.deepEqual([...w.document.querySelectorAll('[data-decision-section]')].map(h=>h.textContent),['AI recommendations','AI recommends dismissal or skipping']);
+ const noAction=one.querySelector('[data-decision-choice][value=""]');noAction.checked=true;noAction.dispatchEvent(new w.Event('change',{bubbles:true}));
+ assert.deepEqual([...w.document.querySelectorAll('[data-decision-section]')].map(h=>h.textContent),['AI recommendations','Other pending decisions']);
+ const map=one.querySelector('[data-decision-choice][value="map"]');map.checked=true;map.dispatchEvent(new w.Event('change',{bubbles:true}));
  const next=calls.length;w.document.querySelector('[data-generate]').click();calls[next].resolve({ok:true,json:async()=>({job_id:'j2',status:'complete',total:1,completed:1,recommendations:[{decision_id:2,source_revision:'r1',action:'map',bucket:'Finance',vendor_name:'Another vendor',reason:'Updated classification'}]})});await settle();assert.equal(two.querySelector('[data-bulk-folder]').value,'Finance');assert.equal(two.querySelector('[data-bulk-custom-folder]').value,'');
+ const deferred=calls.length;w.document.querySelector('[data-generate]').click();calls[deferred].resolve({ok:true,json:async()=>({job_id:'deferred',status:'complete',total:1,completed:1,recommendations:[{decision_id:2,source_revision:'r1',action:'defer',bucket:'',vendor_name:'',reason:'No example email'}]})});await settle();
+ assert.equal(two.querySelector('[data-decision-choice]:checked').value,'');
+ assert.ok(two.querySelector('[data-decision-recommendation]').textContent.includes('Keep this request pending'));
+ assert.deepEqual([...w.document.querySelectorAll('[data-decision-section]')].map(h=>h.textContent),['AI recommendations','AI needs more information']);
  w.document.querySelector('[data-apply]').click();const submitted=JSON.parse(calls.at(-1).options.body.get('selections'));
- assert.equal(submitted.find(x=>x.decision_id===1).bucket,'Health/Fitness');assert.equal(submitted.find(x=>x.decision_id===2).bucket,'Finance');w.close();
+ assert.equal(submitted.find(x=>x.decision_id===1).bucket,'Health/Fitness');assert.equal(submitted.some(x=>x.decision_id===2),false,'Uncertain AI advice must not submit a dismissal');w.close();
 })().catch(error=>{console.error(error);process.exitCode=1;});
 '''
         script = decision_bulk_ui.SCRIPT.removeprefix('<script>').removesuffix('</script>')

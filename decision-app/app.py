@@ -554,7 +554,7 @@ CARD_VENDOR_MAPPING = """
     </div>
     <div class="actions">
       <button type="submit" name="action" value="map" class="primary">Save routing rule</button>
-      <button type="submit" name="action" value="skip">Leave unsorted</button>
+      <button type="submit" name="action" value="skip">Dismiss filing request</button>
     </div>
   </form>
 </div>
@@ -667,7 +667,7 @@ def decision_context(row):
                 parts.append('An older filing request has no matching email in its original folder. Tahor will check other filing folders and the inbox.')
             else:
                 parts.append('Tahor is retrieving an example email to identify the sender.')
-            parts.append('Saving a folder here would apply to the whole domain; leave it unsorted if you cannot identify it.')
+            parts.append('Saving a folder here would apply to the whole domain; choose Decide later if you cannot identify it.')
         return ' · '.join(parts)
     if row["kind"] == "message_review":
         parts = [f'From: {context.get("sender") or ("Not provided in this email" if context.get("details_loaded") else "Loading in the background")}']
@@ -742,7 +742,8 @@ def index():
     automatic_count = 0
     import decision_suggestions, decision_bulk
     recommendations = {item['decision_id']: item for item in decision_suggestions.latest_recommendations()}
-    pending = sorted(pending, key=lambda row: row['id'] not in recommendations)
+    pending = sorted(pending, key=lambda row: (2 if row['id'] not in recommendations else
+        1 if recommendations[row['id']].get('action') in ('unsorted', 'skip', 'defer') else 0))
     cards = []
     saved_instructions = card_instructions.get_all_card_instructions('decision')
     for row in pending:
@@ -833,7 +834,7 @@ def index():
                 end = cards[-1].rfind('</div>')
                 controls = decision_bulk_ui.choices(row, revision, recommendation, buckets)
                 cards[-1] = cards[-1][:end] + controls + cards[-1][end:]
-                attrs = f' data-bulk-eligible="true" data-decision-revision="{html(revision)}"' + (' data-recommended="true"' if recommendation else '')
+                attrs = f' data-bulk-eligible="true" data-decision-revision="{html(revision)}"' + (' data-recommended="true" data-suggested-action="' + html(recommendation['action']) + '"' if recommendation else '')
                 cards[-1] = cards[-1].replace('<div class="card"', '<div class="card"' + attrs, 1)
             instruction_form = card_instructions_ui.render('decision', row['id'], saved_instructions.get(row['id'], ''))
             end = cards[-1].rfind('</div>')
@@ -1329,7 +1330,7 @@ def decision_batch_status(job_id):
 def decision_suggestion_request():
     import decision_suggestions
     try:
-        return jsonify(decision_suggestions.enqueue(exclude_ids=json.loads(request.form.get('exclude_ids', '[]')))), 202
+        return jsonify(decision_suggestions.enqueue(exclude_ids=json.loads(request.form.get('exclude_ids', '[]')), candidate_ids=json.loads(request.form['candidate_ids']) if 'candidate_ids' in request.form else None)), 202
     except (ValueError, TypeError) as error:
         return jsonify(error=str(error)), 400
 

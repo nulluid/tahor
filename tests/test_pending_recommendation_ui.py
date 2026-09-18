@@ -26,6 +26,14 @@ class PendingRecommendationRoutes(AppTestCase):
         self.assertIn('data-generate',body)
         self.assertIn('data-decision-choice',body)
 
+    def test_concrete_recommendation_precedes_older_unsorted_recommendation(self):
+        self.seed(1, 'vendor_mapping'); self.seed(2, 'vendor_mapping'); self.seed(3)
+        results = [dict(decision_id=1, action='unsorted', reason='Missing evidence', source_revision='a'), dict(decision_id=2, action='map', reason='Known sender', bucket='Finance', vendor_name='Example', source_revision='b')]
+        with patch('decision_suggestions.latest_recommendations', return_value=results):
+            body = self.client.get('/').get_data(as_text=True)
+        self.assertLess(body.index('data-decision-id="2"'), body.index('data-decision-id="1"'))
+        self.assertLess(body.index('data-decision-id="1"'), body.index('data-decision-id="3"'))
+
     def test_ready_recommendation_is_visible_even_while_sender_enrichment_is_automatic(self):
         self.seed(1, 'vendor_mapping')
         with patch('decision_suggestions.latest_recommendations', return_value=[{'decision_id': 1, 'action': 'unsorted', 'reason': 'Review this sender', 'source_revision': 'sample'}]), patch('vendor_suggestions.pending_work_ids', return_value=['vendor:1']), patch.object(self.module.mailbox_settings, 'is_ai_enabled', return_value=True):

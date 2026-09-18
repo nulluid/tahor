@@ -177,7 +177,7 @@ place so you can keep working without losing your position.
 
 **Generate AI suggestions** on Pending decisions recommends up to **20 items**
 per batch by default. Adjust its independent model policy, batch size, and written
-guidance in Settings. Recommended items rise above undecided ones. Review the
+guidance in Settings. Concrete recommendations appear first; suggestions to leave mail unsorted follow in a separate group. Dismissing a filing request creates no rule and stops repeat requests for that sender; choose Decide later to leave it pending. When the AI lacks evidence, it recommends waiting and leaves that item unselected; it does not recommend dismissing a request just because it is uncertain. Review the
 radio choices and choose any existing filing folder from the full dropdown, or enter a new folder. Apply a batch from the sticky toolbar; individual decisions
 remain available. Your confirmed choices guide future recommendations, including
 choices still waiting for mailbox recovery. Rule proposals require separate approval.
