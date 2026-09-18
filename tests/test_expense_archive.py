@@ -63,6 +63,29 @@ class ArchiveTests(unittest.TestCase):
         with self.assertRaises(LookupError):
             archive.read_original(self.identifier)
 
+    def test_generation_response_is_consumed_and_refreshed_after_capture(self):
+        for changed in (False, True):
+            client = self.client()
+            state = {'value': None, 'selects': 0}
+            def select(*args, **kwargs):
+                state['selects'] += 1
+                state['value'] = b'43' if changed and state['selects'] > 1 else b'42'
+                return 'OK', []
+            def response(name):
+                value = state['value']
+                state['value'] = None
+                return name, [value]
+            client.select.side_effect = select
+            client.response.side_effect = response
+            if changed:
+                with self.assertRaisesRegex(RuntimeError, 'generation changed during'):
+                    archive.capture(self.identifier, client=client)
+            else:
+                archive.capture(self.identifier, client=client)
+                with closing(archive._db()) as db, db:
+                    db.execute('DELETE FROM expense_originals')
+            self.assertEqual(state['selects'], 2)
+
     def test_capacity_never_deletes_existing_source(self):
         with patch.object(archive, 'MAX_ARCHIVE_BYTES', len(self.raw) - 1), self.assertRaises(ValueError):
             archive.store_verified(self.identifier, self.raw)

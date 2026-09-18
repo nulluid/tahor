@@ -129,6 +129,10 @@ def capture(entry_id, client=None, budget_seconds=20):
         metadata, raw = items[0]
         if re.findall(rb'\bUID (\d+)\b', metadata) != [uid.encode()] or re.findall(rb'\bRFC822.SIZE (\d+)\b', metadata) != [str(size).encode()] or not isinstance(raw, bytes) or len(raw) != size:
             raise RuntimeError('Original receipt was incomplete or changed')
+        # imaplib.response consumes the cached UIDVALIDITY response. Reselect
+        # to obtain a fresh generation value rather than rereading that cache.
+        if client.select(quote_mailbox(row['mailbox']), readonly=owns_client)[0] != 'OK':
+            raise RuntimeError('Receipt folder is unavailable after capture')
         if fetch_batch.mailbox_uidvalidity(client) != str(row['uidvalidity']):
             raise RuntimeError('Receipt folder generation changed during capture')
         return store_verified(entry_id, raw)
