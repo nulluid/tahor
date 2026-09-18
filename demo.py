@@ -59,6 +59,17 @@ def main():
         expense_id = business_ledger.record_receipt(dict(business_key='example-studio',matched_rule_id='software-receipts',vendor='Example Cloud',sender_email='billing@cloud.example',mailbox='Example Studio/Receipts/2026',message_id='<demo-business-receipt@example.com>',uid='1',uidvalidity='1',received_at='2026-09-15T12:00:00+00:00',subject='Your cloud receipt'), fetch_batch.extract_body_text(original), verified_business=True)
         business_ledger.update_metadata(expense_id, category='Hosting', comment='Hosted application infrastructure')
         expense_archive.store_verified(expense_id, original)
+        import accounting_dashboard
+        accounting_dashboard.save_profile('example-studio', name='Example Studio', default=True, commencement_date='2026-06-01', policies='Allocate shared infrastructure using project billing labels. Review the split when usage changes.', guidance='Review receipt evidence, business use, and final filing-year instructions before preparing the return.')
+        accounting_dashboard.save_profile('sample-workshop', name='Sample Workshop', default=False)
+        accounting_dashboard.save_entry_details(expense_id, tax_treatment='Operating expense — review at filing', tax_form='Business expense schedule', tax_description='Cloud infrastructure', business_use_bps=10000, allocations=[dict(category='Production hosting',bps=7500),dict(category='Development tools',bps=2500)])
+        equipment_original = b'From: Example Equipment <sales@equipment.example>\r\nMessage-ID: <demo-equipment@example.com>\r\nSubject: Workstation receipt\r\nContent-Type: text/plain\r\n\r\nAmount paid: USD 1800.00\nPayment date: 2026-08-12\nReceipt ID: DEMO-PC'
+        equipment_id = business_ledger.record_receipt(dict(business_key='example-studio',matched_rule_id='equipment-receipts',vendor='Example Equipment',sender_email='sales@equipment.example',mailbox='Example Studio/Receipts/2026',message_id='<demo-equipment@example.com>',uid='2',uidvalidity='1',received_at='2026-08-12T12:00:00+00:00',subject='Workstation receipt'), fetch_batch.extract_body_text(equipment_original), verified_business=True)
+        business_ledger.update_metadata(equipment_id, category='Computer equipment', comment='Business workstation')
+        expense_archive.store_verified(equipment_id, equipment_original)
+        accounting_dashboard.save_entry_details(equipment_id, transaction_role='asset', tax_treatment='Equipment — eligibility review required', business_use_bps=10000, asset=dict(name='Business workstation', purchase_date='2026-08-12', basis_minor=180000))
+        accounting_dashboard.upsert_expected('sample-membership', 'example-studio', year=2026, vendor='Example Developer Network', amount_minor=7500, currency='USD', purpose='Annual developer membership', category='Developer program fees', status='expected')
+
         ui.generate_sieve.refresh_sieve()
         ui.runtime_status.write_status('processed', mode='paid_only', last_batch_applied=50, last_batch_pending=0, last_success_at=now)
 

@@ -209,12 +209,21 @@ Private business rules group correspondence and file receipt evidence into
 before they are moved. Existing mail can be reconciled with a resumable scan;
 new mail follows the same rules and your configured inbox timing.
 
-The **Expenses** page opens to the current calendar year, grouped by month.
-Compact rows expand for receipt previews, comments, AI-filled fields, and
-amount review. Monthly and annual summaries show charges, refund credits, and
-net paid, with expandable category totals. Invoices and currencies remain
-separate; uncertain amounts and duplicates stay out of totals. Remove an entry
-from the page and accounting downloads without deleting its filed email or private audit history.
+The **Expenses** dashboard keeps each business separate, opening to your chosen
+business and the current calendar year. Compact receipt rows expand for previews,
+AI proposals, purpose notes, and amount review. Monthly and annual summaries show
+business-share payments, refunds, and net spending without counting invoices or
+financing principal. Business-use percentages and account allocations apply to
+these totals; original receipt amounts remain available in each record.
+Other-business records can be reassigned; removing an entry preserves its filed
+email and private audit history.
+
+Split a charge across bookkeeping accounts, record business-use percentages,
+and retain proposed tax treatment alongside equipment, service dates, and
+amortization notes. Expected purchases and missing receipts have their own list
+and never inflate totals. Private allocation policies and filing notes stay with
+the selected business. These preparation records distinguish cash spending from
+tax deductions; Tahor does not calculate or file your tax return.
 
 Accounting CSV and ZIP downloads include only ready receipts and refunds, excluding
 removed items, possible duplicates, unpaid invoices, and items awaiting review.
@@ -226,7 +235,7 @@ and proposes vendor, date, type, reference, amount, currency, bookkeeping catego
 and business-purpose comments using your rule-writing model and privacy settings.
 Missing evidence remains blank, and suggestions do not overwrite confirmed values.
 Your verified off-server recovery schedule backs up the ledger, comments,
-categories, and archived originals together.
+categories, business profiles, allocation policies, and archived originals together.
 [Business filing and ledger setup](docs/business-ledger.md) covers review,
 archive limits, exports, and recovery. Cloud-drive storage is not required.
 

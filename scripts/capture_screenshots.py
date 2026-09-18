@@ -36,7 +36,7 @@ section:has(#reply-rules) { margin-top: 0; padding-top: 0; border-top: 0; }
         settings_height = 3200 + 160 * settings.count('name="ai_policy"')
         output = ROOT / 'docs/screenshots'
         output.mkdir(parents=True, exist_ok=True)
-        for page, filename, height in [('index', 'decisions', 1900), ('unsubscribe', 'subscriptions', 1080), ('settings', 'settings', settings_height), ('reply-rules', 'reply-rules', 1000), ('status', 'status', 850), ('expenses', 'expenses', 1080)]:
+        for page, filename, height in [('index', 'decisions', 1900), ('unsubscribe', 'subscriptions', 1080), ('settings', 'settings', settings_height), ('reply-rules', 'reply-rules', 1000), ('status', 'status', 850), ('expenses', 'expenses', 1600)]:
             shot = temporary / (filename + '.png')
             process = subprocess.Popen([args.chrome, '--headless', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--hide-scrollbars', '--user-data-dir=' + str(temporary / ('profile-' + filename)), '--window-size=1120,' + str(height), '--screenshot=' + str(shot), '--virtual-time-budget=3000', (temporary / 'pages' / (page + '.html')).as_uri()], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             try:

@@ -114,7 +114,7 @@ class ExpensePageTests(AppTestCase):
         base=business_ledger.get_entry(self.identifier)
         for label, updates in [('excluded', {'status':'excluded'}), ('invoice', {'document_type':'invoice'}), ('pending', {'status':'review_needed'}), ('duplicate', {'duplicate_of':self.identifier})]:
             row=dict(base, id=100+len(label), **updates)
-            with patch.object(business_ledger, 'list_entries', return_value=[base,row]):
+            with patch.object(business_ledger, 'list_entries', return_value=[base,row]), patch('accounting_dashboard.entry_details', return_value={}):
                 response=self.client.get('/expenses.zip?year=2026')
                 with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
                     self.assertEqual([x['id'] for x in json.loads(archive.read('ledger.json'))],[self.identifier])

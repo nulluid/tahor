@@ -203,7 +203,7 @@ def _reviews(rows):
         db.close()
 
 
-def export_zip(rows, csv_text):
+def export_zip(rows, csv_text, supplementary=None):
     """Return a seekable private temporary ZIP; manifest exposes every missing EML.
 
     Never fetch mail in the download request. Background capture supplies durable
@@ -213,7 +213,10 @@ def export_zip(rows, csv_text):
     manifest = {'version': 1, 'created_at': datetime.now(timezone.utc).isoformat(), 'complete': True, 'originals': []}
     ledger_json = json.dumps(rows, ensure_ascii=False, indent=2)
     reviews_json = json.dumps(_reviews(rows), ensure_ascii=False, indent=2)
-    total = sum(len(value.encode('utf-8')) for value in (csv_text, ledger_json, reviews_json))
+    supplementary = supplementary or {}
+    if any(name not in ('accounting.json','allocation-lines.csv','assets.csv') or not isinstance(value, str) for name, value in supplementary.items()):
+        raise ValueError('Invalid supplementary export files')
+    total = sum(len(value.encode('utf-8')) for value in (csv_text, ledger_json, reviews_json, *supplementary.values()))
     stream = tempfile.TemporaryFile(mode='w+b')
     try:
         if total > MAX_EXPORT_BYTES:
@@ -222,6 +225,7 @@ def export_zip(rows, csv_text):
             archive.writestr('expenses.csv', csv_text)
             archive.writestr('ledger.json', ledger_json)
             archive.writestr('reviews.json', reviews_json)
+            for name, value in supplementary.items(): archive.writestr(name, value)
             for row in rows:
                 item = {'entry_id': row['id'], 'message_id': row['message_id']}
                 try:

@@ -514,9 +514,9 @@ def _amount(minor, currency):
     return format(Decimal(minor) / (10 ** UNITS[currency]), '.'+str(UNITS[currency])+'f')
 
 
-def summaries(business_key=None, year=None):
+def summaries(business_key=None, year=None, rows=None):
     groups = {}
-    for row in list_entries(business_key, year=year):
+    for row in (list_entries(business_key,year=year) if rows is None else rows):
         if row['status'] != 'ready' or row['duplicate_of'] or row['document_type'] not in KINDS or row['currency'] not in UNITS or type(row['amount_minor']) is not int:
             continue
         key = (row['business_key'],row['currency'])
@@ -525,10 +525,10 @@ def summaries(business_key=None, year=None):
     return [dict(group, net_paid_minor=group['receipts_minor']+group['refunds_minor']) for group in groups.values()]
 
 
-def report(year, business_key=None):
+def report(year, business_key=None, rows=None):
     year=_year(year)
     grouped={key:{} for key in ('months','categories','monthly_categories')}
-    for row in list_entries(business_key,year=year):
+    for row in (list_entries(business_key,year=year) if rows is None else rows):
         if row['status']!='ready' or row['duplicate_of'] or row['document_type'] not in KINDS or row['currency'] not in UNITS or type(row['amount_minor']) is not int:
             continue
         month=(row['document_date'] or row['received_at'])[:7]
@@ -537,7 +537,7 @@ def report(year, business_key=None):
             key=(row['business_key'],row['currency'],*extra.values())
             group=grouped[section].setdefault(key,dict(business_key=row['business_key'],currency=row['currency'],receipts_minor=0,refunds_minor=0,invoices_minor=0,**extra))
             group[{'receipt':'receipts_minor','refund':'refunds_minor','invoice':'invoices_minor'}[row['document_type']]]+=row['amount_minor']
-    return dict(year=year,totals=summaries(business_key,year=year),**{section:[dict(group,net_paid_minor=group['receipts_minor']+group['refunds_minor']) for key,group in sorted(groups.items())] for section,groups in grouped.items()})
+    return dict(year=year,totals=summaries(business_key,year=year,rows=rows),**{section:[dict(group,net_paid_minor=group['receipts_minor']+group['refunds_minor']) for key,group in sorted(groups.items())] for section,groups in grouped.items()})
 
 
 def _csv_safe(value):

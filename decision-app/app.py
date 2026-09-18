@@ -1356,32 +1356,55 @@ def expense_year(allow_all=False):
     return int(value)
 
 
+def expense_business():
+    import accounting_dashboard
+    business = request.values.get('business') or accounting_dashboard.default_business()
+    keys = {p['business_key'] for p in accounting_dashboard.list_profiles()}
+    if business and business not in keys:
+        abort(400, 'Choose a configured business.')
+    return business
+
+
+def expense_entry_scope(identifier):
+    import business_ledger
+    try:
+        item = business_ledger.get_entry(identifier)
+    except LookupError:
+        abort(404)
+    business = expense_business()
+    if business and item['business_key'] != business:
+        abort(404)
+    return item
+
+
 def expense_return():
-    return redirect('/expenses?year=' + str(expense_year()) if 'year' in request.form else '/expenses')
+    from urllib.parse import urlencode
+    return redirect('/expenses?' + urlencode(dict(year=expense_year(), business=expense_business() or '')))
 
 
 @app.route('/expenses')
 @login_required
 def expenses_page():
-    import business_ledger, expense_ui, expense_archive
+    import business_ledger, expense_ui, expense_archive, accounting_dashboard
     year = expense_year()
-    entries = business_ledger.list_entries(year=year)
-    report = business_ledger.report(year)
+    business = expense_business()
+    entries = business_ledger.list_entries(business_key=business, year=year)
+    report = business_ledger.report(year, business_key=business, rows=accounting_dashboard.allocated_entries(entries))
     years = {year, datetime.now(timezone.utc).year}
-    for row in business_ledger.list_entries():
+    for row in business_ledger.list_entries(business_key=business):
         date = row.get('document_date') or row.get('received_at') or ''
         if re.match(r'^[0-9]{4}-', date): years.add(int(date[:4]))
     flash = session.pop('flash', '')
-    body = expense_ui.render(entries, report['totals'], year=year, report=report, years=years, archive_status=expense_archive.archive_status(entries))
-    return '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Tahor — expenses</title>' + FAVICON_LINK + STYLE_BLOCK + '</head><body><main>' + tahor_header('expenses') + ('<p role="status">' + html(flash) + '</p>' if flash else '') + body + '</main></body></html>'
+    body = expense_ui.render(entries, report['totals'], year=year, report=report, years=years, archive_status=expense_archive.archive_status(entries), business=business, profiles=accounting_dashboard.list_profiles(), dashboard=accounting_dashboard.dashboard(business, year) if business else None)
+    return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Tahor — expenses</title>' + FAVICON_LINK + STYLE_BLOCK + '</head><body><main>' + tahor_header('expenses') + ('<p role="status">' + html(flash) + '</p>' if flash else '') + body + '</main></body></html>'
 
 
 @app.route('/expenses.csv')
 @login_required
 def expenses_csv():
-    import business_ledger
+    import business_ledger, accounting_dashboard
     year = expense_year(allow_all=True)
-    entries = business_ledger.accounting_entries(business_ledger.list_entries(year=year))
+    entries = accounting_dashboard.eligible_entries(business_ledger.list_entries(business_key=expense_business(), year=year))
     response = Response(business_ledger.export_csv(rows=entries), mimetype='text/csv')
     response.headers['Content-Disposition'] = 'attachment; filename="business-expenses-' + str(year or 'all') + '.csv"'
     return response
@@ -1390,15 +1413,16 @@ def expenses_csv():
 @app.route('/expenses.zip')
 @login_required
 def expenses_zip():
-    import business_ledger, expense_archive
+    import business_ledger, expense_archive, accounting_dashboard, accounting_export
     year = expense_year(allow_all=True)
-    entries = business_ledger.list_entries(year=year)
+    business = expense_business()
+    entries = business_ledger.list_entries(business_key=business, year=year)
     purpose = request.args.get('purpose', 'accounting')
     if purpose not in ('accounting', 'records'): abort(400)
     if purpose == 'accounting':
-        entries = business_ledger.accounting_entries(entries)
+        entries = accounting_dashboard.eligible_entries(entries)
     try:
-        stream = expense_archive.export_zip(entries, business_ledger.export_csv(rows=entries))
+        stream = expense_archive.export_zip(entries, business_ledger.export_csv(rows=entries), supplementary=accounting_export.supplementary(business, year, [row['id'] for row in entries], include_expected=purpose == 'records', rows=entries) if business else None)
     except (ValueError, RuntimeError):
         return 'The archive could not be generated safely. Try one calendar year at a time.', 409
     response = send_file(stream, mimetype='application/zip', as_attachment=True, download_name='business-' + ('records-' if purpose == 'records' else 'expenses-') + str(year or 'all') + '.zip', conditional=False)
@@ -1406,9 +1430,118 @@ def expenses_zip():
     return response
 
 
+def accounting_percent(value):
+    from decimal import Decimal, InvalidOperation
+    try:
+        number = Decimal(value)
+        scaled = number * 100
+        if not number.is_finite() or not 0 <= number <= 100 or scaled != scaled.to_integral_value():
+            raise ValueError('Use a percentage from 0 to 100 with at most two decimal places.')
+        return int(scaled)
+    except (InvalidOperation, TypeError):
+        raise ValueError('Use a valid percentage.')
+
+
+@app.route('/expenses/<int:identifier>/accounting', methods=['POST'])
+@login_required
+def expense_accounting(identifier):
+    import accounting_dashboard, business_ledger
+    row = expense_entry_scope(identifier)
+    expense_year()
+    try:
+        fields = {key: request.form.get(key, '') for key in ('tax_treatment','tax_description','tax_form','notes')}
+        fields['business_use_bps'] = accounting_percent(request.form.get('business_use_percent', '100'))
+        fields['transaction_role'] = request.form.get('transaction_role', 'expense')
+        for name in ('payment_date','service_period_start','service_period_end','amortization_start_date'):
+            fields[name] = request.form.get(name, '').strip()
+        months = request.form.get('amortization_months', '').strip()
+        if months: fields['amortization_months'] = int(months)
+        balance = request.form.get('prepaid_balance', '').strip()
+        if balance:
+            amount = business_ledger._minor(balance, row['currency'])
+            if amount is None: raise ValueError('Confirm the currency and enter an exact prepaid balance.')
+            fields['prepaid_balance_minor'] = amount
+
+        related = request.form.get('related_entry_id', '').strip()
+        fields['related_entry_id'] = int(related) if related else None
+        names = ('category','percent','tax_treatment','tax_form','tax_description')
+        lists = {key: request.form.getlist('allocation_' + key) for key in names}
+        if len({len(values) for values in lists.values()}) > 1:
+            raise ValueError('Each allocation needs the same fields.')
+        allocations = []
+        for index in range(len(lists['category'])):
+            values = {key: lists[key][index].strip() for key in names}
+            if not any(values.values()): continue
+            values['bps'] = accounting_percent(values.pop('percent'))
+            allocations.append(values)
+        fields['allocations'] = allocations
+        asset = accounting_dashboard.entry_details(identifier).get('asset', {}).copy()
+        for name in ('name','purchase_date','placed_in_service_date','serial_number','depreciation_method'):
+            if 'asset_' + name in request.form: asset[name] = request.form['asset_' + name].strip()
+        basis = request.form.get('asset_basis', '').strip()
+        if basis:
+            amount = business_ledger._minor(basis, row['currency'])
+            if amount is None: raise ValueError('Confirm the currency and enter an exact asset basis.')
+            asset['basis_minor'] = amount
+        fields['asset'] = asset
+        accounting_dashboard.save_entry_details(identifier, **fields)
+    except LookupError: abort(404)
+    except (ValueError, TypeError) as error: abort(400, str(error))
+    session['flash'] = 'Accounting details saved. Tax mappings remain provisional; receipt amounts are unchanged.'
+    return expense_return()
+
+
+@app.route('/expenses/<int:identifier>/reassign', methods=['POST'])
+@login_required
+def expense_reassign(identifier):
+    import accounting_dashboard
+    expense_entry_scope(identifier)
+    expense_year()
+    try:
+        accounting_dashboard.save_entry_details(identifier, business_key=request.form.get('target_business', ''))
+    except LookupError: abort(404)
+    except ValueError as error: abort(400, str(error))
+    session['flash'] = 'Entry assigned to the selected business. Original email retained.'
+    return expense_return()
+
+
+@app.route('/expenses/profile', methods=['POST'])
+@login_required
+def expense_profile():
+    import accounting_dashboard
+    expense_year()
+    try:
+        accounting_dashboard.save_profile(expense_business(), **{key: request.form.get(key, '') for key in ('commencement_date','policies','guidance')})
+    except ValueError as error: abort(400, str(error))
+    session['flash'] = 'Private business notes and commencement date saved.'
+    return expense_return()
+
+
+@app.route('/expenses/expected', methods=['POST'])
+@login_required
+def expense_expected():
+    import accounting_dashboard, business_ledger, uuid
+    year = expense_year()
+    business = expense_business()
+    try:
+        fields = {key: request.form.get(key, '').strip() for key in ('vendor','date','purpose','category','notes')}
+        fields.update(year=year, currency=request.form.get('currency', 'USD'), status=request.form.get('status', 'expected'))
+        amount = request.form.get('amount', '').strip()
+        fields['amount_minor'] = business_ledger._minor(amount, fields['currency']) if amount else None
+        if amount and fields['amount_minor'] is None: raise ValueError('Enter an exact expected amount.')
+        linked = request.form.get('entry_id', '').strip()
+        fields['entry_id'] = int(linked) if linked else None
+        accounting_dashboard.upsert_expected(request.form.get('record_key') or uuid.uuid4().hex, business, **fields)
+    except LookupError: abort(404)
+    except (ValueError, TypeError) as error: abort(400, str(error))
+    session['flash'] = 'Expected record saved separately from paid expenses.'
+    return expense_return()
+
+
 @app.route('/expenses/<int:identifier>/metadata', methods=['POST'])
 @login_required
 def expense_metadata(identifier):
+    expense_entry_scope(identifier)
     import business_ledger
     year = expense_year()
     try:
@@ -1422,6 +1555,7 @@ def expense_metadata(identifier):
 @app.route('/expenses/<int:identifier>/accept-category', methods=['POST'])
 @login_required
 def expense_accept_category(identifier):
+    expense_entry_scope(identifier)
     import business_ledger
     year = expense_year()
     try:
@@ -1439,6 +1573,7 @@ def expense_accept_category(identifier):
 @app.route('/expenses/<int:identifier>/suggest-category', methods=['POST'])
 @login_required
 def expense_suggest_category(identifier):
+    expense_entry_scope(identifier)
     import expense_categories
     year = expense_year()
     try:
@@ -1452,6 +1587,7 @@ def expense_suggest_category(identifier):
 @app.route('/expenses/<int:identifier>/confirm', methods=['POST'])
 @login_required
 def confirm_expense(identifier):
+    expense_entry_scope(identifier)
     expense_year()
     import business_ledger
     try:
@@ -1467,6 +1603,7 @@ def confirm_expense(identifier):
 @app.route('/expenses/<int:identifier>/exclude', methods=['POST'])
 @login_required
 def exclude_expense(identifier):
+    expense_entry_scope(identifier)
     expense_year()
     import business_ledger
     try:
@@ -1480,6 +1617,7 @@ def exclude_expense(identifier):
 @app.route('/expenses/message/<int:identifier>')
 @login_required
 def expense_message(identifier):
+    expense_entry_scope(identifier)
     import business_ledger, message_reviews
     try:
         item = business_ledger.get_entry(identifier)

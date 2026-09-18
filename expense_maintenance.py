@@ -43,6 +43,8 @@ def run():
     result = expense_archive.capture_missing(limit=5,budget_seconds=45)
     result.update(refresh_archived())
     result['categories_suggested'] = expense_categories.suggest_pending(limit=1)
+    import accounting_dashboard
+    result['accounting_policies_applied'] = accounting_dashboard.apply_pending(limit=100)
     return result
 
 

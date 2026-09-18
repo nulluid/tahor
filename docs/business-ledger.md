@@ -14,17 +14,17 @@ Receipt payments, refunds, and invoice documents are separate:
 
 - Paid receipts contribute to paid totals.
 - Refunds contribute negative amounts to the same currency's paid total.
-- Invoice totals are shown separately. They are not an outstanding balance, and an invoice plus its payment receipt is not counted as two paid expenses.
+- Invoices and payment reminders remain filed as email evidence but are omitted from the expense dashboard and accounting totals. An invoice plus its payment receipt is not counted as two paid expenses.
 
 An explicit ISO document date takes precedence. When only the email's date is available, the entry is labeled `email_date`; that is not a claim about the date of purchase. Owner-confirmed dates are labeled `owner`.
 
 Repeated scans of the same business, sender, and Message-ID update the source location without adding another expense or overwriting owner corrections. A repeated document reference, or identical source text for the same date, is flagged as a possible duplicate. Such entries stay out of totals until the owner excludes the duplicate or explicitly confirms that it is a distinct transaction. Different invoices and receipts remain separate document types.
 
-This ledger does not determine tax deductibility, allocate business versus personal portions, reconcile bank balances, or replace accounting review. Check amounts and supporting documents before using an export for bookkeeping.
+This ledger records your allocation of business and personal portions, but does not independently determine tax deductibility, reconcile bank balances, or replace accounting review. Check amounts and supporting documents before using an export for bookkeeping.
 
 ## Year view and categories
 
-Expenses defaults to the current year. Choose another calendar year to see its monthly rows and totals. All rows are compact and expand for editing; confirmed items remain editable. Monthly and yearly summaries expand to show category totals, with refunds reducing net paid in their own currency. Upcoming-payment reminders are correspondence, not paid receipts. Pending refunds and noncash store credit do not automatically reduce paid totals.
+Expenses defaults to your configured business and the current year. The business selector scopes records, totals, previews, and downloads; each business retains its own private name, filing folders, policies, and notes. Choose another calendar year to see its monthly rows and totals. All rows are compact and expand for editing; confirmed items remain editable. Monthly and yearly summaries expand to show allocated category totals, with business-use percentages applied and refunds reducing spending in their own currency. Original unallocated receipt amounts remain visible in the receipt rows. Upcoming-payment reminders are correspondence, not paid receipts. Pending refunds and noncash store credit do not automatically reduce paid totals.
 
 AI attempts every editable field: vendor, document date, type, reference, amount, currency, bookkeeping category, and a concise business-purpose comment. Suggestions use the configured rule-writing models and privacy policy with verified receipt body text and private owner guidance. Attachments are preserved in the archive but are not sent for these suggestions. Unknown values remain blank rather than invented.
 
@@ -32,17 +32,53 @@ Suggestions are stored separately from the ledger values and prefill unconfirmed
 
 Remove from Expenses immediately hides an entry and excludes it from totals. The original email and before-and-after history remain in private storage and exports. The background expense worker runs every five minutes; temporary capture or category failures retry.
 
+## Accounting preparation
+
+Expand a receipt to record a proposed tax treatment, tax form and description,
+evidence notes, payment and service dates, or a related purchase/refund. A charge
+can be allocated across multiple accounts using percentages that total 100%.
+Allocation rounding preserves the original charge exactly, including refund
+reversals. Business-use percentages apply before account allocation. Financing
+principal, transfers, and non-business transactions are excluded from accounting
+totals; they are not new expenses merely because cash moved.
+
+Equipment records retain purchase date, actual placed-in-service date, cost
+basis, serial number, and proposed depreciation method. Amortization periods and
+start dates can be recorded separately. Prepaid services can retain the unused
+balance and service period. Missing dates and eligibility remain review items;
+a suggested treatment does not establish a current deduction. Cash totals include
+paid asset purchases, so do not also treat that total as an ordinary-expense
+deduction.
+
+**Expected expenses and missing receipts** keeps upcoming purchases and known
+payments without receipt evidence separate from actual ledger charges. Add or
+edit a record, then link its matching receipt when available. A link must match
+business, currency, and any stated amount. This reconciliation record never adds
+a second charge.
+
+Each business retains its own commencement date, written allocation policy, and
+filing guidance. The dashboard exposes a preparation checklist and expandable
+allocated-spending summary. Tax classifications are provisional; check actual
+facts and the final filing-year forms before preparing the return. Tahor does
+not calculate depreciation, finalize deductions, or submit tax forms.
+
+Business identities and these records are instance data, not public source code.
+The public demo uses fictional organizations unrelated to any owner's mailbox.
+
 ## Export and recovery
 
 The ledger, owner-review history, and immutable original-email archive are tables in Tahor's private `decisions.db`. Existing database snapshots and the [off-host recovery schedule](private-backups.md) therefore back them up together. Recovery validates the snapshot before restoring it. An automatic off-host schedule must be configured on a separate trusted device; a backup on the Tahor server alone does not protect against losing that server. Keep originals, exported files, private business rules, and recovery copies out of the public source repository.
 
-The Expenses page offers accounting CSV and ZIP downloads for the selected year. These contain only ready receipts and refunds, excluding removed entries, possible duplicates, unpaid invoices, and items awaiting review. Use **Remove from Expenses** for non-expenses and costs belonging to another business; the filed email stays saved. A bill and its paid receipt are not both counted: unpaid invoices are omitted from accounting downloads. Duplicate receipt detection still depends on matching source identities or document references; review unrelated-looking copies rather than assuming identical amounts prove a duplicate.
+The Expenses page offers accounting CSV and ZIP downloads for the selected year. These contain only ready receipts and refunds, excluding removed entries, possible duplicates, unpaid invoices, and items awaiting review. Use **Move to another business** to reassign a record, or **Remove from Expenses** for non-expenses; the filed email stays saved. A bill and its paid receipt are not both counted: unpaid invoices are omitted from accounting downloads. Duplicate receipt detection still depends on matching source identities or document references; review unrelated-looking copies rather than assuming identical amounts prove a duplicate.
 
-**Download all records (includes excluded items)** is a separate recovery ZIP, not an accounting report. It retains all years and all review states. Each ZIP contains:
+**Download all records (includes excluded items)** is a separate recovery ZIP, not an accounting report. It retains all years and all review states for the selected business. Each ZIP contains:
 
 - `expenses.csv`, including review states and owner annotations.
 - `ledger.json`, retaining the complete exported ledger records.
 - `reviews.json`, with before-and-after changes for those records.
+- `accounting.json`, with the selected business profile, private policies, annotations, and accounting review history. The recovery download also includes expected transactions.
+- `allocation-lines.csv`, with integer-safe business/account splits and provisional tax mappings.
+- `assets.csv`, with equipment basis, service dates, and depreciation/amortization preparation fields. Asset basis is not an additional expense amount.
 - Original `.eml` files with attachments, named `YYYY-MM-category-vendor-entryID.eml`.
 - `manifest.json`, mapping entry IDs to filenames and SHA-256 checksums.
 
