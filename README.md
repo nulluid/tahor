@@ -16,49 +16,49 @@
   <img alt="Self hosted" src="https://img.shields.io/badge/self--hosted-your%20mailbox-10302c?style=flat-square">
 </p>
 
-**Tahor is a self-hosted email assistant that works inside your existing mailbox.**
-It starts with your inbox, works through the backlog without a folder-size limit,
-tags messages, files records and correspondence, helps you unsubscribe,
-and prepares replies for review. Your usual email client stays your email client.
+**Tahor is a self-hosted email assistant for your existing mailbox.** It sorts
+incoming mail, works through your backlog, preserves useful records, helps you
+stop unwanted marketing, and prepares replies for you to review. Keep using the
+email client you already like.
 
-The name comes from **טָהוֹר**, Hebrew for “clean, pure.” The aim is practical:
-less inbox maintenance, fewer lost receipts, and a clear place to review decisions
-that should not be left to a model.
+The name comes from **טָהוֹר**, Hebrew for “clean, pure.” The goal is a calmer
+inbox without giving up control of your mail.
 
-| The routine work | Your control |
+| Let Tahor handle | Stay in control of |
 | :--- | :--- |
-| Classify and tag messages in the background | Review ambiguous mail before retention cleanup |
-| File retained records and correspondence, then mark low-attention mail read | Choose the sender’s destination in the app |
-| Group business receipts by calendar year and preserve them permanently | Review a private expense ledger and export CSV |
-| Track unsubscribe requests and sender blocks | Keep subscriptions, block marketing, or block a domain |
-| Draft a response when your reply rule matches | Find the original unread; edit and send its draft in your mail client |
-| Recover from provider failures | See actual worker progress and retry status |
-| Place optional health alerts and daily summaries in your inbox | Choose notifications and digest time; summaries link to Tahor and expire automatically |
+| Classification, filing, and retention | Which messages need attention and how long mail stays in your inbox |
+| Unsubscribe requests and marketing blocks | Keeping receipts and other transactional mail |
+| Reply drafting | Your instructions, signature, and every message you send |
+| Business receipt organization | Separate businesses, expense allocations, and accounting exports |
+| Retries and background processing | Progress, model costs, and optional health alerts |
 
 ## Inside the app
 
 <p align="center">
-  <img src="docs/screenshots/decisions.png" width="100%" alt="Tahor’s decision queue with routing choices, rule proposals, and clarification from observed senders">
+  <img src="docs/screenshots/decisions.png" width="100%" alt="Tahor’s decision queue with suggested actions and filing folders">
 </p>
-<p align="center"><sub>The decision queue keeps unresolved choices visible. Screenshots use synthetic data.</sub></p>
+<p align="center"><sub>Review suggestions, preview an email, and apply decisions without losing your place. All screenshots use fictional sample data.</sub></p>
 
 <table>
 <tr>
-<td width="50%"><img src="docs/screenshots/subscriptions.png" alt="Unsubscribe actions and editable sender blocks"><br><strong>Subscriptions, with an exit.</strong><br>Request an unsubscribe, keep transactional mail, and remove a block later.</td>
-<td width="50%"><img src="docs/screenshots/reply-rules.png" alt="Natural-language reply instructions and sender opt-outs in Settings"><br><strong>Your instructions, your mailbox.</strong><br>Describe which messages deserve a reply and how it should read. Review the draft in your usual email client.</td>
+<td width="50%"><img src="docs/screenshots/subscriptions.png" alt="Subscription recommendations and marketing controls"><br><strong>Less marketing, useful mail preserved.</strong><br>Review a batch of recommendations and stop marketing while keeping transactions.</td>
+<td width="50%"><img src="docs/screenshots/reply-rules.png" alt="Reply instructions and sender exclusions in Settings"><br><strong>Replies in your own mailbox.</strong><br>Describe the replies you want, then review the drafts in your usual email client.</td>
 </tr>
 </table>
 
-The app includes independent model settings for each AI task, an Expenses page
-for private receipt review, and a Status page showing the last successful batch.
-[Try the sample-data preview](#try-it-without-connecting-a-mailbox).
+<details>
+<summary>See the accounting dashboard</summary>
+
+![Business accounting dashboard with separate businesses, monthly totals, and receipt records](docs/screenshots/expenses.png)
+
+</details>
 
 <details>
-<summary>See model controls and live worker status</summary>
+<summary>See Settings and worker status</summary>
 
-| Choose models and inbox timing | See whether work is progressing |
+| Model settings and inbox timing | Processing progress |
 | :---: | :---: |
-| ![Model settings and configurable read/unread inbox timing](docs/screenshots/settings.png) | ![Worker progress and last successful batch](docs/screenshots/status.png) |
+| ![Independent AI policies and inbox timing](docs/screenshots/settings.png) | ![Worker status and latest successful batch](docs/screenshots/status.png) |
 
 </details>
 
@@ -67,7 +67,7 @@ for private receipt review, and a Status page showing the last successful batch.
 You need **Python 3.9+**, an IMAP mailbox with an app password, and an
 [OpenRouter API key](https://openrouter.ai/keys). Fastmail is the reference
 provider. Other providers need IMAP keywords; filing requires `MOVE`, and
-retention requires `UIDPLUS`. The setup check reports these capabilities.
+retention requires `UIDPLUS`. Tahor checks these capabilities during setup.
 
 ```bash
 git clone https://github.com/nulluid/tahor.git
@@ -75,16 +75,11 @@ cd tahor
 ./install.sh --mode paid_only
 ```
 
-The installer creates a virtual environment, asks for credentials without
-echoing them, and writes private configuration outside the checkout. New setups
-leave AI rule and reply writing **disabled until you select a model in Settings**. Rerunning setup preserves your existing
-configuration, prompt, and routing rules.
+The installer creates a virtual environment, prompts for credentials without
+echoing them, and stores private configuration outside the checkout. Running it
+again preserves your existing configuration and rules.
 
-This command explicitly selects always-paid classification. Without `--mode paid_only`,
-a new installation uses always-free classification. Read the free-model limitations
-below before processing your mailbox; free mode never silently incurs paid charges.
-
-Check the connection, then start processing:
+Check your connection, then start the worker:
 
 ```bash
 venv/bin/python run.py doctor --check-imap --check-model
@@ -92,14 +87,25 @@ venv/bin/python run.py worker
 ```
 
 The check uses a read-only mailbox connection and a synthetic model request.
-The worker applies classification tags and deletes messages classified as trash.
-Folder filing and age-based retention cleanup run as separate scheduled jobs.
+**The worker changes your mailbox:** it applies classification tags and deletes
+messages classified as trash. Filing and age-based retention run as separate
+scheduled jobs, which you can preview before enabling.
 
-**For the complete setup:** [web login, unattended services, safe sweep previews,
-and HTTPS](docs/setup.md). Google OAuth and your mailbox/provider credentials
-must be configured by you; the installer does not create those accounts.
+The command above selects paid classification. Omitting `--mode paid_only`
+selects always-free classification for a new installation. **The free model has
+known classification errors, including treating important mail as trash.** Review
+the disclosures in Settings before enabling it. AI rule and reply writing remain
+disabled until you select their models.
+
+For the complete installation, follow the **[setup guide](docs/setup.md)** to
+configure web login, HTTPS, and unattended services. Web login uses Google OAuth;
+you configure that account and your mailbox credentials. Use the
+[dedicated service-account setup](docs/service-isolation.md) on an internet-facing
+server so Tahor runs without administrator privileges.
 
 ### Try it without connecting a mailbox
+
+After cloning the repository:
 
 ```bash
 python3 -m venv venv
@@ -107,368 +113,192 @@ venv/bin/python -m pip install -r requirements.txt
 venv/bin/python demo.py
 ```
 
-Open **http://127.0.0.1:8421**. This runs the real UI with disposable sample data.
-It cannot send mail, change a mailbox, or make model requests. No account or API
-key is needed.
+Open **http://127.0.0.1:8421**. The preview runs the real UI with disposable sample
+data. It needs no account or API key and cannot change a mailbox or call a model.
 
-## Replies where you already read mail
+## Everyday use
 
-Describe a rule in **Settings → Reply rules**: which messages should match, what
-the reply should say, a signature, and a limit of one to three body sentences.
-Use natural language or match a specific sender or domain. For example, ask for
-brief acknowledgments of community project updates that mention a specific
-milestone, while answering personal questions according to their actual content.
-Expand the rule’s matched-sender list to opt individual senders out.
+**Review the exceptions.** Tahor automatically files confident matches and brings
+uncertain cases to Pending decisions. Read an email in the preview, accept a
+suggested folder, or give written instructions. AI suggestions cover 20 decisions
+per batch by default; change the limit in Settings. Recommendations appear first,
+and the action bar stays visible while you scroll.
 
-Tahor saves a threaded reply in your mailbox’s **Drafts** folder and leaves the
-original unread. A separate check with your selected writing model reviews the
-reply against the source and your instructions; a rejected reply is revised once
-and checked again. Rejected text is not added to Drafts. Model checks can still
-miss mistakes; review every reply before sending. Personal questions
-that need your answer also receive an attention flag. Edit and send it in your
-usual email client; there is no separate
-web draft editor and **Tahor never sends these replies automatically**. Choose a
-separate spending policy for reply writing in Settings. Writer and verifier use
-the same model for each attempt. Provider failures retry after a five-minute
-cooldown, using another tier only when your policy permits it. Quality checks
-can leave a draft pending even when a model is available.
-**Ling 3.0 Flash VL** is the free writing option, restricted to Novita with zero
-data retention, data collection denied, and zero input/output pricing. It can
-invent promises or details; review every draft. These
-[routing controls](https://openrouter.ai/docs/guides/features/zdr) protect provider
-selection; they do not guarantee the accuracy of a draft.
-All rule and reply writing requests require zero data retention and denied data
-collection. Missing or unsupported selections never silently switch to a paid model. A reply
-address must pass syntax and DNS checks. Those checks cannot prove that the
-recipient’s mailbox accepts delivery.
+**Keep receipts separate from correspondence.** A sender’s filing area has
+Receipts and Correspondence folders. Shared delivery services are matched by the
+actual sender, so one marketplace purchase does not define every future purchase.
+Business receipt rules can use calendar-year folders.
 
-New rules can scan recent inbox mail as well as new arrivals. The usual inbox
-window still applies: three days for read mail, seven for unread by default.
-Creating a draft does not extend that window. An optional filing destination on
-the rule lets eligible low-attention messages move into your folder structure
-afterward. Messages needing attention or review stay protected.
+**Stop marketing without losing transactions.** On Subscriptions, select
+**Stop marketing, keep transactions**, unsubscribe only, keep the subscription,
+or block all mail. Ask AI to recommend a batch of up to 50 senders by default,
+review the choices, and apply them together. Past decisions and your written
+guidance inform later suggestions. Some senders require confirmation on their
+website; email-based unsubscribe requests require SMTP sending access.
 
-Natural-language matching shares the existing classification request, using up
-to 6,000 characters of message context when such rules are enabled. Uncertain
-matches remain protected from deletion and do not produce a draft; uncertainty
-about drafting alone does not create a keep-or-trash decision. Reply writing is a
-separate model request. Choose its model and spending policy independently of
-classification: **Grok 4.6** is the recommended paid writer, and **Ling 3.0 Flash VL**
-is the free option. Additional supported choices are available in Settings.
-[Model routing and lower-cost writing options](docs/operations.md).
+**Describe the replies you want.** In Settings → Reply rules, choose a sender,
+domain, or natural-language condition, then add writing instructions and a
+signature. Exclude individual senders from a rule when needed. Tahor saves a
+threaded reply in Drafts and leaves the original unread. It checks the proposed
+reply against your instructions, but you still review and send it yourself.
+**Tahor never sends these replies automatically.** Creating a draft does not
+extend the original message’s inbox window.
 
-## Decisions without the busywork
+**Understand the decision buttons.** Keep releases a review hold while preserving
+normal filing and retention rules. Keep briefly uses the configured three-day
+read or seven-day unread window, measured from delivery. Trash deletes the
+message. Skip for now leaves it protected. Decide later keeps a filing request
+pending; dismissing it stops repeat requests for that sender without creating a rule.
 
-Tahor uses observed messages to identify senders and automatically route confident
-filing matches. Archiving covers receipts, statements, legal and medical records,
-travel details, account notices, and personal correspondence worth retaining.
-Mail that still needs attention stays protected, and inbox timing and deletion
-rules continue to apply. **Use this filing folder** sets the destination for
-qualifying retained mail; it does not keep everything a sender sends. Within that
-sender's filing area, receipts go in **Receipts** and other retained messages go
-in **Correspondence**. A bounded maintenance worker revisits existing sender
-folders every five minutes, continuing large folders across passes.
-Business-specific receipt rules can use calendar-year folders instead.
-Shared delivery services are matched by the actual
-sender address; a marketplace purchase does not turn every future receipt into the
-same product category. Uncertain cases show the sender, date, suggested folder,
-and a link to read the email safely before deciding. Actions update the queue in
-place so you can keep working without losing your position.
+[Detailed operating guide](docs/operations.md)
 
-**Generate AI suggestions** on Pending decisions recommends up to **20 items**
-per batch by default. Adjust its independent model policy, batch size, and written
-guidance in Settings. Concrete recommendations appear first; suggestions to leave mail unsorted follow in a separate group. Dismissing a filing request creates no rule and stops repeat requests for that sender; choose Decide later to leave it pending. When the AI lacks evidence, it recommends waiting and leaves that item unselected; it does not recommend dismissing a request just because it is uncertain. Review the
-radio choices and choose any existing filing folder from the full dropdown, or enter a new folder. Apply a batch from the sticky toolbar; individual decisions
-remain available. Your confirmed choices guide future recommendations, including
-choices still waiting for mailbox recovery. Rule proposals require separate approval.
+## Business receipts and accounting
 
-**Keep** releases a review hold and preserves normal retention and filing rules.
-**Keep briefly** expires the message after the configured three-day read or
-seven-day unread window, measured from delivery. **Trash** deletes that message;
-**Skip for now** leaves it protected and pauses a saved decision’s retry.
+Keep each business’s records separate, with receipt folders such as
+`Your Business/Receipts/YYYY`. Matching receipts receive permanent retention.
+The Expenses dashboard opens to your default business and the current year;
+use the selectors to switch businesses or years.
 
-For subscriptions, **Stop marketing, keep transactions** requests an unsubscribe
-and blocks future marketing in Tahor while allowing receipts and payment notices.
-**View emails** opens recent subjects, dates, and full message text in a modal
-without leaving the page or marking mail read. The same preview works on review
-cards. Choose radio options for multiple senders, then **Apply selected actions**.
-The action bar stays visible as you scroll, and each sender shows its own result.
-**Generate AI suggestions** selects recommendations for your review using past
-decisions and your private guidance; it never applies them. Each batch covers
-50 senders by default, configurable in Settings. Submitted choices guide later
-recommendations. **Tell Tahor what you want** on a subscription or decision card
-lets you add written guidance, or request a rule proposal to review before it
-changes mailbox policy. Pending-decision recommendations appear first, followed by your other selections and then undecided items. Recommendation explanations remain visible separately from action progress and errors. Free recommendations can miss
-preferences for wanted coupons; review the selected actions before applying them. Some senders require confirmation on their website;
-email-based requests require an app password with SMTP sending access.
+Review compact receipt rows, add purpose notes, and split a charge across
+bookkeeping accounts. Monthly and yearly summaries apply business-use percentages
+and allocations, with refunds reducing net spending. Bills, payment reminders,
+financing principal, and excluded entries do not count as expenses. Expected
+purchases and missing receipts stay in a separate checklist.
 
-## Business receipts and expenses
+Equipment records retain cost basis, purchase and service dates, and proposed
+depreciation or amortization treatment. Private filing notes and allocation
+policies stay with the business. **These are tax-preparation records, not a
+calculated tax return:** Tahor does not finalize deductions or file taxes.
 
-Private business rules group correspondence and file receipt evidence into
-`Your Business/Receipts/YYYY`. Matching receipts receive permanent retention
-before they are moved. Existing mail can be reconciled with a resumable scan;
-new mail follows the same rules and your configured inbox timing.
+Download an accounting CSV or a ZIP with original emails, review history,
+allocation lines, asset records, and filing notes. Accounting downloads exclude
+items awaiting review and possible duplicates. Removing an entry preserves its
+filed email; a separately labeled full-records download retains excluded records
+for recovery. A manifest identifies any original emails still awaiting archive.
 
-The **Expenses** dashboard keeps each business separate, opening to your chosen
-business and the current calendar year. Compact receipt rows expand for previews,
-AI proposals, purpose notes, and amount review. Monthly and annual summaries show
-business-share payments, refunds, and net spending without counting invoices or
-financing principal. Business-use percentages and account allocations apply to
-these totals; original receipt amounts remain available in each record.
-Other-business records can be reassigned; removing an entry preserves its filed
-email and private audit history.
+AI can propose the vendor, date, amount, currency, category, and business-purpose
+comment. Suggestions do not overwrite confirmed values. Configure private
+business rules and future-entry policies using the
+[business filing and accounting guide](docs/business-ledger.md).
 
-Split a charge across bookkeeping accounts, record business-use percentages,
-and retain proposed tax treatment alongside equipment, service dates, and
-amortization notes. Expected purchases and missing receipts have their own list
-and never inflate totals. Private allocation policies and filing notes stay with
-the selected business. These preparation records distinguish cash spending from
-tax deductions; Tahor does not calculate or file your tax return.
+## Models and costs
 
-Accounting CSV and ZIP downloads include only ready receipts and refunds, excluding
-removed items, possible duplicates, unpaid invoices, and items awaiting review.
-The separately labeled all-records ZIP preserves the selected business’s records
-for recovery, including excluded items. ZIPs contain the ledger, review history,
-account allocations, asset records, private filing notes, and original `.eml`
-files with attachments. Receipt filenames include
-the month, category, vendor, and entry ID. A manifest identifies any originals
-still awaiting recovery. The five-minute expense worker archives source emails
-and proposes vendor, date, type, reference, amount, currency, bookkeeping category,
-and business-purpose comments using your rule-writing model and privacy settings.
-Missing evidence remains blank, and suggestions do not overwrite confirmed values.
-Your verified off-server recovery schedule backs up the ledger, comments,
-categories, business profiles, allocation policies, and archived originals together.
-[Business filing and ledger setup](docs/business-ledger.md) covers review,
-archive limits, exports, and recovery. Cloud-drive storage is not required.
+Choose a model and spending policy independently for classification, reply
+writing, rule writing, Pending decisions, and subscription recommendations.
+Expense suggestions use the rule-writing configuration. Settings save as you
+change them.
 
-<details>
-<summary>See the accounting dashboard with sample data</summary>
+| Policy | Behavior |
+| :--- | :--- |
+| **Always paid** | Retry paid failures without switching to free |
+| **Paid with free fallback** | Use free while paid is failing; periodically check paid recovery |
+| **Free with paid escalation** | Use paid temporarily if the estimated free queue exceeds four hours or free is unavailable |
+| **Always free** | Retry free failures without making paid requests |
 
-![Business expense evidence and reviewable totals](docs/screenshots/expenses.png)
+To avoid an inference bill, choose Always free for every enabled task and run
+Tahor on an existing computer. Your email account, electricity, and any rented
+hosting remain separate costs. Free capacity and quotas depend on the provider.
 
-</details>
+Free models can misclassify mail, recommend an unsuitable rule, or invent details
+in a draft. Paid models can also make mistakes. Review model disclosures and
+suggested actions; replies remain drafts and AI-written rules require approval.
+See [model configuration and limits](docs/operations.md) for supported choices.
 
-## Choose the pace
+## Mailbox behavior and privacy
 
-Choose independently for **classification, reply drafting, rule drafting,
-pending decisions, and subscription recommendations**. Subscription recommendations default to paid
-with free fallback.
-Settings save as you change them, with a confirmation beside each section:
+- **Inbox time is configurable.** Folder moves wait three days for read mail and
+  seven days for unread mail by default. Classification happens immediately.
+- **Trash does not wait.** Mail classified as trash is deleted immediately. Other
+  mail expires under its retention policy whether read or unread. Permanent,
+  pending-review, and needs-attention tags protect it from retention cleanup.
+- **Unread remains useful.** Eligible low-attention mail is marked read after
+  filing. Attention flags, review holds, and starred messages remain protected.
+- **The inbox comes first.** Tahor processes new mail and the backlog without a
+  folder-size ceiling. Trash waits until the inbox is caught up.
+- **Failures stay visible and retryable.** Unconfirmed mailbox operations remain
+  pending, and optional health alerts identify problems needing intervention.
+- **Hosted models receive message content.** Classification, drafting, and expense
+  suggestions send the context needed for their task. Supported routes enforce
+  zero-data-retention and denied-data-collection settings; this does not make
+  remote inference equivalent to keeping all content on your own machine.
 
-| Policy | Behavior | Paid requests |
-| :--- | :--- | :--- |
-| **Always paid** | Retry paid failures; notify you if intervention is needed | Yes; never falls back to free |
-| **Paid with free fallback** | Use free only while paid is failing; periodically probe paid recovery | Normally |
-| **Free with paid escalation** | Start free; use paid if the estimated queue exceeds four hours or free temporarily fails; return to free | When needed |
-| **Always free** | Keep retrying free failures; never switch to paid | Never |
+Default retention is seven days for transient mail and three years for standard
+mail. The reference retention sweep excludes Trash, Spam, Sent, Drafts, and
+Archive. Review [retention settings](docs/operations.md) before enabling cleanup.
 
-Fully successful paid-only batches continue immediately, without the free-tier
-pause. Speed mode controls routing and concurrency; it does not change your
-classification instructions or mailbox safety checks.
-The worker logs fetch, classification, and application timings for tuning.
-Paid classification uses **Gemini 3.8 Flash through Google Vertex**, restricted
-to a zero-retention endpoint with data collection denied and provider fallback
-disabled. It allows **eight concurrent requests**, with request starts spaced
-**three seconds apart**, including retries. Both settings are configurable for your
-provider limits. Concurrency overlaps slow responses; pacing limits request volume.
+Optional [health alerts and daily summaries](docs/notifications.md) arrive in your
+inbox over IMAP. Summaries link back to Tahor and expire after your configured
+read/unread window; no SMTP permission is needed to receive them.
 
-**Inbox first.** While the Inbox has work, it receives three batches for every
-ordinary-folder batch. Trash waits until the Inbox is caught up. A separate,
-read-only discovery connection finds work and new folders without repeatedly
-opening processing connections to empty folders. New Inbox mail is checked between
-batches; an in-flight batch finishes before the next folder is selected.
-
-For an internet-facing server, use the [dedicated service-account setup](docs/service-isolation.md)
-to keep application code read-only and run without administrator privileges.
-
-Policy changes are checked before each new classifier backend stage, including
-fallbacks and recovery probes. Requests already submitted may finish; remaining
-work stays queued if its policy changes. Failures leave work pending. Classifier
-recovery deadlines survive worker restarts; tier probes follow a five-minute
-cooldown, and persistent problems trigger the configured health alerts. The
-four-hour threshold is an estimate based on queued work and observed free
-throughput, not a completion guarantee. `TAHOR_CLASSIFY_FREE_ENABLED=0` remains
-an optional operator override that blocks free classification requests.
-
-Daily summaries link to your Tahor instance using its configured `BASE_URL`.
-Tahor automatically deletes its own verified digests after the configured inbox
-window: three days for read summaries and seven for unread by default. Health
-alerts retain their normal retention policy. See [notifications](docs/notifications.md).
-
-AI-generated rule changes appear as proposals in the decision queue. Review the
-exact sender action or file diff before approving. Domain blocks require the exact
-domain in your instruction; a brand name or single email address cannot authorize
-a whole-domain block. If the scope is unclear, Tahor preserves your instruction
-and asks for clarification instead of guessing or repeatedly retrying. Edit the
-complete instruction in the decision queue, optionally choose a sender domain
-Tahor has observed in your mailbox, and resubmit it for a new proposal.
-Changed underlying rules invalidate an older proposal.
-**Grok 4.6** is the recommended rule-writing option, selected independently from
-classification and reply writing; its requests use the xAI zero-retention route.
-
-### A setup without an added inference bill
-
-Choose **Always free** for each enabled AI task and use an existing computer for
-hosting. Rule and reply writing remain disabled until you enable them in Settings.
-The free model uses the same privacy restrictions as the paid routes, but has
-known accuracy limitations: it can classify important mail as trash, choose the
-wrong destination for a rule, or add unsupported promises and details to a reply.
-Since classification can trigger deletion, read the disclosures in Settings before
-enabling free processing. Generated rules require approval; replies remain drafts
-for you to review. Paying for a model does not guarantee correctness either.
-
-This does not make your email account, hardware, electricity, or hosting free.
-Free model capacity and account quotas are provider-controlled. OpenRouter can
-also reject free requests when an account balance is negative.
-[Provider limits](https://openrouter.ai/docs/api_reference/limits) ·
-[Free model variants](https://openrouter.ai/docs/guides/routing/model-variants/free)
+For Fastmail, you can install generated Sieve rules yourself or enable the
+[isolated credential connector](docs/fastmail-connector.md) to manage supported
+whole-domain blocks. It uses an unpublished provider interface and requires
+explicit enrollment with account-login authority. Keep this separate from the
+ordinary IMAP app password.
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    Inbox[(IMAP mailbox)] --> Fetch[Fetch unclassified UIDs]
-    Fetch --> Model[Classify]
-    Model --> Tags[Apply IMAP keywords]
-    Tags --> Review[Human review]
-    Tags --> Filing[Scheduled filing]
-    Tags --> Retention[Scheduled retention]
-    Review --> Rules[Routing and sender rules]
-    Rules --> Model
-    Filing --> Inbox
-    Retention --> Inbox
+    Mail[(IMAP mailbox)] --> Worker[Classify and tag]
+    Worker --> Filing[File retained mail]
+    Worker --> Review[Review uncertain decisions]
+    Worker --> Retention[Apply retention]
+    Review --> Rules[Private rules and preferences]
+    Rules --> Worker
+    Filing --> Mail
+    Retention --> Mail
 ```
 
-The worker searches for unclassified UIDs instead of repeatedly downloading the
-whole inbox. A message is recorded as processed only after its IMAP keyword
-write succeeds. Failed writes and classifications remain eligible for retry.
-Messages without a Message-ID use a local identity derived from the mailbox and
-UID. Before applying saved UID operations, Tahor checks the mailbox’s UIDVALIDITY
-value so a reset cannot redirect an old operation to a different message.
+Tahor uses Python workers, a Flask web app, and SQLite. It needs no external
+database, message broker, or frontend build. The deployment is designed for one
+mailbox owner on one host; accounting profiles separate that owner’s businesses.
 
-**Filing and retention have their own scheduled sweeps.** You can preview both
-before enabling them. The worker applies classifications immediately and deletes
-explicit trash after its tags are saved. Failed deletions retain a retry marker.
-The workers use IMAP and HTTP directly; reply-address validation adds a small
-DNS-aware validator. The optional web app uses Flask, requests, and Gunicorn. SQLite holds review decisions and draft state. No broker,
-external database, or frontend build is required.
-
-| Component | Responsibility |
+| Reliability boundary | What it protects |
 | :--- | :--- |
-| `backlog_worker.py` / `mailbox_scheduler.py` | Prioritize Inbox work, discover active folders, classify, and retry failed batches |
-| `process_batch.py` / `keyword_tool.py` | Enforce sender rules and track confirmed mailbox writes |
-| `filing_sweep.py` | File aged records and correspondence with guarded IMAP `MOVE` |
-| `retention_sweep.py` | Delete expired mail and retry pending trash deletion with targeted UID expunge |
-| `decision-app/` | Review decisions, apply rules, manage subscriptions and model settings |
-| `draft_replies.py` / `reply_rules.py` | Match owner instructions and prepare recoverable, thread-aware mailbox drafts |
-| `runtime_status.py` / `notifications.py` | Share worker progress; optionally add health alerts and daily counts to the owner’s inbox |
-| `scripts/private_backup.py` / `scripts/offhost_backup.py` | Verify private snapshots, keep off-host recovery copies, and restore after stopping services |
-| `setup_tahor.py` / `run.py` | Configure a private instance and launch each component consistently |
+| Confirmed IMAP keyword writes are processing checkpoints | Failed writes remain eligible for retry |
+| Mailbox generation and message identity checks precede saved operations | Stale UIDs cannot silently target another message |
+| Prepared drafts and stable message IDs survive retries | Interrupted saves can be recovered |
+| Locked, atomic settings updates | Web and background workers preserve each other’s changes |
+| Separate code, private configuration, and runtime state | Releases do not contain an instance’s mailbox or credentials |
 
-### Engineering choices
+[Operations and deployment](docs/operations.md) ·
+[Service isolation](docs/service-isolation.md) · [Security](SECURITY.md)
 
-| Decision | Reason |
-| :--- | :--- |
-| Mailbox keywords are the processing checkpoint | A failed write leaves the message eligible for retry, even if a local audit file says it was seen |
-| Persist a draft before appending it to IMAP | A retry reuses the prepared text and checks its stable Message-ID before saving again |
-| Lock settings updates and replace files atomically | Concurrent web and worker updates preserve each other’s fields |
-| Separate public code, private rules, and runtime state | Instances can share a release without sharing credentials or mailbox data |
+## Your data and recovery
 
-These behaviors have [regression tests](tests). The tradeoff is a deliberately
-small deployment: one mailbox owner and one host, with SQLite and local file locks.
+Configuration and runtime data live outside the public checkout under
+`~/.config/tahor/` by default. The public repository contains reusable code,
+tests, example configuration, and fictional screenshots—not real mailbox data,
+private business identities, credentials, or personal rules.
 
-## Boundaries that matter
+Private snapshots preserve rules, preferences, drafts, decisions, accounting
+profiles, and archived receipt originals. A separate trusted computer can pull
+and verify recovery copies over SSH. Connector login credentials and session
+tokens are excluded from those recovery bundles and require separate enrollment.
 
-- **Give mail time in the inbox.** Folder moves wait three days for read mail and
-  seven days for unread mail by default. Change both in Settings. Categorization
-  happens immediately; these delays apply only to filing.
-- **Filed mail should not clutter unread counts.** After a successful folder move,
-  eligible mail is marked read. The same check cleans up qualifying unread mail
-  already in existing folders, including on a new installation. Messages needing
-  attention or review, starred messages, and recent unread mail are left alone.
-- **Trash does not wait to be read.** Messages classified as trash are tagged and
-  deleted immediately. Other mail is deleted when its retention period expires,
-  whether read or unread. Forever, pending-review, and needs-attention tags protect
-  messages from retention cleanup.
-- **Reply drafts are never sent automatically.** A stable draft Message-ID lets
-  retries recover an interrupted save without intentionally appending another copy.
-  The original stays unread so the conversation remains visible.
-- **Uncertain mail stays reviewable.** Ambiguous classifications receive a
-  pending-review retention tag and a decision in the app.
-- **Notifications are optional.** Health alerts and daily summaries are written directly
-  into your inbox over IMAP, addressed from you to yourself. They contain status
-  and counts, not message content; no SMTP permission is needed.
-  [Enable notifications](docs/notifications.md).
-- **Failures stay visible.** A failed rule can be retried; a failed unsubscribe is
-  not silently marked successful. A saved block still applies if unsubscribing fails.
-- **Provider rules are your choice.** Review and install generated Sieve yourself,
-  or opt into the [isolated Fastmail connector](docs/fastmail-connector.md) for automatic
-  whole-domain blocks. The experimental connector supports fresh password/TOTP sign-in,
-  keeps credentials out of the web app, and manages only its own rule IDs. Login and
-  settings authorization have separate, persistent retry safeguards. Enrollment
-  grants it full account-login authority; Fastmail's unpublished interface can change.
-- **Hosted models receive mail content.** Classification sends sender, subject,
-  date, and a body excerpt (up to 6,000 characters with natural-language reply
-  rules). Reply drafting and verification send a longer excerpt, your mailbox identity,
-  signature, and writing instructions. Rule
-  drafting sends the instruction and current routing/prompt configuration.
+[Set up backups and recovery](docs/private-backups.md)
 
-Retention defaults are seven days for transient mail and three years for standard
-mail. The reference sweeper excludes Trash, Spam, Sent, Drafts, and Archive.
-Review [configuration and operating limits](docs/operations.md) before enabling it.
-
-## Your data stays separate
-
-```text
-~/.config/tahor/
-├── config.env          # credentials and instance settings; mode 0600
-├── data/
-│   ├── prompt.txt
-│   ├── vendor_buckets.json
-│   └── sieve.txt
-└── state/
-    ├── decisions.db
-    ├── settings.json
-    ├── worker_status.json
-    └── notifications.json # optional private delivery ledger
-```
-
-The public repository contains reusable code, tests, example configuration, and
-sample-data screenshots. Real prompts, vendor mappings, and Sieve rules can live
-in a separate **private** repository through `DATA_DIR`. Data commits stay local
-unless you explicitly enable pushing. Credentials, message batches, databases,
-and logs do not belong in either repository. Gitignore rules help; review staged
-changes before publishing.
-
-Private snapshots preserve your rules, preferences, draft journal, and pending
-decisions. A separate computer can pull and verify recovery copies over SSH,
-including the Fastmail connector’s rule-ownership records. Login credentials and
-session tokens are excluded. Enable overdue-backup alerts to detect a missed copy.
-
-[Set up backups and recovery](docs/private-backups.md) ·
-[Health alerts and daily summaries](docs/notifications.md)
-
-## Development and verification
+## Development
 
 ```bash
 venv/bin/python -m pip install -r requirements-dev.txt
 venv/bin/python -m unittest discover -s tests -v
 ```
 
-Tests exercise behavior across provider recovery, confirmed IMAP writes, retention
-safety, concurrent settings updates, web actions, OAuth/CSRF checks, Sieve syntax,
-reply-draft recovery, and repeatable setup. They use disposable state and fake
-network boundaries, without connecting to a real mailbox.
+Tests use disposable state and simulated network boundaries, without connecting
+to a real mailbox. They cover recovery, IMAP identity checks, retention, web
+security, settings updates, accounting, and repeatable installation.
 
-The sample preview and screenshots are reproducible:
+Reproduce the preview and screenshots:
 
 ```bash
 venv/bin/python demo.py --export /tmp/tahor-preview
 venv/bin/python scripts/capture_screenshots.py --chrome /path/to/chrome
 ```
 
-[Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) ·
-[Setup](docs/setup.md) · [Operations](docs/operations.md)
+[Contributing](CONTRIBUTING.md) · [Setup guide](docs/setup.md) ·
+[Operations](docs/operations.md) · [Security](SECURITY.md)
 
 ---
 
