@@ -7,6 +7,10 @@ pf_backlog/
 __pycache__/
 *.pyc
 decisions.db
+business_filing.json
+business_filing_state.json
+business-expenses.csv
+tahor-expenses.csv
 .flask_secret_key
 sieve.txt
 
