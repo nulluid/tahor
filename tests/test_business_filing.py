@@ -159,3 +159,87 @@ class BusinessRoutingTests(unittest.TestCase):
             second=business.run_sweep(client,backfill=True,state_path=path,limit=1)
         self.assertFalse(first['complete']);self.assertTrue(second['complete'])
         self.assertEqual(json.loads(path.read_text())['visited'],[])
+
+
+class CandidateSearchGrammarTests(unittest.TestCase):
+    def query(self, rules):
+        client=Mock()
+        with patch.object(business,'search_uids',return_value=('OK',[b'11 13'])) as search:
+            self.assertEqual(business._candidate_search(client,rules,10),[b'11',b'13'])
+        return ' '.join(search.call_args.args[1:])
+
+    def matches(self, query, sender='', subject='', identifier='', business_flag=False):
+        # Independent small IMAP SEARCH grammar parser: OR consumes exactly two
+        # search keys; parenthesized key lists are conjunctions, not OR lists.
+        import re
+        tokens=re.findall(r'"(?:[^"\\]|\\.)*"|[()]|[^\s()]+',query)
+        position=0
+        def take():
+            nonlocal position
+            token=tokens[position];position+=1
+            return json.loads(token) if token.startswith('"') else token
+        def key():
+            operation=take()
+            if operation=='(':
+                values=[]
+                while tokens[position]!=')':values.append(key())
+                take();return all(values)
+            if operation=='OR':
+                left=key();right=key();return left or right
+            if operation=='ALL':return True
+            if operation=='FROM':return take().casefold() in sender.casefold()
+            if operation=='SUBJECT':return take().casefold() in subject.casefold()
+            if operation=='KEYWORD':
+                self.assertEqual(take(),'expense-business');return business_flag
+            if operation=='HEADER':
+                self.assertEqual(take(),'Message-ID');return take() in identifier
+            if operation=='UID':
+                self.assertEqual(take(),'11:*');return True
+            raise AssertionError('Unexpected IMAP search key '+operation)
+        values=[]
+        while position<len(tokens):values.append(key())
+        return all(values)
+
+    def test_each_rule_keeps_its_own_source_and_subject_union(self):
+        query=self.query([
+            dict(domains=['large.example'],subject_contains_any=['Cloud','Developer']),
+            dict(senders=['personal@large.example']),
+            dict(domains=['small.example']),
+            dict(message_ids=['<specific@example>']),
+            dict(classified_business=True),
+        ])
+        for sender,subject,identifier,flag,expected in [
+            ('offers@large.example','Shopping','',False,False),
+            ('billing@large.example','Cloud invoice','',False,True),
+            ('account@large.example','Developer account','',False,True),
+            ('personal@large.example','Unrelated','',False,True),
+            ('sales@other.example','Cloud invoice','',False,False),
+            ('news@small.example','Unrelated','',False,True),
+            ('sales@other.example','Unrelated','<specific@example>',False,True),
+            ('sales@other.example','Unrelated','',True,True),
+        ]:
+            with self.subTest(sender=sender,subject=subject):
+                self.assertEqual(self.matches(query,sender,subject,identifier,flag),expected)
+
+    def test_multiple_source_types_are_alternatives_before_subject_conjunction(self):
+        query=self.query([dict(senders=['one@example.org'],domains=['two.example'],message_ids=['<three@example>'],classified_business=True,subject_contains_any=['Receipt'])])
+        for sender,identifier,flag in [('one@example.org','',False),('any@two.example','',False),('other@example.net','<three@example>',False),('other@example.net','',True)]:
+            self.assertTrue(self.matches(query,sender,'Receipt',identifier,flag))
+            self.assertFalse(self.matches(query,sender,'Sales offer',identifier,flag))
+
+    def test_non_ascii_alternative_keeps_broad_source_and_dates_remain_local(self):
+        query=self.query([dict(domains=['example.org'],subject_contains_any=['Cloud','Développeur'],body_contains_any=['private text'],since='2026-07-01')])
+        self.assertTrue(self.matches(query,'a@example.org','Anything'))
+        self.assertNotIn('SUBJECT',query);self.assertNotIn('SINCE',query);self.assertNotIn('BODY',query)
+        self.assertNotIn('2026',query);self.assertNotIn('private text',query)
+
+    def test_quoted_subject_escaping_is_valid_search_grammar(self):
+        value='Plan "Pro" \\ annual'
+        query=self.query([dict(domains=['example.org'],subject_contains_any=[value])])
+        self.assertTrue(self.matches(query,'a@example.org','Your '+value+' receipt'))
+        self.assertFalse(self.matches(query,'a@example.org','Other receipt'))
+
+    def test_non_ascii_source_falls_back_without_dropping_its_rule(self):
+        query=self.query([dict(message_ids=['<réçu@example.org>'],subject_contains_any=['Receipt'])])
+        self.assertTrue(self.matches(query,'any@example.net','Receipt'))
+        self.assertFalse(self.matches(query,'any@example.net','Unrelated'))

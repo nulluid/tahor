@@ -149,18 +149,49 @@ def protect_classification(result, record, rules=None):
     return route
 
 
+def _search_quoted(value):
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError('Invalid business search text')
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def _search_union(expressions):
+    """Build a balanced binary IMAP OR without changing its source union."""
+    expressions = sorted(set(expressions))
+    if not expressions:
+        return None
+    if len(expressions) == 1:
+        return expressions[0]
+    middle = len(expressions) // 2
+    return 'OR ' + _search_union(expressions[:middle]) + ' ' + _search_union(expressions[middle:])
+
+
 def _candidate_search(conn, rules, after):
-    scopes = sorted({item for rule in rules for item in rule.get('senders',[]) + rule.get('domains',[])})
-    conditions = [('FROM', '"'+item.replace('\\','\\\\').replace('"','\\"')+'"') for item in scopes]
-    for identifier in sorted({item for rule in rules for item in rule.get('message_ids', [])}):
-        conditions.append(('HEADER', 'Message-ID', '"'+identifier.replace('\\','\\\\').replace('"','\\"')+'"'))
-    if any(rule.get('classified_business') is True for rule in rules):
-        conditions.append(('KEYWORD', 'expense-business'))
-    criteria = ['UID', str(after+1)+':*']
-    if conditions:
-        criteria += ['OR'] * (len(conditions)-1)
-        for condition in conditions:
-            criteria.extend(condition)
+    conditions = []
+    for rule in rules:
+        sources = []
+        for value in rule.get('senders', []) + rule.get('domains', []):
+            sources.append('FROM ' + _search_quoted(value) if value.isascii() else 'ALL')
+        for value in rule.get('message_ids', []):
+            sources.append('HEADER Message-ID ' + _search_quoted(value) if value.isascii() else 'ALL')
+        if rule.get('classified_business') is True:
+            sources.append('KEYWORD expense-business')
+        source = 'ALL' if 'ALL' in sources else _search_union(sources)
+        if source is None:
+            continue
+        subjects = rule.get('subject_contains_any', [])
+        # Without a negotiated Unicode search charset, preserve a broad source
+        # search if ANY alternative is non-ASCII. The local matcher remains
+        # authoritative for all subject/body filters and header-date cutoffs.
+        if subjects and all(value.isascii() for value in subjects):
+            subject = _search_union(['SUBJECT ' + _search_quoted(value) for value in subjects])
+            conditions.append('(' + source + ' ' + subject + ')')
+        else:
+            conditions.append(source)
+    expression = _search_union(conditions)
+    if expression is None:
+        return []
+    criteria = ['UID', str(after + 1) + ':*', expression]
     status, values = search_uids(conn,*criteria)
     if status != 'OK':
         raise RuntimeError('Business inventory search failed')
