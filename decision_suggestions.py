@@ -98,6 +98,15 @@ def build_context(conn,rows):
         context = _object(row['context'])
         # Only bounded saved evidence. This operation never reads or mutates mail.
         data = {key:str(context.get(key) or '')[:2400] for key in ('sender_email','sender','routing_key','display_name','subject','excerpt','body_excerpt','category','retention','review_reason')}
+        snippet = context.get('snippet')
+        data['snippet'] = snippet[:500] if isinstance(snippet, str) else ''
+        samples = context.get('samples')
+        data['samples'] = [
+            {key: sample[key][:500] for key in ('subject', 'date', 'received_at', 'excerpt')
+             if isinstance(sample.get(key), str)}
+            for sample in (samples[-3:] if isinstance(samples, list) else [])
+            if isinstance(sample, dict)
+        ]
         data.update(decision_id=row['id'],kind=row['kind'],summary=str(row['summary'] or '')[:500])
         candidates.append(data)
     prefs['card_guidance'] = [{'decision_id':row['id'],'instructions':notes[row['id']]} for row in rows if row['id'] in notes]

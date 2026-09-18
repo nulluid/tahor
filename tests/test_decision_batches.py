@@ -202,3 +202,32 @@ class DecisionBatchTests(AppTestCase):
         with patch.object(suggestions,'_preferences',return_value={'explicit_choice_feedback':{'revision':2}}):
             self.assertNotEqual(suggestions._context_key(conn),before)
         conn.close()
+
+    def test_saved_snippet_and_recent_samples_are_bounded_untrusted_evidence(self):
+        identifier=self.add('vendor_mapping',context={'sender_email':'billing@example.com','snippet':'Useful preview '+('x'*600),
+            'samples':[{'subject':'old omitted'},None,{'subject':'Recent receipt','excerpt':'e'*700,'message_id':'PRIVATE-ID','mailbox':'PRIVATE-FOLDER','unsubscribe_url':'PRIVATE-URL'},
+                       {'subject':'Invoice','date':'2026-09-17','received_at':'r'*600,'excerpt':{'untrusted_nested':'ignored'},'unknown':'PRIVATE-UNKNOWN'}]})
+        conn=self.module.tahor_db.get_db()
+        row=conn.execute('SELECT * FROM decisions WHERE id=?',(identifier,)).fetchone()
+        context=suggestions.build_context(conn,[row]);conn.close()
+        candidate=context['untrusted_candidates'][0]
+        self.assertEqual(len(candidate['snippet']),500)
+        self.assertEqual(len(candidate['samples']),2)
+        self.assertEqual(candidate['samples'][0]['subject'],'Recent receipt')
+        self.assertEqual(len(candidate['samples'][0]['excerpt']),500)
+        self.assertEqual(len(candidate['samples'][1]['received_at']),500)
+        self.assertNotIn('excerpt',candidate['samples'][1])
+        self.assertNotIn('PRIVATE-',json.dumps(candidate))
+        self.assertNotIn('snippet',context['trusted_owner_preferences'])
+
+    def test_saved_sample_change_invalidates_previous_recommendation(self):
+        identifier=self.add('vendor_mapping',context={'sender_email':'billing@example.com','samples':[{'subject':'Receipt A'}]})
+        job=suggestions.enqueue()
+        with patch.object(suggestions,'model_call',side_effect=self.model):suggestions.run_pending_jobs()
+        self.assertEqual(len(suggestions.get_job(job['job_id'])['recommendations']),1)
+        conn=self.module.tahor_db.get_db()
+        with conn:
+            conn.execute('UPDATE decisions SET context=? WHERE id=?',(json.dumps({'sender_email':'billing@example.com','samples':[{'subject':'Receipt B'}]}),identifier))
+        conn.close()
+        self.assertEqual(suggestions.get_job(job['job_id'])['recommendations'],[])
+        self.assertEqual(suggestions.enqueue()['total'],1)
