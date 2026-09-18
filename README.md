@@ -18,7 +18,7 @@
 
 **Tahor is a self-hosted email assistant that works inside your existing mailbox.**
 It starts with your inbox, works through the backlog without a folder-size limit,
-tags messages, files receipts, helps you unsubscribe,
+tags messages, files records and correspondence, helps you unsubscribe,
 and prepares replies for review. Your usual email client stays your email client.
 
 The name comes from **טָהוֹר**, Hebrew for “clean, pure.” The aim is practical:
@@ -28,7 +28,7 @@ that should not be left to a model.
 | The routine work | Your control |
 | :--- | :--- |
 | Classify and tag messages in the background | Review ambiguous mail before retention cleanup |
-| File routine receipts and statements, then mark them read | Choose the vendor’s destination in the app |
+| File retained records and correspondence, then mark low-attention mail read | Choose the sender’s destination in the app |
 | Group business receipts by calendar year and preserve them permanently | Review a private expense ledger and export CSV |
 | Track unsubscribe requests and sender blocks | Keep subscriptions, block marketing, or block a domain |
 | Draft a response when your reply rule matches | Find the original unread; edit and send its draft in your mail client |
@@ -159,8 +159,16 @@ is the free option. Additional supported choices are available in Settings.
 
 ## Decisions without the busywork
 
-Tahor uses observed messages to identify merchants and automatically route confident
-receipt and statement matches. Shared delivery services are matched by the actual
+Tahor uses observed messages to identify senders and automatically route confident
+filing matches. Archiving covers receipts, statements, legal and medical records,
+travel details, account notices, and personal correspondence worth retaining.
+Mail that still needs attention stays protected, and inbox timing and deletion
+rules continue to apply. **Use this filing folder** sets the destination for
+qualifying retained mail; it does not keep everything a sender sends. Within that
+sender's filing area, receipts go in **Receipts** and other retained messages go
+in **Correspondence**. Existing mail in configured sender folders is reorganized
+gradually. Business-specific receipt rules can use calendar-year folders instead.
+Shared delivery services are matched by the actual
 sender address; a marketplace purchase does not turn every future receipt into the
 same product category. Uncertain cases show the sender, date, suggested folder,
 and a link to read the email safely before deciding. Actions update the queue in
@@ -324,7 +332,7 @@ external database, or frontend build is required.
 | :--- | :--- |
 | `backlog_worker.py` / `mailbox_scheduler.py` | Prioritize Inbox work, discover active folders, classify, and retry failed batches |
 | `process_batch.py` / `keyword_tool.py` | Enforce sender rules and track confirmed mailbox writes |
-| `filing_sweep.py` | Move aged receipts, statements, and tax mail with IMAP `MOVE` |
+| `filing_sweep.py` | File aged records and correspondence with guarded IMAP `MOVE` |
 | `retention_sweep.py` | Delete expired mail and retry pending trash deletion with targeted UID expunge |
 | `decision-app/` | Review decisions, apply rules, manage subscriptions and model settings |
 | `draft_replies.py` / `reply_rules.py` | Match owner instructions and prepare recoverable, thread-aware mailbox drafts |

@@ -621,3 +621,10 @@ choices awaiting recovery. Automatic vendor choices are not counted as owner
 feedback. Stale source revisions cannot inherit a previous destructive selection.
 The decision-suggestions and decision-actions timers run independently every
 15 seconds after the preceding pass, using the same unprivileged service identity.
+
+Sender mappings select a filing area, not a receipt-only rule. Generic filing
+separates classified receipts into `Receipts` and other retained records or
+correspondence into `Correspondence` beneath that sender's folder. Age and
+attention protections still apply. Existing messages in configured sender-root
+folders are reconciled in bounded passes; arbitrary custom subfolders are left
+alone. Business, reply-rule, and coupon destinations retain their own layouts.

@@ -70,7 +70,7 @@ BAR = '''<style>
 def choices(row, revision, suggestion=None, buckets=()):
     from html import escape
     options = ([('keep', 'Keep'), ('keep_brief', 'Keep briefly'), ('trash', 'Trash permanently'), ('skip', 'Skip for now')]
-               if row['kind'] == 'message_review' else [('map', 'File receipts here'), ('unsorted', 'Leave unsorted')])
+               if row['kind'] == 'message_review' else [('map', 'Use this filing folder'), ('unsorted', 'Leave unsorted')])
     selected = (suggestion or {}).get('action', '')
     radios = ''.join(f'<label style="display:block"><input data-decision-choice type="radio" name="decision-choice-{row["id"]}" value="{value}"{" checked" if selected == value else ""}> {label}</label>' for value, label in [('', 'No action yet')] + options)
     fields = ''
@@ -84,6 +84,7 @@ def choices(row, revision, suggestion=None, buckets=()):
         vendor = (suggestion or {}).get('vendor_name') or context.get('suggested_vendor') or context.get('display_name') or ''
         fields = (f'<div class="fields" style="margin-top:.75rem"><label>Folder <input type="text" data-bulk-bucket list="decision-folders-{row["id"]}" value="{escape(bucket)}"></label>'
                   f'<datalist id="decision-folders-{row["id"]}">' + ''.join(f'<option value="{escape(b)}">' for b in buckets) + '</datalist>'
-                  f'<label>Vendor <input type="text" data-bulk-vendor value="{escape(vendor)}"></label></div>')
+                  f'<label>Sender or organization <input type="text" data-bulk-vendor value="{escape(vendor)}"></label></div>'
+                  '<p class="hint">Receipts go in a Receipts subfolder; other retained mail goes in Correspondence. Inbox timing, attention protections, and deletion rules still apply. Business receipt rules can use their own year folders.</p>')
     reason = 'AI suggestion: ' + suggestion.get('reason', '') if suggestion else ''
     return f'<fieldset data-decision-choices><legend>Choose an action for this batch</legend>{radios}{fields}</fieldset><p class="decision-result" role="status">{escape(reason)}</p>'

@@ -657,7 +657,7 @@ def decision_context(row):
                 parts.append('Example: ' + str(sample['subject']) + (' · ' + str(sample.get('received_at') or sample.get('date')) if sample.get('received_at') or sample.get('date') else ''))
         if context.get('suggestion_source') == 'ai':
             parts.append('Tahor needs your review for this sender. Suggested action: ' + str(context.get('suggested_action', 'review')) + '. ' + str(context.get('suggestion_reason', ''))[:500])
-        parts.append('This rule applies to this exact sender address.' if context.get('routing_key') else 'Sender details have not been captured yet. Confirm the merchant before saving a domain-wide rule.')
+        parts.append('This rule applies to this exact sender address.' if context.get('routing_key') else 'Sender details have not been captured yet. Confirm the sender or organization before saving a domain-wide rule.')
         return ' · '.join(parts)
     if row["kind"] == "message_review":
         parts = [f'From: {context.get("sender") or ("Not provided in this email" if context.get("details_loaded") else "Loading in the background")}']
