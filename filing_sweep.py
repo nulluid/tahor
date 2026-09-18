@@ -118,9 +118,13 @@ SPECIAL_FLAGS = {"\\drafts", "\\sent", "\\trash", "\\junk", "\\all"}
 def eligible_uids(conn, criteria):
     candidates = set()
     reply_guards = tuple(value for rule in reply_rules.get_rules() for value in ('UNKEYWORD', reply_rules.keyword(rule)))
-    for keyword in CATEGORY_KEYWORDS + [coupon_expiry.KEYWORD]:
-        coupon_guards = ('KEYWORD', 'category-marketing') if keyword == coupon_expiry.KEYWORD else ()
-        typ, data = search_uids(conn, *criteria, "KEYWORD", keyword, *coupon_guards, *reply_guards, "UNKEYWORD", "reply-protected", *PROTECTED, *CLASSIFIED)
+    # Prefix OR consumes exactly two search keys. N-1 ORs combine all N
+    # category predicates, leaving the shared guards ANDed with the whole group.
+    categories = ('OR',) * (len(CATEGORY_KEYWORDS) - 1) + tuple(
+        value for keyword in CATEGORY_KEYWORDS for value in ('KEYWORD', keyword))
+    scopes = (categories, ('KEYWORD', coupon_expiry.KEYWORD, 'KEYWORD', 'category-marketing'))
+    for scope in scopes:
+        typ, data = search_uids(conn, *criteria, *scope, *reply_guards, "UNKEYWORD", "reply-protected", *PROTECTED, *CLASSIFIED)
         if typ != "OK":
             raise RuntimeError("Filing search failed; retry the sweep")
         if data and data[0]:

@@ -58,3 +58,22 @@ class FilingExpansionTests(unittest.TestCase):
             self.assertEqual(filing.refile_unsorted(conn,{'billing@example.com':['Records','Example']},'Filed',state_path=self.state),0)
         self.assertEqual(set(conn.folders),{base,receipt,other})
         self.assertTrue(all(row['read'] for name in (receipt,other) for row in conn.folders[name].values()))
+
+    def test_grouped_category_search_preserves_all_guards_with_two_requests(self):
+        rows={};expected=set();identifier=0
+        categories=('receipt','statement','government-tax','security-alert','shipping','subscription','legal','medical','travel','financial-account','utility','personal-correspondence','marketing','unknown')
+        for category in categories:
+            for protection in (None,'needs-attention','retention-pending-review','delete-pending','reply-protected','draft','deleted','flagged','unclassified'):
+                identifier+=1;uid=str(identifier).encode();row=self.row(category)
+                if protection in ('draft','deleted','flagged'):row[protection]=True
+                elif protection=='unclassified':row['tags'].remove('retention-standard')
+                elif protection:row['tags'].add(protection)
+                rows[uid]=row
+                if protection is None and category not in ('marketing','unknown'):expected.add(uid)
+        for category in ('marketing','unknown'):
+            identifier+=1;uid=str(identifier).encode();rows[uid]=self.row(category);rows[uid]['tags'].add(filing.coupon_expiry.KEYWORD)
+            if category=='marketing':expected.add(uid)
+        conn=FolderMailbox({'INBOX':rows});conn.select('"INBOX"')
+        result=filing.eligible_uids(conn,('UNSEEN',))
+        self.assertEqual(result,expected)
+        self.assertEqual(sum(command=='SEARCH' for _,command,_ in conn.operations),2)
