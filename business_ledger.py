@@ -545,6 +545,13 @@ def _csv_safe(value):
     return "'"+text if text.lstrip().startswith(('=','+','-','@')) else text
 
 
+def accounting_entries(rows):
+    """Paid accounting evidence only; recovery records remain in the ledger."""
+    return [row for row in rows if row['status'] == 'ready'
+            and not row['duplicate_of'] and row['document_type'] in ('receipt', 'refund')
+            and row['currency'] in UNITS and type(row['amount_minor']) is int]
+
+
 def export_csv(business_key=None, year=None, rows=None):
     stream = io.StringIO(newline='')
     writer = csv.writer(stream)

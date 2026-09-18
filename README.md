@@ -214,10 +214,12 @@ Compact rows expand for receipt previews, comments, AI-filled fields, and
 amount review. Monthly and annual summaries show charges, refund credits, and
 net paid, with expandable category totals. Invoices and currencies remain
 separate; uncertain amounts and duplicates stay out of totals. Remove an entry
-from the page without deleting its email or audit history.
+from the page and accounting downloads without deleting its filed email or private audit history.
 
-Download a year or all expense data as a ZIP containing CSV, ledger and review
-history, and original `.eml` files with attachments. Receipt filenames include
+Accounting CSV and ZIP downloads include only ready receipts and refunds, excluding
+removed items, possible duplicates, unpaid invoices, and items awaiting review.
+The separately labeled all-records ZIP preserves everything for recovery, including
+excluded items. ZIPs contain CSV, ledger and review history, and original `.eml` files with attachments. Receipt filenames include
 the month, category, vendor, and entry ID. A manifest identifies any originals
 still awaiting recovery. The five-minute expense worker archives source emails
 and proposes vendor, date, type, reference, amount, currency, bookkeeping category,

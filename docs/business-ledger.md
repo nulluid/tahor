@@ -36,7 +36,9 @@ Remove from Expenses immediately hides an entry and excludes it from totals. The
 
 The ledger, owner-review history, and immutable original-email archive are tables in Tahor's private `decisions.db`. Existing database snapshots and the [off-host recovery schedule](private-backups.md) therefore back them up together. Recovery validates the snapshot before restoring it. An automatic off-host schedule must be configured on a separate trusted device; a backup on the Tahor server alone does not protect against losing that server. Keep originals, exported files, private business rules, and recovery copies out of the public source repository.
 
-The Expenses page offers an accounting ZIP for the selected year or all years. It contains:
+The Expenses page offers accounting CSV and ZIP downloads for the selected year. These contain only ready receipts and refunds, excluding removed entries, possible duplicates, unpaid invoices, and items awaiting review. Use **Remove from Expenses** for non-expenses and costs belonging to another business; the filed email stays saved. A bill and its paid receipt are not both counted: unpaid invoices are omitted from accounting downloads. Duplicate receipt detection still depends on matching source identities or document references; review unrelated-looking copies rather than assuming identical amounts prove a duplicate.
+
+**Download all records (includes excluded items)** is a separate recovery ZIP, not an accounting report. It retains all years and all review states. Each ZIP contains:
 
 - `expenses.csv`, including review states and owner annotations.
 - `ledger.json`, retaining the complete exported ledger records.
@@ -50,7 +52,7 @@ The page reports missing originals. If any source has not been captured or fails
 
 This version limits each original email to **50 MiB**, the complete original-email archive to **512 MiB**, and the uncompressed accounting export payload to **512 MiB**. These limits bound memory, disk, and recovery-transfer costs. Reaching the archive limit does not remove any existing evidence or mailbox message; further captures remain pending. Exports over the download limit fail with an explicit error; select a single year to reduce their size. Larger archives require a future storage-capacity extension rather than silently dropping receipts.
 
-From an installed checkout, generate a new private CSV file using the same environment file as the running service:
+From an installed checkout, generate a full-records private CSV file (including excluded and unreviewed records, for recovery rather than accounting) using the same environment file as the running service:
 
 ```sh
 python business_ledger.py --env ~/.config/tahor/config.env \

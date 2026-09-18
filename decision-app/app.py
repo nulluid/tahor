@@ -1381,7 +1381,8 @@ def expenses_page():
 def expenses_csv():
     import business_ledger
     year = expense_year(allow_all=True)
-    response = Response(business_ledger.export_csv(year=year), mimetype='text/csv')
+    entries = business_ledger.accounting_entries(business_ledger.list_entries(year=year))
+    response = Response(business_ledger.export_csv(rows=entries), mimetype='text/csv')
     response.headers['Content-Disposition'] = 'attachment; filename="business-expenses-' + str(year or 'all') + '.csv"'
     return response
 
@@ -1392,11 +1393,15 @@ def expenses_zip():
     import business_ledger, expense_archive
     year = expense_year(allow_all=True)
     entries = business_ledger.list_entries(year=year)
+    purpose = request.args.get('purpose', 'accounting')
+    if purpose not in ('accounting', 'records'): abort(400)
+    if purpose == 'accounting':
+        entries = business_ledger.accounting_entries(entries)
     try:
         stream = expense_archive.export_zip(entries, business_ledger.export_csv(rows=entries))
     except (ValueError, RuntimeError):
         return 'The archive could not be generated safely. Try one calendar year at a time.', 409
-    response = send_file(stream, mimetype='application/zip', as_attachment=True, download_name='business-expenses-' + str(year or 'all') + '.zip', conditional=False)
+    response = send_file(stream, mimetype='application/zip', as_attachment=True, download_name='business-' + ('records-' if purpose == 'records' else 'expenses-') + str(year or 'all') + '.zip', conditional=False)
     response.call_on_close(stream.close)
     return response
 

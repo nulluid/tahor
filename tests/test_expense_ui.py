@@ -55,7 +55,7 @@ class ExpensePageTests(AppTestCase):
         self.assertIn('year=2026',response.headers['Location'])
         body=self.client.get('/expenses?year=2026').get_data(as_text=True)
         self.assertNotIn('&lt;Example &amp; Co&gt;',body)
-        self.assertIn('excluded',self.client.get('/expenses.csv?year=2026').get_data(as_text=True))
+        self.assertNotIn('excluded',self.client.get('/expenses.csv?year=2026').get_data(as_text=True))
 
     def test_notes_category_and_ai_acceptance_do_not_confirm_amounts(self):
         route='/expenses/'+str(self.identifier)+'/metadata'
@@ -108,3 +108,24 @@ class ExpensePageTests(AppTestCase):
         self.assertNotIn('value="Example Software"',body)
         self.assertNotIn('Developer tool usage',body)
         self.assertEqual(business_ledger.get_entry(self.identifier)['amount_minor'],2400)
+
+    def test_accounting_downloads_exclude_removed_unpaid_unreviewed_and_duplicates(self):
+        import io, json, zipfile, csv
+        base=business_ledger.get_entry(self.identifier)
+        for label, updates in [('excluded', {'status':'excluded'}), ('invoice', {'document_type':'invoice'}), ('pending', {'status':'review_needed'}), ('duplicate', {'duplicate_of':self.identifier})]:
+            row=dict(base, id=100+len(label), **updates)
+            with patch.object(business_ledger, 'list_entries', return_value=[base,row]):
+                response=self.client.get('/expenses.zip?year=2026')
+                with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+                    self.assertEqual([x['id'] for x in json.loads(archive.read('ledger.json'))],[self.identifier])
+                    self.assertEqual(len(list(csv.DictReader(io.StringIO(archive.read('expenses.csv').decode())))),1)
+                response.close()
+                text=self.client.get('/expenses.csv?year=2026').get_data(as_text=True)
+                self.assertEqual(len(list(csv.DictReader(io.StringIO(text)))),1)
+                response=self.client.get('/expenses.zip?year=2026&purpose=records')
+                with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+                    self.assertEqual(len(json.loads(archive.read('ledger.json'))),2)
+                response.close()
+        refund=dict(base,document_type='refund',amount_minor=-2500)
+        self.assertEqual(business_ledger.accounting_entries([refund]),[refund])
+        self.assertEqual(self.client.get('/expenses.zip?purpose=typo').status_code,400)
