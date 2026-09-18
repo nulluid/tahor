@@ -24,6 +24,7 @@ def render(user, config, state, python, root=ROOT, web_name='tahor-web'):
         web_name: ('web', ''),
         'tahor-draft-replies': ('drafts', '--watch'),
         'tahor-filing': ('filing', ''),
+        'tahor-filing-maintenance': ('filing-maintenance', ''),
         'tahor-retention': ('retention', ''),
         'tahor-healthcheck': ('status', '--check'),
         'tahor-decisions': ('decisions', ''),
@@ -33,7 +34,7 @@ def render(user, config, state, python, root=ROOT, web_name='tahor-web'):
         'tahor-subscription-actions': ('subscription-actions', ''),
     }
     for name, (command, suffix) in commands.items():
-        oneshot = command in ('filing', 'retention', 'status', 'decisions', 'subscriptions', 'subscription-actions', 'decision-suggestions', 'decision-actions')
+        oneshot = command in ('filing', 'filing-maintenance', 'retention', 'status', 'decisions', 'subscriptions', 'subscription-actions', 'decision-suggestions', 'decision-actions')
         units[name+'.service'] = f'''[Unit]
 Description={name}
 After=network-online.target
@@ -63,7 +64,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 LockPersonality=true
 LimitCORE=0
 '''
-        if command in ('subscriptions', 'subscription-actions', 'decision-suggestions', 'decision-actions'):
+        if command in ('subscriptions', 'subscription-actions', 'decision-suggestions', 'decision-actions', 'filing-maintenance'):
             units[name+'.service'] += 'TimeoutStartSec=300\n'
         if not oneshot:
             units[name+'.service'] += '\nRestart=always\nRestartSec=30\n\n[Install]\nWantedBy=multi-user.target\n'
@@ -78,13 +79,13 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 '''
-    for name in ('tahor-subscriptions', 'tahor-subscription-actions', 'tahor-decision-suggestions', 'tahor-decision-actions'):
+    for name in ('tahor-filing-maintenance', 'tahor-subscriptions', 'tahor-subscription-actions', 'tahor-decision-suggestions', 'tahor-decision-actions'):
         units[name+'.timer'] = f'''[Unit]
 Description=Process queued {name} work promptly
 
 [Timer]
-OnBootSec=15s
-OnUnitInactiveSec=15s
+OnBootSec={'5min' if name == 'tahor-filing-maintenance' else '15s'}
+OnUnitInactiveSec={'5min' if name == 'tahor-filing-maintenance' else '15s'}
 AccuracySec=1s
 
 [Install]

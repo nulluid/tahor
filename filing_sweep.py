@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -198,8 +199,9 @@ def reply_filing_destinations(conn, read_criteria, unread_criteria):
     return destinations
 
 
-def refile_unsorted(conn, buckets, root, dry_run=False, state_path=None):
-    """Revisit three staging folders and at most 100 messages each per sweep."""
+def _refile_unsorted(conn, buckets, root, dry_run=False, state_path=None, budget_seconds=45):
+    """Visit at most three folders/100 messages each within the time budget."""
+    deadline = time.monotonic() + budget_seconds
     from data_changes import atomic_write
     from message_expiry import metadata
     state_path = Path(state_path or Path(os.environ.get('TAHOR_STATE_DIR', Path(__file__).resolve().parent)) / 'refile_cursors.json')
@@ -215,6 +217,12 @@ def refile_unsorted(conn, buckets, root, dry_run=False, state_path=None):
     paths.sort()
     after = state.get('folder', '')
     ordered = [name for name in paths if name > after] + [name for name in paths if name <= after]
+    pending = state.setdefault('continuations', {})
+    for name in list(pending):
+        if name not in paths: pending.pop(name)
+    # Two large-folder continuations leave one slot for discovering other work.
+    continuing = [name for name in ordered if name in pending][:2]
+    ordered = continuing + [name for name in ordered if name not in pending] + [name for name in ordered if name in pending and name not in continuing]
     moved = 0
     created = set()
     grace = mailbox_settings.get_inbox_grace_days()
@@ -223,14 +231,25 @@ def refile_unsorted(conn, buckets, root, dry_run=False, state_path=None):
     if not dry_run and 'MOVE' not in capabilities:
         raise RuntimeError('Refiling requires IMAP MOVE')
     for source in ordered[:3]:
+        if time.monotonic() >= deadline: break
         if conn.select(quote_mailbox(source), readonly=dry_run)[0] != 'OK':
             raise RuntimeError('Could not select unsorted mailbox')
         response = conn.response('UIDVALIDITY')
         validity = response[1][0] if isinstance(response, tuple) and len(response) == 2 and response[1] else None
         candidates = sorted(eligible_uids(conn, ('UNKEYWORD', 'reply-protected')), key=int)
-        previous = int(state.get('uids', {}).get(source, 0))
-        candidates = [uid for uid in candidates if int(uid) > previous] + [uid for uid in candidates if int(uid) <= previous]
-        for uid in candidates[:100]:
+        generation = validity.decode('ascii') if isinstance(validity, bytes) and validity.isdigit() else ''
+        resume = pending.get(source, {})
+        if resume.get('uidvalidity') == generation and generation:
+            high = int(resume['high'])
+            previous = int(resume['after'])
+        else:
+            high = max((int(uid) for uid in candidates), default=0)
+            previous = 0
+        remaining = [uid for uid in candidates if previous < int(uid) <= high]
+        for uid in remaining[:100]:
+            if time.monotonic() >= deadline: break
+            previous = int(uid)
+            state.setdefault('uids', {})[source] = previous
             status, rows = conn.uid('FETCH', uid, '(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM MESSAGE-ID SUBJECT DATE)])')
             if status != 'OK':
                 raise RuntimeError('Could not fetch unsorted message')
@@ -262,13 +281,48 @@ def refile_unsorted(conn, buckets, root, dry_run=False, state_path=None):
                                 raise RuntimeError('Could not resume refiling source')
                         moved += 1
             state.setdefault('uids', {})[source] = int(uid)
-        state['folder'] = source
+        if any(int(uid) > previous for uid in remaining):
+            pending[source] = {'after': previous, 'high': high, 'uidvalidity': generation}
+        else:
+            pending.pop(source, None)
+        if source not in continuing:
+            state['folder'] = source
         if not dry_run:
             atomic_write(state_path, json.dumps(state) + '\n')
     return moved
 
 
+def refile_unsorted(conn, buckets, root, dry_run=False, state_path=None, budget_seconds=45, diagnostics=None):
+    """Serialize daily filing and frequent maintenance without blocking either."""
+    import fcntl
+    path = Path(state_path or Path(os.environ.get('TAHOR_STATE_DIR', Path(__file__).resolve().parent)) / 'refile_cursors.json')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_suffix('.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            if diagnostics is not None: diagnostics['busy'] = True
+            print('Filing maintenance already active; this pass deferred.')
+            return 0
+        if diagnostics is not None: diagnostics['busy'] = False
+        return _refile_unsorted(conn, buckets, root, dry_run, path, budget_seconds)
+
+
+def maintenance():
+    """Bounded migration work, without the all-folder read-state sweep."""
+    conn = connect()
+    try:
+        business = business_filing.run_sweep(conn, limit=100, budget_seconds=45)
+        status = {}
+        moved = refile_unsorted(conn, config.vendor_buckets(), config.filing_root(), budget_seconds=45, diagnostics=status)
+        print(json.dumps({'business_moved':business.get('moved',0), 'business_busy':business.get('busy',False), 'refiled':moved, 'refile_busy':status.get('busy',False)}))
+    finally:
+        conn.logout()
+
+
 def main():
+    if '--maintenance' in sys.argv:
+        return maintenance()
     dry_run = "--dry-run" in sys.argv
     buckets = config.vendor_buckets()
     root = config.filing_root()

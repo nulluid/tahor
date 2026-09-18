@@ -59,3 +59,46 @@ class UnsortedRefileTests(unittest.TestCase):
             filing.refile_unsorted(self.conn, {}, 'Filed', state_path=self.path)
             self.assertEqual(self.conn.select.call_count, 3)
             self.assertEqual(json.loads(self.path.read_text())['folder'], folders[5][0])
+
+    def test_large_folder_continuation_uses_frozen_highwater_and_skips_new_arrivals(self):
+        seen=[]
+        def fetch(command,uid,*args):
+            self.assertEqual(command,'FETCH');seen.append(int(uid))
+            header=b'1 (UID '+uid+b' FLAGS (category-receipt retention-forever) INTERNALDATE "01-Jan-2099 00:00:00 +0000")'
+            return 'OK',[(header,self.body)]
+        self.conn.uid.side_effect=fetch
+        folders=[('Filed/_Unsorted/large',set())]+[(f'Filed/_Unsorted/z{i}',set()) for i in range(5)]
+        selected=['']
+        def select(name,**kwargs):selected[0]=name.strip('"');return 'OK',[]
+        self.conn.select.side_effect=select
+        uids={str(i).encode() for i in range(1,151)}
+        with patch.object(filing,'list_mailboxes',return_value=folders),patch.object(filing,'eligible_uids',side_effect=lambda *args: uids if selected[0].endswith('/large') else set()):
+            filing.refile_unsorted(self.conn,{},'Filed',state_path=self.path)
+            self.assertEqual(seen,list(range(1,101)))
+            self.assertEqual(json.loads(self.path.read_text())['continuations']['Filed/_Unsorted/large']['high'],150)
+            seen.clear();uids.add(b'151')
+            filing.refile_unsorted(self.conn,{},'Filed',state_path=self.path)
+            self.assertEqual(seen,list(range(101,151)))
+            self.assertNotIn('Filed/_Unsorted/large',json.loads(self.path.read_text())['continuations'])
+
+    def test_daily_and_maintenance_passes_share_nonblocking_lock(self):
+        import fcntl
+        diagnostics={}
+        with self.path.with_suffix('.lock').open('a') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            self.assertEqual(filing.refile_unsorted(self.conn,{},'Filed',state_path=self.path,diagnostics=diagnostics),0)
+        self.assertTrue(diagnostics['busy'])
+        self.conn.select.assert_not_called()
+
+    def test_exhausted_budget_leaves_folder_cursor_for_next_pass(self):
+        with patch.object(filing,'list_mailboxes',return_value=[('Filed/_Unsorted/example',set())]):
+            self.assertEqual(filing.refile_unsorted(self.conn,{},'Filed',state_path=self.path,budget_seconds=0),0)
+        self.conn.select.assert_not_called()
+        self.assertFalse(self.path.exists())
+
+    def test_maintenance_does_not_run_global_read_cleanup_and_always_logs_out(self):
+        with patch.object(filing,'connect',return_value=self.conn),patch.object(filing.business_filing,'run_sweep',return_value={'moved':1}) as business,patch.object(filing,'refile_unsorted',return_value=2) as refile,patch.object(filing.config,'vendor_buckets',return_value={}),patch.object(filing,'reconcile_filed_mail') as global_sweep:
+            filing.maintenance()
+        business.assert_called_once_with(self.conn,limit=100,budget_seconds=45)
+        self.assertEqual(refile.call_args.kwargs['budget_seconds'],45)
+        global_sweep.assert_not_called();self.conn.logout.assert_called_once()

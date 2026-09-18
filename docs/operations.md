@@ -629,3 +629,21 @@ correspondence into `Correspondence` beneath that sender's folder. Age and
 attention protections still apply. Existing messages in configured sender-root
 folders are reconciled in bounded passes; arbitrary custom subfolders are left
 alone. Business, reply-rule, and coupon destinations retain their own layouts.
+
+
+### Frequent filing maintenance
+
+`tahor-filing-maintenance.timer` runs every five minutes after the previous pass
+finishes. Its restricted oneshot service runs `run.py filing-maintenance`: up to
+100 business messages within a 45-second budget, followed by at most three legacy
+vendor/staging folders and 100 messages per folder within another 45-second budget.
+It does not repeat the daily all-folder read-state cleanup. Network operations
+retain their own timeouts; the service also has a five-minute execution ceiling.
+
+Large folders retain a fixed UID high-water mark and resume on the next pass;
+new arrivals cannot extend that traversal indefinitely. Continuations reserve
+at most two folder slots, leaving another for discovering other work. Daily and
+frequent generic filing share a nonblocking cursor lock; a competing pass reports
+that it deferred work. Business filing retains its separate shared lock. Saved
+cursors survive restarts, and changed mailbox generations restart the relevant
+traversal safely. Both supported installers include the maintenance timer.
